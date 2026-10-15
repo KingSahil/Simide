@@ -33,8 +33,14 @@ async function runTests() {
   // Test 3: ExplanationGenerator across all 5 key linked-list lifecycle states
   console.log('\n[Test 3] Testing Pedagogical Explanation Generator...');
   
+  // State 0: Entry before head is declared (hasHead = false)
+  const entryRes = ExplanationGenerator.generate([], null, undefined, false);
+  assert.strictEqual(entryRes.changeType, 'init');
+  assert.ok(entryRes.explanation.includes('Node* head = nullptr'), 'Should explain waiting to execute head declaration');
+  console.log(`  ✓ State 0 (entry before head declaration): "${entryRes.explanation}"`);
+
   // State 1: Initial empty list (head = nullptr)
-  const emptyRes = ExplanationGenerator.generate([], null);
+  const emptyRes = ExplanationGenerator.generate([], null, undefined, true);
   assert.strictEqual(emptyRes.changeType, 'init');
   assert.ok(emptyRes.explanation.includes('empty'), 'Should explain empty list');
   console.log(`  ✓ Empty state: "${emptyRes.explanation}"`);
@@ -58,6 +64,7 @@ async function runTests() {
   // State 3: Head assigned to first node (head -> 10 -> nullptr)
   const snap1: LinkedListSnapshot = {
     stepNumber: 1,
+    hasHead: true,
     headId: null,
     nodes: [node1],
     explanation: detachedRes.explanation,
@@ -72,6 +79,7 @@ async function runTests() {
   // State 4: Second node created and linked (head -> 10 -> 20 -> nullptr)
   const snap2: LinkedListSnapshot = {
     stepNumber: 2,
+    hasHead: true,
     headId: 'node_1',
     nodes: [node1Connected],
     explanation: headRes.explanation,
@@ -95,6 +103,7 @@ async function runTests() {
   // State 5: Third node linked (head -> 10 -> 20 -> 30 -> nullptr)
   const snap3: LinkedListSnapshot = {
     stepNumber: 3,
+    hasHead: true,
     headId: 'node_1',
     nodes: [node1To2, node2],
     explanation: linkedRes.explanation,

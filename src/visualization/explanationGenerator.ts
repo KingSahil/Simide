@@ -1,24 +1,35 @@
-import { LinkedListSnapshot, ListNode } from './linkedListModel';
+import { LinkedListSnapshot, ListNode, PointerVariable } from './linkedListModel';
 
 export class ExplanationGenerator {
   public static generate(
     currentNodes: ListNode[],
     headId: string | null,
-    previousSnapshot?: LinkedListSnapshot
+    previousSnapshot?: LinkedListSnapshot,
+    hasHead: boolean = true,
+    pointers: PointerVariable[] = []
   ): { explanation: string; changeType: LinkedListSnapshot['changeType'] } {
+    if (!hasHead) {
+      return {
+        explanation: 'Program paused at main(). Click Next to execute: Node* head = nullptr;',
+        changeType: 'init',
+      };
+    }
+
     // Case 1: Empty list (head is null)
     if (!headId) {
       const detachedNodes = currentNodes.filter((n) => n.isDetached);
       if (detachedNodes.length === 0) {
         return {
-          explanation: 'head is null, so the linked list is empty.',
+          explanation: 'head is initialized to nullptr. The linked list is currently empty.',
           changeType: 'init',
         };
       } else {
         // Node allocated locally before head assignment
         const newest = detachedNodes[detachedNodes.length - 1];
+        const ptr = pointers.find((p) => p.targetNodeId === newest.id);
+        const ptrName = ptr ? ptr.name : 'first';
         return {
-          explanation: `A new node has been created. The node stores ${newest.data}, and its next pointer is null. It is not yet connected to head.`,
+          explanation: `${ptrName} pointer created, pointing to a new Node containing ${newest.data}. head is still null.`,
           changeType: 'node_created',
         };
       }
@@ -46,8 +57,10 @@ export class ExplanationGenerator {
       const prevDetached = previousSnapshot.nodes.filter((n) => n.isDetached);
       if (detachedNodes.length > prevDetached.length) {
         const newest = detachedNodes[detachedNodes.length - 1];
+        const ptr = pointers.find((p) => p.targetNodeId === newest.id && p.name !== 'head');
+        const ptrName = ptr ? ptr.name : 'a new pointer';
         return {
-          explanation: `A new detached node storing ${newest.data} has been allocated. It is not yet connected to the list.`,
+          explanation: `${ptrName} pointer created, pointing to a new Node containing ${newest.data}. It is not yet connected to the list.`,
           changeType: 'node_created',
         };
       }
@@ -55,8 +68,12 @@ export class ExplanationGenerator {
       // Check if head just changed from null to something
       if (!previousSnapshot.headId && headId) {
         const headNode = currentNodes.find((n) => n.id === headId);
+        const otherPtrs = pointers.filter((p) => p.targetNodeId === headId && p.name !== 'head').map((p) => p.name);
+        const aliasText = otherPtrs.length > 0
+          ? `head points to the node containing ${headNode?.data ?? ''} (aliasing pointer '${otherPtrs.join(', ')}' at address ${headNode?.address ?? ''}).`
+          : `head points to the node containing ${headNode?.data ?? ''}.`;
         return {
-          explanation: `The first node is now connected. head points to the node containing ${headNode?.data ?? ''}.`,
+          explanation: aliasText,
           changeType: 'head_assigned',
         };
       }

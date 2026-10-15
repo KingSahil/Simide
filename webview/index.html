@@ -70,19 +70,28 @@
       <div class="card">
         <div class="card-title-row">
           <span class="card-title">Linked List</span>
-          <span id="stepChip" class="step-chip">Step 1</span>
-        </div>
-        <div class="viz-scroll-container">
-          <div id="vizDiagram" class="viz-diagram">
-            <!-- Rendered dynamically -->
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button id="btnResetLayout" class="btn-text-action" title="Reset node positions">↺ Reset</button>
+            <span id="stepChip" class="step-chip">Step 1</span>
           </div>
         </div>
-
-        <!-- Detached Nodes Section -->
-        <div id="detachedContainer" class="detached-section" style="display: none;">
-          <div class="detached-label">Unlinked Allocations</div>
-          <div id="detachedDiagram" class="viz-diagram">
-            <!-- Rendered dynamically -->
+        <div class="canvas-hint">Drag nodes to move • Right-click drag to pan • Scroll to zoom</div>
+        <div id="graphViewport" class="graph-viewport">
+          <div id="graphCanvas" class="graph-canvas">
+            <svg id="arrowsSvg" class="arrows-svg-layer">
+              <defs>
+                <marker id="arrowHead" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                  <path d="M 0 0.5 L 6 3 L 0 5.5 Z" fill="#0066FF" />
+                </marker>
+                <marker id="arrowHeadGreen" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                  <path d="M 0 0.5 L 6 3 L 0 5.5 Z" fill="#36C779" />
+                </marker>
+                <marker id="arrowHeadMuted" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                  <path d="M 0 0.5 L 6 3 L 0 5.5 Z" fill="#737D8C" />
+                </marker>
+              </defs>
+            </svg>
+            <div id="nodesLayer" class="nodes-layer"></div>
           </div>
         </div>
       </div>
@@ -91,7 +100,6 @@
       <div class="explanation-card">
         <div class="explanation-title">Explanation</div>
         <div id="explanationText" class="explanation-text">Initial state</div>
-        <div id="historyBanner" class="history-banner" style="display: none;">Viewing historical snapshot</div>
       </div>
 
       <!-- Controls -->

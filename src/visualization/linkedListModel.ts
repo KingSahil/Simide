@@ -17,6 +17,13 @@ export interface SourceLocation {
   functionName?: string;
 }
 
+export interface PointerVariable {
+  name: string;
+  targetNodeId: string | null;
+  targetAddress?: string | null;
+  isNull: boolean;
+}
+
 export type ChangeType =
   | 'init'
   | 'node_created'
@@ -28,8 +35,10 @@ export type ChangeType =
 export interface LinkedListSnapshot {
   stepNumber: number;
   source?: SourceLocation;
+  hasHead: boolean;
   headId: string | null;
   nodes: ListNode[];
+  pointers?: PointerVariable[];
   explanation: string;
   changeType: ChangeType;
   isHistorical?: boolean;

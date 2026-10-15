@@ -273,126 +273,315 @@ body {
   color: var(--muted-text);
 }
 
-/* Visualization Canvas */
-.viz-scroll-container {
-  width: 100%;
-  overflow-x: auto;
-  padding: 8px 0;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-color) transparent;
-}
-
-.viz-diagram {
+/* Interactive Graph Canvas */
+.canvas-hint {
+  font-size: 11px;
+  color: var(--muted-text);
+  margin-bottom: 8px;
   display: flex;
   align-items: center;
-  gap: 0;
-  min-height: 90px;
+  gap: 4px;
 }
 
-/* Node representation */
-.node-wrapper {
-  display: flex;
-  align-items: center;
-  position: relative;
-}
-
-.node-box {
-  display: flex;
+.btn-text-action {
+  background: none;
   border: 1px solid var(--border-color);
-  background-color: var(--elevated-surface);
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  transition: all 0.2s ease;
+  color: var(--secondary-text);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  transition: all 0.15s ease;
 }
 
-.node-box.highlight {
-  border-color: var(--main-accent);
-  background-color: var(--accent-tint);
-}
-
-.node-data {
-  padding: 8px 12px;
-  font-size: 13px;
-  font-weight: 600;
+.btn-text-action:hover {
   color: var(--primary-text);
-  border-right: 1px solid var(--border-color);
+  background-color: var(--elevated-surface);
+  border-color: #3b4859;
+}
+
+.graph-viewport {
+  position: relative;
+  width: 100%;
+  height: 250px;
+  background-color: var(--main-bg);
+  background-image: radial-gradient(#202936 1.2px, transparent 1.2px);
+  background-size: 16px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  overflow: hidden; /* REMOVE ALL SCROLLBARS */
+  user-select: none;
+  touch-action: none;
+  cursor: default;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* Completely remove scrollbars on all browsers */
+.graph-viewport::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Excalidraw / Obsidian Pinch Cursor for Panning */
+.graph-viewport.can-pan {
+  cursor: grab !important;
+  cursor: -webkit-grab !important;
+}
+
+.graph-viewport.is-panning,
+.graph-viewport.is-panning *,
+body.is-canvas-panning,
+body.is-canvas-panning * {
+  cursor: grabbing !important;
+  cursor: -webkit-grabbing !important;
+  user-select: none !important;
+}
+
+
+.graph-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: 1400px;
+  min-height: 900px;
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.arrows-svg-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.nodes-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Empty Canvas Message */
+.empty-canvas-message {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 230px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-width: 44px;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
+  padding: 24px 16px;
+  box-sizing: border-box;
 }
 
-.node-next {
-  padding: 8px 10px;
-  font-size: 11px;
+.empty-icon {
+  margin-bottom: 8px;
+  opacity: 0.7;
+}
+
+.empty-title {
+  font-size: 13px;
+  font-weight: 600;
   color: var(--secondary-text);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 32px;
+  margin-bottom: 4px;
 }
 
-.node-label {
-  position: absolute;
-  top: -18px;
-  left: 6px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--main-accent);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.arrow-segment {
-  display: flex;
-  align-items: center;
-  width: 28px;
-  justify-content: center;
-}
-
-.arrow-svg {
-  width: 28px;
-  height: 16px;
-}
-
-/* Head Pointer & Null Indicators */
-.head-indicator {
-  display: flex;
-  align-items: center;
-  margin-right: 8px;
+.empty-subtitle {
   font-size: 11px;
-  font-weight: 600;
-  color: var(--main-accent);
+  color: var(--muted-text);
+  line-height: 1.5;
+  max-width: 280px;
 }
 
-.null-badge {
+.empty-subtitle code {
+  color: var(--main-accent);
+  background-color: var(--accent-tint);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+/* 2-Compartment Node Card (DATA | NEXT) */
+.graph-node {
+  position: absolute;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  display: flex;
+  width: 126px;
+  height: 50px;
+  box-sizing: border-box;
+  background: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
+  border: 1.5px solid #30363d;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  z-index: 10;
+  user-select: none;
+  overflow: hidden;
+}
+
+.graph-node:hover {
+  border-color: #388bfd;
+  box-shadow: 0 6px 18px rgba(0, 102, 255, 0.3);
+}
+
+.graph-node.dragging {
+  cursor: grabbing !important;
+  z-index: 100 !important;
+  border-color: #58a6ff;
+  box-shadow: 0 10px 24px rgba(0, 102, 255, 0.45);
+}
+
+.graph-node.new-created {
+  border-color: #36c779;
+  box-shadow: 0 0 14px rgba(54, 199, 121, 0.4);
+}
+
+.graph-node.new-connected {
+  border-color: #0066ff;
+  box-shadow: 0 0 14px rgba(0, 102, 255, 0.4);
+}
+
+.graph-node-body {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+}
+
+.graph-node-data-cell {
+  flex: 1;
+  padding: 5px 6px 4px 6px;
+  border-right: 1px solid #21262d;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.graph-node-next-cell {
+  flex: 1.25;
+  padding: 5px 6px 4px 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.cell-label {
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #737d8c;
+  line-height: 1;
+}
+
+.cell-val {
+  font-size: 15px;
+  font-weight: 700;
+  color: #f0f6fc;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  line-height: 1.1;
+}
+
+.cell-next-val {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.3px;
+}
+
+.cell-next-val.has-target {
+  color: #58a6ff;
+}
+
+.cell-next-val.is-null {
+  color: #8b949e;
+  font-style: italic;
+}
+
+/* Head & Local Pointer Badges (Clean name pill without Node* or port dots) */
+.graph-badge-node {
+  position: absolute;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 700;
   display: inline-flex;
   align-items: center;
-  padding: 4px 8px;
+  justify-content: center;
+  z-index: 10;
+  user-select: none;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  white-space: nowrap;
+}
+
+.graph-badge-node:hover {
+  border-color: var(--main-accent);
+}
+
+.graph-badge-node.dragging {
+  cursor: grabbing !important;
+  z-index: 100 !important;
+  box-shadow: 0 6px 18px rgba(0, 102, 255, 0.45);
+}
+
+.head-badge {
+  background: #142b4d;
+  border: 1.5px solid #0066FF;
+  color: #58a6ff;
+}
+
+.local-ptr-badge {
+  background: rgba(54, 199, 121, 0.14);
+  border: 1.5px solid #36c779;
+  color: #36c779;
+}
+
+.null-badge-node {
+  background: rgba(22, 27, 34, 0.9);
+  border: 1.5px dashed #484f58;
+  color: #8b949e;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  gap: 4px;
+}
+
+.null-glyph {
   font-size: 11px;
-  font-weight: 500;
-  color: var(--muted-text);
-  background-color: var(--elevated-surface);
-  border: 1px dashed var(--border-color);
-  border-radius: 4px;
-  margin-left: 4px;
+  font-weight: 700;
+  color: #737d8c;
 }
 
-/* Detached Section */
-.detached-section {
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border-color);
-}
-
-.detached-label {
+.null-text {
   font-size: 10px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--muted-text);
-  margin-bottom: 8px;
 }
 
 /* Explanation Card */

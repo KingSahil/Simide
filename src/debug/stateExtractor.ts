@@ -4,6 +4,7 @@ import * as path from 'path';
 import {
   LinkedListSnapshot,
   ListNode,
+  PointerVariable,
   SourceLocation,
 } from '../visualization/linkedListModel';
 import { ExplanationGenerator } from '../visualization/explanationGenerator';
@@ -12,40 +13,94 @@ export class StateExtractor {
   private static addressToIdMap = new Map<string, string>();
   private static nextIdCounter = 1;
   private static initLinesCache = new Map<string, Map<string, number>>();
+  private static activeSourceFile: string | null = null;
+  private static lastPausedLine: number | null = null;
+
+  public static setActiveSourceFile(filePath: string): void {
+    this.activeSourceFile = filePath;
+  }
 
   public static reset(): void {
     this.addressToIdMap.clear();
     this.nextIdCounter = 1;
     this.initLinesCache.clear();
+    this.lastPausedLine = null;
   }
 
-  private static getVariableInitLines(sourceFilePath: string): Map<string, number> {
-    let resolvedPath = sourceFilePath;
-    if (!fs.existsSync(resolvedPath)) {
-      const folders = vscode.workspace.workspaceFolders;
-      if (folders && folders.length > 0) {
-        const candidate = path.join(folders[0].uri.fsPath, sourceFilePath);
-        if (fs.existsSync(candidate)) {
-          resolvedPath = candidate;
+  public static resolveFilePath(sourceFilePath?: string): string | null {
+    if (sourceFilePath && fs.existsSync(sourceFilePath)) {
+      return sourceFilePath;
+    }
+    if (this.activeSourceFile && fs.existsSync(this.activeSourceFile)) {
+      return this.activeSourceFile;
+    }
+
+    const folders = vscode.workspace.workspaceFolders;
+    if (folders && folders.length > 0) {
+      const root = folders[0].uri.fsPath;
+      const base = sourceFilePath ? path.basename(sourceFilePath) : 'linked-list.cpp';
+      const candidates = [
+        path.join(root, 'examples', base),
+        path.join(root, base),
+        path.join(root, 'examples', 'linked-list.cpp'),
+      ];
+      for (const c of candidates) {
+        if (fs.existsSync(c)) {
+          return c;
         }
       }
     }
+    return null;
+  }
 
-    if (this.initLinesCache.has(resolvedPath)) {
-      return this.initLinesCache.get(resolvedPath)!;
+  public static getLineText(filePath: string, lineNum: number): string {
+    const resolved = this.resolveFilePath(filePath);
+    if (!resolved) return '';
+    try {
+      const content = fs.readFileSync(resolved, 'utf8');
+      const lines = content.split('\n');
+      if (lineNum >= 1 && lineNum <= lines.length) {
+        return lines[lineNum - 1].trim();
+      }
+    } catch {
+      // ignore
     }
+    return '';
+  }
 
+  private static getVariableInitLines(sourceFilePath?: string): Map<string, number> {
+    const resolvedPath = this.resolveFilePath(sourceFilePath) || sourceFilePath || '';
     const map = new Map<string, number>();
     try {
       if (fs.existsSync(resolvedPath)) {
         const content = fs.readFileSync(resolvedPath, 'utf8');
         const lines = content.split('\n');
+        let insideFunction = false;
         for (let i = 0; i < lines.length; i++) {
           const lineText = lines[i].trim();
           const lineNum = i + 1;
-          const match = lineText.match(/(?:(?:\w+\s*\*|\b))([a-zA-Z_][a-zA-Z0-9_]*)\s*=/);
+
+          // Only scan variables inside main() or function bodies, ignore struct definitions!
+          if (lineText.includes('main(') || lineText.includes('main (')) {
+            insideFunction = true;
+            continue;
+          }
+          if (!insideFunction) {
+            continue;
+          }
+
+          // Skip member pointer assignments like first->next = second;
+          if (lineText.includes('->') || lineText.startsWith('.')) {
+            continue;
+          }
+          // Match Node pointer declarations like Node* first = ... or Node *second = ...
+          const match = lineText.match(/(?:Node\s*\*|auto\s*\*?)\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
           if (match) {
             const varName = match[1];
+            // Blacklist struct members
+            if (varName === 'next' || varName === 'data') {
+              continue;
+            }
             if (!map.has(varName)) {
               map.set(varName, lineNum);
             }
@@ -55,8 +110,6 @@ export class StateExtractor {
     } catch {
       // Ignore read errors
     }
-
-    this.initLinesCache.set(resolvedPath, map);
     return map;
   }
 
@@ -115,11 +168,75 @@ export class StateExtractor {
       }
 
       const frameId = topFrame.id;
+      const funcName = (topFrame.name || '').trim();
+      const rawPath = topFrame.source?.path || topFrame.source?.name || 'source.cpp';
+
+      // Check if this frame is outside main() or in CRT startup/exit
+      const isMain = funcName === 'main' || funcName.startsWith('main(') || funcName.startsWith('main()');
+      const isCrt =
+        funcName.toLowerCase().includes('crt') ||
+        funcName.toLowerCase().includes('startup') ||
+        rawPath.toLowerCase().includes('crt') ||
+        rawPath.toLowerCase().includes('startup') ||
+        !funcName;
+
+      // If stepping outside main() or into C runtime exit/startup, keep the completed linked list
+      if (!isMain || isCrt) {
+        if (previousSnapshot) {
+          return {
+            ...previousSnapshot,
+            stepNumber,
+            explanation: 'Program execution completed. The linked list is complete.',
+            changeType: 'final',
+            isHistorical: false,
+          };
+        }
+        return null;
+      }
+
+      const rawLine = topFrame.line;
+      const resolvedFile = this.resolveFilePath(rawPath) || rawPath;
+
+      // Parse variable initialization lines from source code
+      const initLines = this.getVariableInitLines(resolvedFile);
+      const currentLine = rawLine;
+
+      // 'head' is only valid after its declaration line has completed execution
+      const headInitLine = initLines.get('head');
+      const hasHead = headInitLine !== undefined ? currentLine > headInitLine : true;
+
+      // If head declaration line hasn't finished executing, return clean empty canvas!
+      if (!hasHead) {
+        this.lastPausedLine = rawLine;
+        return {
+          stepNumber,
+          source: {
+            file: resolvedFile,
+            line: 0,
+            functionName: topFrame.name,
+          },
+          hasHead: false,
+          headId: null,
+          nodes: [],
+          pointers: [],
+          explanation: 'Program paused at start of main(). Click Next to execute: Node* head = nullptr;',
+          changeType: 'init',
+          isHistorical: false,
+        };
+      }
+
+      // The line that just completed execution is the line GDB was previously paused on
+      const executedLine = this.lastPausedLine !== null ? this.lastPausedLine : rawLine;
+      this.lastPausedLine = rawLine;
+
       const sourceLoc: SourceLocation = {
-        file: topFrame.source?.path || topFrame.source?.name || 'source.cpp',
-        line: topFrame.line,
+        file: resolvedFile,
+        line: executedLine,
         functionName: topFrame.name,
       };
+
+      const lineText = this.getLineText(sourceLoc.file, sourceLoc.line);
+      const isReturnOrEnd = lineText.startsWith('return') || lineText === '}';
 
       // 2. Discover local variables via Scopes or direct evaluation
       let localVars: Record<string, { value: string; variablesReference: number }> = {};
@@ -162,18 +279,10 @@ export class StateExtractor {
         }
       };
 
-      // Parse variable initialization lines from source code
-      const initLines = this.getVariableInitLines(sourceLoc.file);
-      const currentLine = sourceLoc.line;
-
-      // 'head' is only valid after its declaration line has completed execution
-      const headInitLine = initLines.get('head');
-      const isHeadInitialized = headInitLine !== undefined ? currentLine > headInitLine : true;
-
       // 3. Inspect 'head'
       let headAddr: string | null = null;
       let headId: string | null = null;
-      if (isHeadInitialized) {
+      if (hasHead) {
         const headValStr = localVars['head']?.value ?? (await evalExpr('head'));
         headAddr = this.parsePointer(headValStr);
         if (headAddr) {
@@ -219,22 +328,41 @@ export class StateExtractor {
         }
       }
 
-      // 5. Detect Detached Local Nodes (e.g. first, second, third, temp)
-      const detachedCandidates = ['first', 'second', 'third', 'temp', 'newNode', 'curr', 'prev'];
+      // 5. Track Active Pointer Variables (ONLY variables that exist in the student's code)
+      const activePointers: PointerVariable[] = [];
+
+      // Collect head pointer
+      if (hasHead) {
+        activePointers.push({
+          name: 'head',
+          targetNodeId: headId,
+          targetAddress: headAddr,
+          isNull: headAddr === null,
+        });
+      }
+
       const detachedNodes: ListNode[] = [];
 
-      for (const varName of detachedCandidates) {
-        // Skip uninitialized variables if current line hasn't completed their declaration line
-        const varInitLine = initLines.get(varName);
-        if (varInitLine !== undefined && currentLine <= varInitLine) {
+      // ONLY iterate over variables discovered in the source code!
+      for (const [varName, varInitLine] of initLines.entries()) {
+        if (varName === 'head') continue;
+        if (currentLine <= varInitLine) {
           continue;
         }
 
         const varValStr = localVars[varName]?.value ?? (await evalExpr(varName));
         const varAddr = this.parsePointer(varValStr);
+        const targetId = varAddr ? this.getStableId(varAddr) : null;
 
+        activePointers.push({
+          name: varName,
+          targetNodeId: targetId,
+          targetAddress: varAddr,
+          isNull: varAddr === null,
+        });
+
+        // If this pointer points to an allocated node not yet in reachableNodes, extract it
         if (varAddr && !reachableNodes.has(varAddr)) {
-          // Check if already processed in detached
           if (!detachedNodes.some((d) => d.address === varAddr)) {
             const dataStr = await evalExpr(`${varName}->data`);
             const nextValStr = await evalExpr(`${varName}->next`);
@@ -250,7 +378,6 @@ export class StateExtractor {
               nextAddress: nextAddr,
               isHead: false,
               isDetached: true,
-              variableName: varName,
               isNewlyCreated: true,
             });
           }
@@ -276,17 +403,32 @@ export class StateExtractor {
       }
 
       // 7. Generate Pedagogical Explanation
-      const { explanation, changeType } = ExplanationGenerator.generate(
+      let { explanation, changeType } = ExplanationGenerator.generate(
         allNodes,
         headId,
-        previousSnapshot
+        previousSnapshot,
+        hasHead,
+        activePointers
       );
+
+      // If execution reached the return statement or end of main, mark as final
+      if (isReturnOrEnd) {
+        changeType = 'final';
+        const chainNodes = allNodes.filter((n) => !n.isDetached);
+        if (chainNodes.length > 0) {
+          explanation = `The linked list is complete: head → ${chainNodes.map((n) => n.data).join(' → ')} → nullptr. Program execution finished.`;
+        } else {
+          explanation = 'Program execution finished.';
+        }
+      }
 
       const snapshot: LinkedListSnapshot = {
         stepNumber,
         source: sourceLoc,
+        hasHead,
         headId,
         nodes: allNodes,
+        pointers: activePointers,
         explanation,
         changeType,
         isHistorical: false,

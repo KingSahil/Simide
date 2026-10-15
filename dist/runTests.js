@@ -151,18 +151,26 @@ ${stderr}`
 
 // src/visualization/explanationGenerator.ts
 var ExplanationGenerator = class {
-  static generate(currentNodes, headId, previousSnapshot) {
+  static generate(currentNodes, headId, previousSnapshot, hasHead = true, pointers = []) {
+    if (!hasHead) {
+      return {
+        explanation: "Program paused at main(). Click Next to execute: Node* head = nullptr;",
+        changeType: "init"
+      };
+    }
     if (!headId) {
       const detachedNodes2 = currentNodes.filter((n) => n.isDetached);
       if (detachedNodes2.length === 0) {
         return {
-          explanation: "head is null, so the linked list is empty.",
+          explanation: "head is initialized to nullptr. The linked list is currently empty.",
           changeType: "init"
         };
       } else {
         const newest = detachedNodes2[detachedNodes2.length - 1];
+        const ptr = pointers.find((p) => p.targetNodeId === newest.id);
+        const ptrName = ptr ? ptr.name : "first";
         return {
-          explanation: `A new node has been created. The node stores ${newest.data}, and its next pointer is null. It is not yet connected to head.`,
+          explanation: `${ptrName} pointer created, pointing to a new Node containing ${newest.data}. head is still null.`,
           changeType: "node_created"
         };
       }
@@ -185,15 +193,19 @@ var ExplanationGenerator = class {
       const prevDetached = previousSnapshot.nodes.filter((n) => n.isDetached);
       if (detachedNodes.length > prevDetached.length) {
         const newest = detachedNodes[detachedNodes.length - 1];
+        const ptr = pointers.find((p) => p.targetNodeId === newest.id && p.name !== "head");
+        const ptrName = ptr ? ptr.name : "a new pointer";
         return {
-          explanation: `A new detached node storing ${newest.data} has been allocated. It is not yet connected to the list.`,
+          explanation: `${ptrName} pointer created, pointing to a new Node containing ${newest.data}. It is not yet connected to the list.`,
           changeType: "node_created"
         };
       }
       if (!previousSnapshot.headId && headId) {
         const headNode = currentNodes.find((n) => n.id === headId);
+        const otherPtrs = pointers.filter((p) => p.targetNodeId === headId && p.name !== "head").map((p) => p.name);
+        const aliasText = otherPtrs.length > 0 ? `head points to the node containing ${headNode?.data ?? ""} (aliasing pointer '${otherPtrs.join(", ")}' at address ${headNode?.address ?? ""}).` : `head points to the node containing ${headNode?.data ?? ""}.`;
         return {
-          explanation: `The first node is now connected. head points to the node containing ${headNode?.data ?? ""}.`,
+          explanation: aliasText,
           changeType: "head_assigned"
         };
       }
@@ -439,7 +451,11 @@ async function runTests() {
   assert.ok(debuggerInfo, "Debugger (GDB or LLDB) should be detected");
   console.log(`  \u2713 Detected debugger: ${debuggerInfo.miMode} at ${debuggerInfo.path}`);
   console.log("\n[Test 3] Testing Pedagogical Explanation Generator...");
-  const emptyRes = ExplanationGenerator.generate([], null);
+  const entryRes = ExplanationGenerator.generate([], null, void 0, false);
+  assert.strictEqual(entryRes.changeType, "init");
+  assert.ok(entryRes.explanation.includes("Node* head = nullptr"), "Should explain waiting to execute head declaration");
+  console.log(`  \u2713 State 0 (entry before head declaration): "${entryRes.explanation}"`);
+  const emptyRes = ExplanationGenerator.generate([], null, void 0, true);
   assert.strictEqual(emptyRes.changeType, "init");
   assert.ok(emptyRes.explanation.includes("empty"), "Should explain empty list");
   console.log(`  \u2713 Empty state: "${emptyRes.explanation}"`);
@@ -459,6 +475,7 @@ async function runTests() {
   console.log(`  \u2713 Node created state: "${detachedRes.explanation}"`);
   const snap1 = {
     stepNumber: 1,
+    hasHead: true,
     headId: null,
     nodes: [node1],
     explanation: detachedRes.explanation,
@@ -471,6 +488,7 @@ async function runTests() {
   console.log(`  \u2713 Head connected state: "${headRes.explanation}"`);
   const snap2 = {
     stepNumber: 2,
+    hasHead: true,
     headId: "node_1",
     nodes: [node1Connected],
     explanation: headRes.explanation,
@@ -492,6 +510,7 @@ async function runTests() {
   console.log(`  \u2713 Second node linked: "${linkedRes.explanation}"`);
   const snap3 = {
     stepNumber: 3,
+    hasHead: true,
     headId: "node_1",
     nodes: [node1To2, node2],
     explanation: linkedRes.explanation,

@@ -1,0 +1,14 @@
+# Node dependencies
+node_modules/
+
+# Compiled C++ binaries and temporary debug artifacts
+examples/.debug-mentor/*.exe
+*.exe
+
+# Log files
+*.log
+npm-debug.log*
+
+# OS Files
+.DS_Store
+Thumbs.db

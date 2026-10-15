@@ -496,18 +496,26 @@ var path3 = __toESM(require("path"));
 
 // src/visualization/explanationGenerator.ts
 var ExplanationGenerator = class {
-  static generate(currentNodes, headId, previousSnapshot) {
+  static generate(currentNodes, headId, previousSnapshot, hasHead = true, pointers = []) {
+    if (!hasHead) {
+      return {
+        explanation: "Program paused at main(). Click Next to execute: Node* head = nullptr;",
+        changeType: "init"
+      };
+    }
     if (!headId) {
       const detachedNodes2 = currentNodes.filter((n) => n.isDetached);
       if (detachedNodes2.length === 0) {
         return {
-          explanation: "head is null, so the linked list is empty.",
+          explanation: "head is initialized to nullptr. The linked list is currently empty.",
           changeType: "init"
         };
       } else {
         const newest = detachedNodes2[detachedNodes2.length - 1];
+        const ptr = pointers.find((p) => p.targetNodeId === newest.id);
+        const ptrName = ptr ? ptr.name : "first";
         return {
-          explanation: `A new node has been created. The node stores ${newest.data}, and its next pointer is null. It is not yet connected to head.`,
+          explanation: `${ptrName} pointer created, pointing to a new Node containing ${newest.data}. head is still null.`,
           changeType: "node_created"
         };
       }
@@ -530,15 +538,19 @@ var ExplanationGenerator = class {
       const prevDetached = previousSnapshot.nodes.filter((n) => n.isDetached);
       if (detachedNodes.length > prevDetached.length) {
         const newest = detachedNodes[detachedNodes.length - 1];
+        const ptr = pointers.find((p) => p.targetNodeId === newest.id && p.name !== "head");
+        const ptrName = ptr ? ptr.name : "a new pointer";
         return {
-          explanation: `A new detached node storing ${newest.data} has been allocated. It is not yet connected to the list.`,
+          explanation: `${ptrName} pointer created, pointing to a new Node containing ${newest.data}. It is not yet connected to the list.`,
           changeType: "node_created"
         };
       }
       if (!previousSnapshot.headId && headId) {
         const headNode = currentNodes.find((n) => n.id === headId);
+        const otherPtrs = pointers.filter((p) => p.targetNodeId === headId && p.name !== "head").map((p) => p.name);
+        const aliasText = otherPtrs.length > 0 ? `head points to the node containing ${headNode?.data ?? ""} (aliasing pointer '${otherPtrs.join(", ")}' at address ${headNode?.address ?? ""}).` : `head points to the node containing ${headNode?.data ?? ""}.`;
         return {
-          explanation: `The first node is now connected. head points to the node containing ${headNode?.data ?? ""}.`,
+          explanation: aliasText,
           changeType: "head_assigned"
         };
       }
@@ -596,36 +608,82 @@ var StateExtractor = class {
   static addressToIdMap = /* @__PURE__ */ new Map();
   static nextIdCounter = 1;
   static initLinesCache = /* @__PURE__ */ new Map();
+  static activeSourceFile = null;
+  static lastPausedLine = null;
+  static setActiveSourceFile(filePath) {
+    this.activeSourceFile = filePath;
+  }
   static reset() {
     this.addressToIdMap.clear();
     this.nextIdCounter = 1;
     this.initLinesCache.clear();
+    this.lastPausedLine = null;
   }
-  static getVariableInitLines(sourceFilePath) {
-    let resolvedPath = sourceFilePath;
-    if (!fs3.existsSync(resolvedPath)) {
-      const folders = vscode4.workspace.workspaceFolders;
-      if (folders && folders.length > 0) {
-        const candidate = path3.join(folders[0].uri.fsPath, sourceFilePath);
-        if (fs3.existsSync(candidate)) {
-          resolvedPath = candidate;
+  static resolveFilePath(sourceFilePath) {
+    if (sourceFilePath && fs3.existsSync(sourceFilePath)) {
+      return sourceFilePath;
+    }
+    if (this.activeSourceFile && fs3.existsSync(this.activeSourceFile)) {
+      return this.activeSourceFile;
+    }
+    const folders = vscode4.workspace.workspaceFolders;
+    if (folders && folders.length > 0) {
+      const root = folders[0].uri.fsPath;
+      const base = sourceFilePath ? path3.basename(sourceFilePath) : "linked-list.cpp";
+      const candidates = [
+        path3.join(root, "examples", base),
+        path3.join(root, base),
+        path3.join(root, "examples", "linked-list.cpp")
+      ];
+      for (const c of candidates) {
+        if (fs3.existsSync(c)) {
+          return c;
         }
       }
     }
-    if (this.initLinesCache.has(resolvedPath)) {
-      return this.initLinesCache.get(resolvedPath);
+    return null;
+  }
+  static getLineText(filePath, lineNum) {
+    const resolved = this.resolveFilePath(filePath);
+    if (!resolved)
+      return "";
+    try {
+      const content = fs3.readFileSync(resolved, "utf8");
+      const lines = content.split("\n");
+      if (lineNum >= 1 && lineNum <= lines.length) {
+        return lines[lineNum - 1].trim();
+      }
+    } catch {
     }
+    return "";
+  }
+  static getVariableInitLines(sourceFilePath) {
+    const resolvedPath = this.resolveFilePath(sourceFilePath) || sourceFilePath || "";
     const map = /* @__PURE__ */ new Map();
     try {
       if (fs3.existsSync(resolvedPath)) {
         const content = fs3.readFileSync(resolvedPath, "utf8");
         const lines = content.split("\n");
+        let insideFunction = false;
         for (let i = 0; i < lines.length; i++) {
           const lineText = lines[i].trim();
           const lineNum = i + 1;
-          const match = lineText.match(/(?:(?:\w+\s*\*|\b))([a-zA-Z_][a-zA-Z0-9_]*)\s*=/);
+          if (lineText.includes("main(") || lineText.includes("main (")) {
+            insideFunction = true;
+            continue;
+          }
+          if (!insideFunction) {
+            continue;
+          }
+          if (lineText.includes("->") || lineText.startsWith(".")) {
+            continue;
+          }
+          const match = lineText.match(/(?:Node\s*\*|auto\s*\*?)\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
           if (match) {
             const varName = match[1];
+            if (varName === "next" || varName === "data") {
+              continue;
+            }
             if (!map.has(varName)) {
               map.set(varName, lineNum);
             }
@@ -634,7 +692,6 @@ var StateExtractor = class {
       }
     } catch {
     }
-    this.initLinesCache.set(resolvedPath, map);
     return map;
   }
   static getStableId(address) {
@@ -675,11 +732,55 @@ var StateExtractor = class {
         return null;
       }
       const frameId = topFrame.id;
+      const funcName = (topFrame.name || "").trim();
+      const rawPath = topFrame.source?.path || topFrame.source?.name || "source.cpp";
+      const isMain = funcName === "main" || funcName.startsWith("main(") || funcName.startsWith("main()");
+      const isCrt = funcName.toLowerCase().includes("crt") || funcName.toLowerCase().includes("startup") || rawPath.toLowerCase().includes("crt") || rawPath.toLowerCase().includes("startup") || !funcName;
+      if (!isMain || isCrt) {
+        if (previousSnapshot) {
+          return {
+            ...previousSnapshot,
+            stepNumber,
+            explanation: "Program execution completed. The linked list is complete.",
+            changeType: "final",
+            isHistorical: false
+          };
+        }
+        return null;
+      }
+      const rawLine = topFrame.line;
+      const resolvedFile = this.resolveFilePath(rawPath) || rawPath;
+      const initLines = this.getVariableInitLines(resolvedFile);
+      const currentLine = rawLine;
+      const headInitLine = initLines.get("head");
+      const hasHead = headInitLine !== void 0 ? currentLine > headInitLine : true;
+      if (!hasHead) {
+        this.lastPausedLine = rawLine;
+        return {
+          stepNumber,
+          source: {
+            file: resolvedFile,
+            line: 0,
+            functionName: topFrame.name
+          },
+          hasHead: false,
+          headId: null,
+          nodes: [],
+          pointers: [],
+          explanation: "Program paused at start of main(). Click Next to execute: Node* head = nullptr;",
+          changeType: "init",
+          isHistorical: false
+        };
+      }
+      const executedLine = this.lastPausedLine !== null ? this.lastPausedLine : rawLine;
+      this.lastPausedLine = rawLine;
       const sourceLoc = {
-        file: topFrame.source?.path || topFrame.source?.name || "source.cpp",
-        line: topFrame.line,
+        file: resolvedFile,
+        line: executedLine,
         functionName: topFrame.name
       };
+      const lineText = this.getLineText(sourceLoc.file, sourceLoc.line);
+      const isReturnOrEnd = lineText.startsWith("return") || lineText === "}";
       let localVars = {};
       try {
         const scopesRes = await session.customRequest("scopes", { frameId });
@@ -713,13 +814,9 @@ var StateExtractor = class {
           return null;
         }
       };
-      const initLines = this.getVariableInitLines(sourceLoc.file);
-      const currentLine = sourceLoc.line;
-      const headInitLine = initLines.get("head");
-      const isHeadInitialized = headInitLine !== void 0 ? currentLine > headInitLine : true;
       let headAddr = null;
       let headId = null;
-      if (isHeadInitialized) {
+      if (hasHead) {
         const headValStr = localVars["head"]?.value ?? await evalExpr("head");
         headAddr = this.parsePointer(headValStr);
         if (headAddr) {
@@ -757,15 +854,31 @@ var StateExtractor = class {
           break;
         }
       }
-      const detachedCandidates = ["first", "second", "third", "temp", "newNode", "curr", "prev"];
+      const activePointers = [];
+      if (hasHead) {
+        activePointers.push({
+          name: "head",
+          targetNodeId: headId,
+          targetAddress: headAddr,
+          isNull: headAddr === null
+        });
+      }
       const detachedNodes = [];
-      for (const varName of detachedCandidates) {
-        const varInitLine = initLines.get(varName);
-        if (varInitLine !== void 0 && currentLine <= varInitLine) {
+      for (const [varName, varInitLine] of initLines.entries()) {
+        if (varName === "head")
+          continue;
+        if (currentLine <= varInitLine) {
           continue;
         }
         const varValStr = localVars[varName]?.value ?? await evalExpr(varName);
         const varAddr = this.parsePointer(varValStr);
+        const targetId = varAddr ? this.getStableId(varAddr) : null;
+        activePointers.push({
+          name: varName,
+          targetNodeId: targetId,
+          targetAddress: varAddr,
+          isNull: varAddr === null
+        });
         if (varAddr && !reachableNodes.has(varAddr)) {
           if (!detachedNodes.some((d) => d.address === varAddr)) {
             const dataStr = await evalExpr(`${varName}->data`);
@@ -781,7 +894,6 @@ var StateExtractor = class {
               nextAddress: nextAddr,
               isHead: false,
               isDetached: true,
-              variableName: varName,
               isNewlyCreated: true
             });
           }
@@ -801,16 +913,29 @@ var StateExtractor = class {
           }
         }
       }
-      const { explanation, changeType } = ExplanationGenerator.generate(
+      let { explanation, changeType } = ExplanationGenerator.generate(
         allNodes,
         headId,
-        previousSnapshot
+        previousSnapshot,
+        hasHead,
+        activePointers
       );
+      if (isReturnOrEnd) {
+        changeType = "final";
+        const chainNodes = allNodes.filter((n) => !n.isDetached);
+        if (chainNodes.length > 0) {
+          explanation = `The linked list is complete: head \u2192 ${chainNodes.map((n) => n.data).join(" \u2192 ")} \u2192 nullptr. Program execution finished.`;
+        } else {
+          explanation = "Program execution finished.";
+        }
+      }
       const snapshot = {
         stepNumber,
         source: sourceLoc,
+        hasHead,
         headId,
         nodes: allNodes,
+        pointers: activePointers,
         explanation,
         changeType,
         isHistorical: false
@@ -892,6 +1017,14 @@ var LinkedListViewProvider = class {
   disposables = [];
   registerDebugListeners() {
     this.disposables.push(
+      vscode5.window.onDidChangeActiveTextEditor(() => {
+        const curr = this.snapshotManager.getCurrentSnapshot();
+        if (curr) {
+          this.updateEditorActiveLineHighlight(curr);
+        }
+      })
+    );
+    this.disposables.push(
       DebugTrackerFactory.onStopped(async (event) => {
         ExecutionController.setPaused(true);
         await new Promise((r) => setTimeout(r, 80));
@@ -918,8 +1051,9 @@ var LinkedListViewProvider = class {
       })
     );
     this.disposables.push(
-      DebugTrackerFactory.onTerminated((session) => {
-        this.clearEditorHistoryHighlight();
+      DebugTrackerFactory.onTerminated(async (session) => {
+        this.clearEditorHighlight();
+        await this.restoreNativeStackFrameHighlight();
         DebugSessionManager.setActiveSession(null);
         ExecutionController.setPaused(true);
         this.postMessage({
@@ -961,6 +1095,10 @@ var LinkedListViewProvider = class {
             this.broadcastState(nextSnap);
           }
         } else {
+          const curr2 = this.snapshotManager.getCurrentSnapshot();
+          if (curr2 && curr2.changeType === "final") {
+            return;
+          }
           await ExecutionController.next();
         }
         break;
@@ -1038,8 +1176,10 @@ var LinkedListViewProvider = class {
       });
       return;
     }
+    await this.suppressNativeStackFrameHighlight();
     this.snapshotManager.reset();
     StateExtractor.reset();
+    StateExtractor.setActiveSourceFile(sourceFile);
     this.stepCounter = 1;
     this.postMessage({
       command: "status",
@@ -1051,6 +1191,7 @@ var LinkedListViewProvider = class {
       sourceFile
     );
     if (!debugLaunch.success) {
+      await this.restoreNativeStackFrameHighlight();
       this.postMessage({
         command: "error",
         message: "Debugger Launch Failed",
@@ -1069,50 +1210,80 @@ var LinkedListViewProvider = class {
     await DebugSessionManager.stopDebugging();
     await this.startVisualization();
   }
-  historyDecorationType = vscode5.window.createTextEditorDecorationType({
-    backgroundColor: "rgba(0, 102, 255, 0.25)",
+  originalColors = void 0;
+  // Single unified amber highlight for both live stepping and history navigation
+  activeLineDecorationType = vscode5.window.createTextEditorDecorationType({
+    backgroundColor: "rgba(235, 155, 30, 0.22)",
     isWholeLine: true,
-    border: "1px dashed #0066FF",
-    overviewRulerColor: "#0066FF",
+    border: "1px solid rgba(235, 155, 30, 0.55)",
+    overviewRulerColor: "#EB9B1E",
     overviewRulerLane: vscode5.OverviewRulerLane.Full
   });
-  updateEditorHistoryHighlight(snapshot) {
-    const isHistorical = !!snapshot.isHistorical;
+  async suppressNativeStackFrameHighlight() {
+    try {
+      const config = vscode5.workspace.getConfiguration("workbench");
+      this.originalColors = config.get("colorCustomizations");
+      const target = vscode5.workspace.workspaceFolders ? vscode5.ConfigurationTarget.Workspace : vscode5.ConfigurationTarget.Global;
+      await config.update(
+        "colorCustomizations",
+        {
+          ...this.originalColors || {},
+          "editor.stackFrameHighlightBackground": "#00000000",
+          "editor.focusedStackFrameHighlightBackground": "#00000000"
+        },
+        target
+      );
+    } catch {
+    }
+  }
+  async restoreNativeStackFrameHighlight() {
+    try {
+      if (this.originalColors !== void 0) {
+        const config = vscode5.workspace.getConfiguration("workbench");
+        const target = vscode5.workspace.workspaceFolders ? vscode5.ConfigurationTarget.Workspace : vscode5.ConfigurationTarget.Global;
+        await config.update("colorCustomizations", this.originalColors, target);
+        this.originalColors = void 0;
+      }
+    } catch {
+    }
+  }
+  updateEditorActiveLineHighlight(snapshot) {
     const line = snapshot.source?.line;
     const filePath = snapshot.source?.file;
     for (const editor of vscode5.window.visibleTextEditors) {
       const isMatchingDoc = !filePath || editor.document.fileName.endsWith(filePath) || path4.basename(editor.document.fileName) === path4.basename(filePath);
-      if (isHistorical && line && line > 0 && isMatchingDoc) {
+      if (line && line > 0 && isMatchingDoc) {
         const targetLine = line - 1;
         const range = new vscode5.Range(targetLine, 0, targetLine, 0);
-        editor.setDecorations(this.historyDecorationType, [range]);
+        editor.setDecorations(this.activeLineDecorationType, [range]);
         editor.revealRange(range, vscode5.TextEditorRevealType.InCenterIfOutsideViewport);
         if (editor.document.lineCount > targetLine) {
           const pos = new vscode5.Position(targetLine, 0);
           editor.selection = new vscode5.Selection(pos, pos);
         }
       } else {
-        editor.setDecorations(this.historyDecorationType, []);
+        editor.setDecorations(this.activeLineDecorationType, []);
       }
     }
   }
-  clearEditorHistoryHighlight() {
+  clearEditorHighlight() {
     for (const editor of vscode5.window.visibleTextEditors) {
-      editor.setDecorations(this.historyDecorationType, []);
+      editor.setDecorations(this.activeLineDecorationType, []);
     }
   }
   broadcastState(snapshot) {
     this.reveal();
-    this.updateEditorHistoryHighlight(snapshot);
+    this.updateEditorActiveLineHighlight(snapshot);
     const isHistorical = !!snapshot.isHistorical;
+    const isFinal = snapshot.changeType === "final";
     const isPaused = ExecutionController.status.isPaused;
     const isRunning = ExecutionController.status.isRunning;
     this.postMessage({
       command: "updateState",
       snapshot,
-      canStepNext: isHistorical ? true : isPaused,
+      canStepNext: isHistorical ? true : !isFinal && isPaused,
       canStepPrev: this.snapshotManager.canGoPrev(),
-      canContinue: isPaused && !isHistorical,
+      canContinue: isPaused && !isHistorical && !isFinal,
       canPause: isRunning,
       canRestart: true,
       isPaused,
@@ -1145,9 +1316,10 @@ var LinkedListViewProvider = class {
     htmlContent = htmlContent.replace("webview.css", styleUri.toString());
     return htmlContent;
   }
-  dispose() {
-    this.clearEditorHistoryHighlight();
-    this.historyDecorationType.dispose();
+  async dispose() {
+    this.clearEditorHighlight();
+    this.activeLineDecorationType.dispose();
+    await this.restoreNativeStackFrameHighlight();
     for (const d of this.disposables) {
       d.dispose();
     }

@@ -23,6 +23,16 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   }
 
   private registerDebugListeners(): void {
+    // Re-apply highlight if student clicks back into editor
+    this.disposables.push(
+      vscode.window.onDidChangeActiveTextEditor(() => {
+        const curr = this.snapshotManager.getCurrentSnapshot();
+        if (curr) {
+          this.updateEditorActiveLineHighlight(curr);
+        }
+      })
+    );
+
     // Stopped listener
     this.disposables.push(
       DebugTrackerFactory.onStopped(async (event: DebuggerStopEvent) => {
@@ -58,8 +68,9 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
 
     // Terminated listener
     this.disposables.push(
-      DebugTrackerFactory.onTerminated((session) => {
-        this.clearEditorHistoryHighlight();
+      DebugTrackerFactory.onTerminated(async (session) => {
+        this.clearEditorHighlight();
+        await this.restoreNativeStackFrameHighlight();
         DebugSessionManager.setActiveSession(null);
         ExecutionController.setPaused(true);
         this.postMessage({
@@ -111,6 +122,10 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
             this.broadcastState(nextSnap);
           }
         } else {
+          const curr = this.snapshotManager.getCurrentSnapshot();
+          if (curr && curr.changeType === 'final') {
+            return;
+          }
           await ExecutionController.next();
         }
         break;
@@ -204,9 +219,13 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    // Suppress VS Code's native stack frame highlight so there are not two highlights
+    await this.suppressNativeStackFrameHighlight();
+
     // Reset session trackers
     this.snapshotManager.reset();
     StateExtractor.reset();
+    StateExtractor.setActiveSourceFile(sourceFile);
     this.stepCounter = 1;
 
     // Launch Debugger
@@ -222,6 +241,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     );
 
     if (!debugLaunch.success) {
+      await this.restoreNativeStackFrameHighlight();
       this.postMessage({
         command: 'error',
         message: 'Debugger Launch Failed',
@@ -243,16 +263,55 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     await this.startVisualization();
   }
 
-  private historyDecorationType = vscode.window.createTextEditorDecorationType({
-    backgroundColor: 'rgba(0, 102, 255, 0.25)',
+  private originalColors: Record<string, any> | undefined = undefined;
+
+  // Single unified amber highlight for both live stepping and history navigation
+  private activeLineDecorationType = vscode.window.createTextEditorDecorationType({
+    backgroundColor: 'rgba(235, 155, 30, 0.22)',
     isWholeLine: true,
-    border: '1px dashed #0066FF',
-    overviewRulerColor: '#0066FF',
+    border: '1px solid rgba(235, 155, 30, 0.55)',
+    overviewRulerColor: '#EB9B1E',
     overviewRulerLane: vscode.OverviewRulerLane.Full,
   });
 
-  private updateEditorHistoryHighlight(snapshot: LinkedListSnapshot): void {
-    const isHistorical = !!snapshot.isHistorical;
+  private async suppressNativeStackFrameHighlight(): Promise<void> {
+    try {
+      const config = vscode.workspace.getConfiguration('workbench');
+      this.originalColors = config.get<Record<string, any>>('colorCustomizations');
+      const target = vscode.workspace.workspaceFolders
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+
+      await config.update(
+        'colorCustomizations',
+        {
+          ...(this.originalColors || {}),
+          'editor.stackFrameHighlightBackground': '#00000000',
+          'editor.focusedStackFrameHighlightBackground': '#00000000',
+        },
+        target
+      );
+    } catch {
+      // Ignore if user environment restricts setting writes
+    }
+  }
+
+  private async restoreNativeStackFrameHighlight(): Promise<void> {
+    try {
+      if (this.originalColors !== undefined) {
+        const config = vscode.workspace.getConfiguration('workbench');
+        const target = vscode.workspace.workspaceFolders
+          ? vscode.ConfigurationTarget.Workspace
+          : vscode.ConfigurationTarget.Global;
+        await config.update('colorCustomizations', this.originalColors, target);
+        this.originalColors = undefined;
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  private updateEditorActiveLineHighlight(snapshot: LinkedListSnapshot): void {
     const line = snapshot.source?.line;
     const filePath = snapshot.source?.file;
 
@@ -262,10 +321,10 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         editor.document.fileName.endsWith(filePath) ||
         path.basename(editor.document.fileName) === path.basename(filePath);
 
-      if (isHistorical && line && line > 0 && isMatchingDoc) {
+      if (line && line > 0 && isMatchingDoc) {
         const targetLine = line - 1;
         const range = new vscode.Range(targetLine, 0, targetLine, 0);
-        editor.setDecorations(this.historyDecorationType, [range]);
+        editor.setDecorations(this.activeLineDecorationType, [range]);
         editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 
         if (editor.document.lineCount > targetLine) {
@@ -273,30 +332,31 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           editor.selection = new vscode.Selection(pos, pos);
         }
       } else {
-        editor.setDecorations(this.historyDecorationType, []);
+        editor.setDecorations(this.activeLineDecorationType, []);
       }
     }
   }
 
-  private clearEditorHistoryHighlight(): void {
+  private clearEditorHighlight(): void {
     for (const editor of vscode.window.visibleTextEditors) {
-      editor.setDecorations(this.historyDecorationType, []);
+      editor.setDecorations(this.activeLineDecorationType, []);
     }
   }
 
   private broadcastState(snapshot: LinkedListSnapshot): void {
     this.reveal();
-    this.updateEditorHistoryHighlight(snapshot);
+    this.updateEditorActiveLineHighlight(snapshot);
     const isHistorical = !!snapshot.isHistorical;
+    const isFinal = snapshot.changeType === 'final';
     const isPaused = ExecutionController.status.isPaused;
     const isRunning = ExecutionController.status.isRunning;
 
     this.postMessage({
       command: 'updateState',
       snapshot,
-      canStepNext: isHistorical ? true : isPaused,
+      canStepNext: isHistorical ? true : (!isFinal && isPaused),
       canStepPrev: this.snapshotManager.canGoPrev(),
-      canContinue: isPaused && !isHistorical,
+      canContinue: isPaused && !isHistorical && !isFinal,
       canPause: isRunning,
       canRestart: true,
       isPaused,
@@ -338,9 +398,10 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     return htmlContent;
   }
 
-  public dispose(): void {
-    this.clearEditorHistoryHighlight();
-    this.historyDecorationType.dispose();
+  public async dispose(): Promise<void> {
+    this.clearEditorHighlight();
+    this.activeLineDecorationType.dispose();
+    await this.restoreNativeStackFrameHighlight();
     for (const d of this.disposables) {
       d.dispose();
     }
