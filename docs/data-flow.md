@@ -1,6 +1,6 @@
 # Data Flow & Execution Lifecycles
 
-This document traces the complete step-by-step lifecycle flows of **VS Code Debug Mentor**. Each flow is illustrated with a sequence diagram and accompanied by an easy-to-follow explanation.
+This document traces the complete step-by-step lifecycle flows of **SimIDE**. Each flow is illustrated with a sequence diagram and accompanied by an easy-to-follow explanation.
 
 ---
 
@@ -39,13 +39,13 @@ sequenceDiagram
     Tracker->>Provider: onStopped({ session, threadId: 1, reason: 'entry' })
 
     Provider->>Extractor: extractState(session, threadId, stepNum: 1)
-    Extractor->>Extractor: Scan source AST for pointer declarations & init lines
+    Extractor->>Extractor: Scan source AST for pointer declarations, structs & functions
     Extractor->>VSCodeDAP: DAP stackTrace, scopes, variables
     VSCodeDAP->>GDB: Query local variables
     GDB-->>VSCodeDAP: Program at entry of main
     VSCodeDAP-->>Extractor: Locals
     Extractor->>Explainer: generate([], null, undefined, hasHead: false)
-    Explainer-->>Extractor: "Program paused at main(). Click Next to execute: Node* head = nullptr;"
+    Explainer-->>Extractor: "Program paused at main(). Click Next to allocate and initialize..."
     Extractor-->>Provider: LinkedListSnapshot (step 1)
 
     Provider->>Snapshots: addSnapshot(snapshot)
@@ -56,9 +56,9 @@ sequenceDiagram
 
 ---
 
-## 2. Stepping Forward (Clicking [ Next ])
+## 2. Function Stepping & Traversal Flow (e.g. `printList`)
 
-When the user wants to advance execution to see the next line of C++ execute:
+When execution steps into helper functions and loops across linked nodes:
 
 ```mermaid
 sequenceDiagram
@@ -66,70 +66,85 @@ sequenceDiagram
     actor User
     participant Webview as Webview (app.ts)
     participant Provider as LinkedListViewProvider
-    participant Snapshots as SnapshotManager
     participant ExecCtrl as ExecutionController
-    participant VSCodeDAP as VS Code Debug Host
     participant GDB as Native GDB / LLDB
-    participant Tracker as DebugTrackerFactory
     participant Extractor as StateExtractor
-    participant WebviewPhysics as Webview Physics & SVG
+    participant Explainer as ExplanationGenerator
+    participant Terminal as Webview Terminal Card
 
     User->>Webview: Clicks [ Next ]
     Webview->>Provider: postMessage({ command: 'next' })
-    Provider->>Snapshots: canGoNextHistory()?
-    alt Browsing Past History
-        Snapshots-->>Provider: true (historical snapshots exist ahead)
-        Provider->>Snapshots: nextHistory()
-        Snapshots-->>Provider: snapshot
-        Provider->>Webview: postMessage({ command: 'updateState', snapshot })
-    else Live Debugging
-        Snapshots-->>Provider: false (already at latest live step)
-        Provider->>ExecCtrl: next()
-        ExecCtrl->>VSCodeDAP: customRequest('next', { threadId: 1 })
-        VSCodeDAP->>GDB: -exec-next
-        GDB-->>GDB: Advances 1 line in C++ program
-        GDB-->>VSCodeDAP: DAP event "stopped" (reason: "step")
-        VSCodeDAP->>Tracker: onDidSendMessage({ event: "stopped" })
-        Tracker->>Provider: onStopped({ session, threadId: 1 })
-
-        Provider->>Extractor: extractState(session, threadId, stepNum)
-        Extractor->>Extractor: Check declaration line thresholds & active pointers
-        Extractor->>VSCodeDAP: Query locals & dereference pointers
-        VSCodeDAP-->>Extractor: Evaluated node values & addresses
-        Extractor-->>Provider: New LinkedListSnapshot
-
-        Provider->>Snapshots: addSnapshot(newSnapshot)
-        Provider->>Webview: postMessage({ command: 'updateState', newSnapshot })
-        Webview->>WebviewPhysics: registerPhysicsBody & update springLinks
-        WebviewPhysics->>WebviewPhysics: Run physics tick (damping, springs, repulsion)
-        WebviewPhysics->>WebviewPhysics: Update SVG arrow paths
-        WebviewPhysics-->>User: Smooth visual update with spring animation
-    end
+    Provider->>ExecCtrl: next()
+    ExecCtrl->>GDB: Advance execution into printList()
+    GDB-->>Extractor: Paused inside printList(Node* head)
+    Extractor->>Extractor: Discovers current = head;
+    Extractor->>GDB: Query current->data & current->next
+    GDB-->>Extractor: current points to node_1 (data: 10)
+    Extractor->>Extractor: Captures cout << current->data << " -> ";
+    Extractor->>Explainer: generate(..., printedInStep: "10 -> ")
+    Explainer-->>Extractor: "Pointer 'current' advanced to node containing 10. Printed: '10 -> '"
+    Extractor-->>Provider: Snapshot with terminalOutput: "10 -> "
+    Provider->>Webview: postMessage({ command: 'updateState', snapshot })
+    Webview->>Terminal: Appends "10 -> " and auto-scrolls
+    Webview->>Webview: Animates 'current' badge over node 10
+    Webview-->>User: Visual pointer moves & terminal updates simultaneously!
 ```
 
 ---
 
-## 3. Webview Physics & Camera Loop
+## 3. Node Deletion & Bypassing Flow (`delete temp`)
+
+When deleting a node in functions like `deleteNode(&head, key)`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant ExecCtrl as ExecutionController
+    participant GDB as Native GDB / LLDB
+    participant Extractor as StateExtractor
+    participant Explainer as ExplanationGenerator
+    participant Webview as Webview (app.ts)
+
+    User->>ExecCtrl: Clicks [ Next ] (executes prev->next = temp->next)
+    ExecCtrl->>GDB: Step line
+    GDB-->>Extractor: Link bypassed: node 10 now points to node 30
+    Extractor->>Explainer: Detects nextId changed from node_2 to node_3
+    Explainer-->>Extractor: "Node containing 10 unlinked from node 20 and points to node 30 (bypassing node 20)."
+    Extractor-->>Webview: Update diagram (node 20 is detached)
+
+    User->>ExecCtrl: Clicks [ Next ] (executes delete temp)
+    ExecCtrl->>GDB: Step line
+    GDB-->>Extractor: Line contains "delete temp"
+    Extractor->>Extractor: Records temp address in deletedAddresses
+    Extractor->>Explainer: changeType: 'node_deleted'
+    Explainer-->>Extractor: "Freed heap memory for node containing 20 ('temp') via delete."
+    Extractor-->>Webview: Node 20 removed from physics simulation
+    Webview-->>User: Node 20 disappears; surviving chain springs smoothly into alignment!
+```
+
+---
+
+## 4. Webview D3 Physics & Camera Loop
 
 Inside the Webview (`webview/app.ts`), an autonomous animation and interaction loop handles node positioning and camera panning:
 
 ```mermaid
 flowchart TD
-    UpdateMsg["Incoming 'updateState' Message"] --> SetupBodies["Register Physics Bodies for Nodes & Badges"]
-    SetupBodies --> SpringConfig["Configure Hookean Spring Links (restLength: 150, stiffness: 0.05)"]
-    SpringConfig --> AnimLoop["wakePhysics() & requestAnimationFrame"]
+    UpdateMsg["Incoming 'updateState' Message"] --> SetupBodies["Register D3 Force Bodies for Nodes & Badges"]
+    SetupBodies --> LinkConfig["Filter validLinks (source & target in active map)"]
+    LinkConfig --> ForceInit["initOrUpdateSimulation(nodes, validLinks)"]
 
-    subgraph PhysicsTick ["Physics Simulation Step (16ms)"]
-        ForceRepel["Compute Node-to-Node Repulsion"] --> ForceSpring["Compute Spring Attraction/Repulsion along Pointers"]
-        ForceSpring --> DragConstraint["Apply Mouse Drag Constraints (if dragging)"]
-        DragConstraint --> VelocityDamp["Apply Velocity Damping (friction: 0.82)"]
-        VelocityDamp --> UpdateDOM["Update DOM (x, y) & Redraw SVG Arrow Paths"]
+    subgraph SimulationForces ["D3 Force System"]
+        Charge["d3.forceManyBody().strength(-400) (Repulsion)"]
+        Link["d3.forceLink(validLinks).distance(160) (Springs)"]
+        Center["d3.forceCenter() (Centering)"]
+        Charge --> SimulationTick["Tick Event: Update DOM (x, y) & Redraw SVG Arrows"]
+        Link --> SimulationTick
+        Center --> SimulationTick
     end
 
-    AnimLoop --> PhysicsTick
-    PhysicsTick --> EnergyCheck{"Kinetic Energy > Threshold?"}
-    EnergyCheck -- Yes --> AnimLoop
-    EnergyCheck -- No --> SleepPhysics["Sleep Physics (Save CPU)"]
+    ForceInit --> SimulationForces
 
     subgraph CameraControls ["Pan & Zoom Camera"]
         RightClick["Right-Click / Middle / Space Drag"] --> UpdatePan["Update cameraPanX, cameraPanY"]
@@ -143,7 +158,7 @@ flowchart TD
 
 ---
 
-## 4. Historical Navigation (Clicking [ Previous ])
+## 5. Historical Navigation (Clicking [ Previous ])
 
 When a student wants to see what the state was 2 steps ago:
 
@@ -164,33 +179,6 @@ sequenceDiagram
 
     Provider->>Editor: Highlight source line with dashed blue border
     Provider->>Webview: postMessage({ command: 'updateState', snapshot, isHistorical: true })
-    Webview->>WebviewApp: Render previous nodes & show "Viewing historical snapshot" banner
+    Webview->>WebviewApp: Render previous nodes, rewind terminal text & show banner
     WebviewApp-->>User: Historical state shown (GDB remains untouched!)
-```
-
----
-
-## 5. Reaching Program Completion & CRT Boundary Guard
-
-When execution hits `return 0;` or the closing brace:
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User
-    participant ExecCtrl as ExecutionController
-    participant GDB as Native GDB / LLDB
-    participant Extractor as StateExtractor
-    participant Provider as LinkedListViewProvider
-    participant Webview as Webview (app.ts)
-
-    User->>ExecCtrl: Clicks [ Next ]
-    ExecCtrl->>GDB: Step line
-    GDB-->>Extractor: Stack Frame: return 0 or CRT startup/exit
-    Extractor->>Extractor: Detects CRT / exit frame
-    Extractor-->>Provider: Snapshot marked changeType: 'final' (keeps completed chain)
-    Provider->>Provider: Sets canStepNext: false, canContinue: false
-    Provider->>Webview: postMessage({ command: 'updateState', canStepNext: false, ... })
-    Webview->>Webview: Disable Next button & show "Program execution finished."
-    Webview-->>User: Completed linked list remains cleanly on screen for review!
 ```

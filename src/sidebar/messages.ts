@@ -10,6 +10,7 @@ export type WebviewMessage =
   | { command: 'pause' }
   | { command: 'restart' }
   | { command: 'retry' }
+  | { command: 'clearTerminal' }
   | { command: 'requestState' };
 
 export type ExtensionMessage =
@@ -30,6 +31,11 @@ export type ExtensionMessage =
       isRunning: boolean;
       totalSnapshots: number;
       currentSnapshotIndex: number;
+    }
+  | {
+      command: 'terminalOutput';
+      output: string;
+      fullOutput: string;
     }
   | {
       command: 'error';

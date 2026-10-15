@@ -1,9 +1,14 @@
 {
-  "name": "vscode-debug-mentor",
-  "displayName": "VS Code Debug Mentor",
-  "description": "Real-time C++ debugging and DSA visualization extension for VS Code",
+  "name": "simide-ide",
+  "displayName": "SimIDE - DSA Visualizer",
+  "description": "SimIDE (Simulation + IDE) — Interactive DSA Simulation & Real-time C++ Debugging in VS Code",
   "version": "0.1.0",
-  "publisher": "debug-mentor",
+  "publisher": "kingsahil",
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KingSahil/Simide"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -23,7 +28,7 @@
       "activitybar": [
         {
           "id": "debug-mentor-view-container",
-          "title": "Debug Mentor",
+          "title": "SimIDE",
           "icon": "resources/icon.svg"
         }
       ]
@@ -33,33 +38,33 @@
         {
           "type": "webview",
           "id": "debug-mentor.sidebar",
-          "name": "Debug Mentor"
+          "name": "SimIDE"
         }
       ]
     },
     "commands": [
       {
         "command": "debug-mentor.visualize",
-        "title": "Debug Mentor: Visualize C++ Execution",
-        "category": "Debug Mentor",
+        "title": "SimIDE: Visualize C++ Execution",
+        "category": "SimIDE",
         "icon": "$(play)"
       },
       {
         "command": "debug-mentor.next",
-        "title": "Debug Mentor: Next Step",
-        "category": "Debug Mentor",
+        "title": "SimIDE: Next Step",
+        "category": "SimIDE",
         "icon": "$(arrow-right)"
       },
       {
         "command": "debug-mentor.prev",
-        "title": "Debug Mentor: Previous Step",
-        "category": "Debug Mentor",
+        "title": "SimIDE: Previous Step",
+        "category": "SimIDE",
         "icon": "$(arrow-left)"
       },
       {
         "command": "debug-mentor.restart",
-        "title": "Debug Mentor: Restart Session",
-        "category": "Debug Mentor",
+        "title": "SimIDE: Restart Session",
+        "category": "SimIDE",
         "icon": "$(debug-restart)"
       }
     ]
@@ -73,6 +78,7 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.20.0",
     "typescript": "^5.3.3"
   },

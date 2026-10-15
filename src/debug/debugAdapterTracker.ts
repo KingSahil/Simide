@@ -14,15 +14,27 @@ export interface DebuggerContinueEvent {
 export type StopListener = (event: DebuggerStopEvent) => void;
 export type ContinueListener = (event: DebuggerContinueEvent) => void;
 export type TerminateListener = (session: vscode.DebugSession) => void;
+export type OutputListener = (output: string, category?: string) => void;
 
 export class DebugTrackerFactory implements vscode.DebugAdapterTrackerFactory {
   private static stopListeners: StopListener[] = [];
   private static continueListeners: ContinueListener[] = [];
   private static terminateListeners: TerminateListener[] = [];
+  private static outputListeners: OutputListener[] = [];
   private static lastThreadId: number = 1;
 
   public static getLastThreadId(): number {
     return this.lastThreadId;
+  }
+
+  public static onOutput(listener: OutputListener): vscode.Disposable {
+    this.outputListeners.push(listener);
+    return {
+      dispose: () => {
+        const idx = this.outputListeners.indexOf(listener);
+        if (idx !== -1) this.outputListeners.splice(idx, 1);
+      },
+    };
   }
 
   public static onStopped(listener: StopListener): vscode.Disposable {
@@ -81,6 +93,18 @@ export class DebugTrackerFactory implements vscode.DebugAdapterTrackerFactory {
                 listener({ session, threadId });
               } catch (e) {
                 console.error('[DebugTracker] Error in continue listener', e);
+              }
+            }
+          } else if (m.event === 'output') {
+            const outputText = m.body?.output;
+            const category = m.body?.category || 'console';
+            if (outputText) {
+              for (const listener of DebugTrackerFactory.outputListeners) {
+                try {
+                  listener(outputText, category);
+                } catch (e) {
+                  console.error('[DebugTracker] Error in output listener', e);
+                }
               }
             }
           } else if (m.event === 'terminated' || m.event === 'exited') {

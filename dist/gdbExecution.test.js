@@ -134,7 +134,7 @@ var DebugSessionManager = class {
       );
     }
     const debugConfig = {
-      name: "Debug Mentor (C++)",
+      name: "SimIDE (C++)",
       type: "cppdbg",
       request: "launch",
       program: executablePath,
@@ -190,30 +190,20 @@ async function testGdbExecution() {
   const gdbCmds = [
     "break main",
     "run",
-    // At line 10: Node* head = nullptr;
+    // Line 10: Node* head = new Node();
     "next",
-    "print head",
-    // At line 11: Node* first = new Node{10, nullptr};
+    // Line 11: Node* second = new Node();
     "next",
-    "print first",
-    "print first->data",
-    "print first->next",
-    // At line 12: head = first;
+    // Line 14: head->data = 10;
     "next",
-    "print head",
     "print head->data",
-    // At line 13: Node* second = new Node{20, nullptr};
+    // Line 15: second->data = 20;
     "next",
-    "print second",
     "print second->data",
-    // At line 14: first->next = second;
+    // Line 18: head->next = second;
     "next",
-    "print first->next",
-    // At line 15: Node* third = new Node{30, nullptr};
-    "next",
-    "print third",
-    "print third->data",
-    // At line 16: second->next = third;
+    "print head->next->data",
+    // Line 19: second->next = nullptr;
     "next",
     "print second->next",
     "quit"
@@ -225,11 +215,11 @@ async function testGdbExecution() {
     console.log("[GDB Output Sample]");
     const lines = stdout.split("\n").filter((l) => l.includes("$") || l.includes("Breakpoint") || l.includes("Thread"));
     lines.forEach((l) => console.log("  " + l.trim()));
-    assert.ok(stdout.includes("$1 = (Node *) 0x0"), "Head should initially be null (0x0)");
-    assert.ok(stdout.includes("= 10"), "First node data should be 10");
+    assert.ok(stdout.includes("= 10"), "Head node data should be 10");
     assert.ok(stdout.includes("= 20"), "Second node data should be 20");
-    assert.ok(stdout.includes("= 30"), "Third node data should be 30");
-    console.log("\n\u2713 Verified real GDB runtime stops and variable values (10 -> 20 -> 30)");
+    assert.ok(stdout.includes("$3 = 20"), "head->next->data should be 20");
+    console.log("\n\u2713 Verified real GDB runtime stops and variable values (head=10, second=20)");
+    console.log("\u2713 Verified dynamic linking (head->next = second)");
     console.log("=== Real GDB Execution Test PASSED ===\n");
   } finally {
     if (fs2.existsSync(scriptPath)) {
@@ -237,7 +227,54 @@ async function testGdbExecution() {
     }
   }
 }
-testGdbExecution().catch((err) => {
+async function testLeetcodeReverseGdb() {
+  console.log("=== Running Real GDB Runtime Stepping on LeetCode 206 (Reverse Linked List) ===\n");
+  const exePath = path2.resolve(process.cwd(), "examples/.debug-mentor/leetcode-206-reverse.exe");
+  assert.ok(fs2.existsSync(exePath), "Compiled LeetCode executable must exist");
+  const debuggerInfo = await DebugSessionManager.findDebuggerPath();
+  assert.ok(debuggerInfo, "GDB must be available");
+  const gdbCmds = [
+    "break reverseList",
+    "run",
+    // We are inside reverseList
+    "print head->val",
+    "next",
+    // prev = nullptr
+    "next",
+    // curr = head
+    "print curr->val",
+    "finish",
+    // run until reverseList returns to main
+    "next",
+    // execute ListNode* reversedHead = reverseList(head);
+    "print reversedHead->val",
+    "print reversedHead->next->val",
+    "print reversedHead->next->next->val",
+    "quit"
+  ];
+  const scriptPath = path2.resolve(process.cwd(), "examples/.debug-mentor/test_reverse_gdb.txt");
+  fs2.writeFileSync(scriptPath, gdbCmds.join("\n"), "utf8");
+  try {
+    const { stdout } = await execFileAsync2(debuggerInfo.path, ["-batch", "-x", scriptPath, exePath]);
+    console.log("[GDB LeetCode Output Sample]");
+    const lines = stdout.split("\n").filter((l) => l.includes("$") || l.includes("Breakpoint"));
+    lines.forEach((l) => console.log("  " + l.trim()));
+    assert.ok(stdout.includes("= 1"), "Original head val was 1");
+    assert.ok(stdout.includes("reversedHead->val") || stdout.includes("= 3"), "Reversed head val must be 3");
+    assert.ok(stdout.includes("= 2"), "Reversed second val must be 2");
+    console.log("\n\u2713 Verified real GDB execution of LeetCode reverseList (3 -> 2 -> 1)");
+    console.log("=== Real GDB LeetCode Reversal Test PASSED ===\n");
+  } finally {
+    if (fs2.existsSync(scriptPath)) {
+      fs2.unlinkSync(scriptPath);
+    }
+  }
+}
+async function runAllGdbTests() {
+  await testGdbExecution();
+  await testLeetcodeReverseGdb();
+}
+runAllGdbTests().catch((err) => {
   console.error("\u274C GDB Execution Test failed:", err);
   process.exit(1);
 });

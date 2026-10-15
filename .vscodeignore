@@ -1,0 +1,16 @@
+.vscode/**
+.vscode-test/**
+.agents/**
+.claude/**
+agent/**
+src/**
+test/**
+docs/**
+examples/**
+.gitignore
+tsconfig.json
+esbuild.js
+skills-lock.json
+**/*.ts
+**/*.map
+node_modules/**

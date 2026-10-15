@@ -119,11 +119,108 @@ async function runTests() {
     variableName: 'third'
   };
   const node2To3: ListNode = { ...node2, nextId: 'node_3' };
-  const finalRes = ExplanationGenerator.generate([node1To2, node2To3, node3], 'node_1', snap3);
-  assert.strictEqual(finalRes.changeType, 'final');
-  assert.ok(finalRes.explanation.includes('complete'));
-  assert.ok(finalRes.explanation.includes('10 → 20 → 30 → nullptr'));
-  console.log(`  ✓ Final linked list: "${finalRes.explanation}"`);
+  const thirdLinkedRes = ExplanationGenerator.generate([node1To2, node2To3, node3], 'node_1', snap3);
+  assert.strictEqual(thirdLinkedRes.changeType, 'node_linked');
+  assert.ok(thirdLinkedRes.explanation.includes('20 now points to the node containing 30'));
+  console.log(`  ✓ Third node linked: "${thirdLinkedRes.explanation}"`);
+
+  // State 6: Bypass second node (first->next = third)
+  const snap4: LinkedListSnapshot = {
+    stepNumber: 4,
+    hasHead: true,
+    headId: 'node_1',
+    nodes: [node1To2, node2To3, node3],
+    explanation: thirdLinkedRes.explanation,
+    changeType: 'node_linked',
+  };
+  const node1To3: ListNode = { ...node1Connected, nextId: 'node_3' };
+  const bypassRes = ExplanationGenerator.generate([node1To3, node2To3, node3], 'node_1', snap4);
+  assert.strictEqual(bypassRes.changeType, 'node_bypassed');
+  assert.ok(bypassRes.explanation.includes('bypassing node 20'));
+  console.log(`  ✓ Node bypassed state: "${bypassRes.explanation}"`);
+
+  // State 7: Deletion of second node (delete second;)
+  const snap5: LinkedListSnapshot = {
+    stepNumber: 5,
+    hasHead: true,
+    headId: 'node_1',
+    nodes: [node1To3, node2To3, node3],
+    pointers: [
+      { name: 'head', targetNodeId: 'node_1', isNull: false },
+      { name: 'first', targetNodeId: 'node_1', isNull: false },
+      { name: 'second', targetNodeId: 'node_2', isNull: false },
+      { name: 'third', targetNodeId: 'node_3', isNull: false },
+    ],
+    explanation: bypassRes.explanation,
+    changeType: 'node_bypassed',
+  };
+  const deleteRes = ExplanationGenerator.generate([node1To3, node3], 'node_1', snap5);
+  assert.strictEqual(deleteRes.changeType, 'node_deleted');
+  assert.ok(deleteRes.explanation.includes('Freed heap memory for node containing 20'));
+  console.log(`  ✓ Node deleted state: "${deleteRes.explanation}"`);
+
+  // State 8: Pointer movement (temp traversal in while loop)
+  const snap6: LinkedListSnapshot = {
+    stepNumber: 6,
+    hasHead: true,
+    headId: 'node_1',
+    nodes: [node1To3, node3],
+    pointers: [
+      { name: 'head', targetNodeId: 'node_1', isNull: false },
+      { name: 'temp', targetNodeId: 'node_1', isNull: false },
+    ],
+    explanation: deleteRes.explanation,
+    changeType: 'node_deleted',
+  };
+  const moveRes = ExplanationGenerator.generate(
+    [node1To3, node3],
+    'node_1',
+    snap6,
+    true,
+    [
+      { name: 'head', targetNodeId: 'node_1', isNull: false },
+      { name: 'temp', targetNodeId: 'node_3', isNull: false },
+    ]
+  );
+  assert.strictEqual(moveRes.changeType, 'pointer_moved');
+  assert.ok(moveRes.explanation.includes("Pointer 'temp' advanced to node containing 30"));
+  console.log(`  ✓ Pointer moved state: "${moveRes.explanation}"`);
+
+  // State 9: Print statement execution (cout << temp->data << " -> ")
+  const snap7: LinkedListSnapshot = {
+    stepNumber: 7,
+    hasHead: true,
+    headId: 'node_1',
+    nodes: [node1To3, node3],
+    pointers: [
+      { name: 'head', targetNodeId: 'node_1', isNull: false },
+      { name: 'temp', targetNodeId: 'node_3', isNull: false },
+    ],
+    explanation: moveRes.explanation,
+    changeType: 'pointer_moved',
+    terminalOutput: '10 -> ',
+  };
+  const printRes = ExplanationGenerator.generate(
+    [node1To3, node3],
+    'node_1',
+    snap7,
+    true,
+    snap7.pointers,
+    '30 -> ',
+    '10 -> 30 -> '
+  );
+  assert.strictEqual(printRes.changeType, 'print');
+  assert.ok(printRes.explanation.includes('Printed to terminal: "30 -> "'));
+  console.log(`  ✓ Terminal print state: "${printRes.explanation}"`);
+
+  // Test 3.5: In-place data value update (e.g. head->data = 10 or second->data = 20)
+  const nodeUpdated: ListNode = { ...node1Connected, data: 99 };
+  const valUpdateRes = ExplanationGenerator.generate([nodeUpdated], 'node_1', snap1, true, [
+    { name: 'head', targetNodeId: 'node_1', isNull: false },
+  ]);
+  assert.strictEqual(valUpdateRes.changeType, 'step');
+  assert.ok(valUpdateRes.explanation.includes('data updated: 10 → 99'));
+  console.log(`  ✓ In-place value update state: "${valUpdateRes.explanation}"`);
 
   // Test 4: SnapshotManager historical navigation
   console.log('\n[Test 4] Testing SnapshotManager Non-Destructive History...');
@@ -150,7 +247,75 @@ async function runTests() {
   assert.ok(nextHistSnap);
   assert.strictEqual(nextHistSnap.stepNumber, 3);
   assert.strictEqual(nextHistSnap.isHistorical, false);
-  console.log(`  ✓ Navigated forward in history back to live step: ${nextHistSnap.stepNumber}`);
+
+  // Test 5: StateExtractor robust pointer parsing and structure discovery
+  console.log('\n[Test 5] Testing StateExtractor Robust Discovery & Pointer Parsing...');
+  const { StateExtractor } = await import('../src/debug/stateExtractor');
+
+  // Pointer parsing test cases
+  assert.strictEqual(StateExtractor.parsePointer('0x78ed20'), '0x78ed20');
+  assert.strictEqual(StateExtractor.parsePointer('(Node *) 0x78ed20'), '0x78ed20');
+  // C++ reference to pointer: target address is after the colon!
+  assert.strictEqual(StateExtractor.parsePointer('(Node *&) @0x16fdee0: 0x7da3a0'), '0x7da3a0');
+  assert.strictEqual(StateExtractor.parsePointer('@0x5ffe68: 0xec960'), '0xec960');
+  assert.strictEqual(StateExtractor.parsePointer('(Node *&) @0x5ffe68: 0x0'), null);
+  // Null pointer variations
+  assert.strictEqual(StateExtractor.parsePointer('0x0'), null);
+  assert.strictEqual(StateExtractor.parsePointer('nullptr'), null);
+  assert.strictEqual(StateExtractor.parsePointer('NULL'), null);
+  assert.strictEqual(StateExtractor.parsePointer('(nil)'), null);
+  assert.strictEqual(StateExtractor.parsePointer('0x00000000'), null);
+  // Error message and uninitialized heap rejection
+  assert.strictEqual(StateExtractor.parsePointer('<error: Cannot access memory at address 0xbaadf00d>'), null);
+  assert.strictEqual(StateExtractor.parsePointer('0xbaadf00d'), null);
+  assert.strictEqual(StateExtractor.parsePointer('0xcccccccc'), null);
+  console.log('  ✓ Verified parsePointer handles C++ references, type casts, nulls, and rejects error strings/debug fills');
+
+  // User source detection
+  assert.strictEqual(StateExtractor.isUserSource('c:/Projects/vscode-extension/examples/linked-list.cpp'), true);
+  assert.strictEqual(StateExtractor.isUserSource('C:/msys64/mingw64/include/c++/13.2.0/bits/stl_vector.h'), false);
+  assert.strictEqual(StateExtractor.isUserSource('C:/msys64/mingw64/include/c++/13.2.0/iostream'), false);
+  assert.strictEqual(StateExtractor.isUserSource('C:/msys64/mingw64/x86_64-w64-mingw32/include/crtdefs.h'), false);
+  console.log('  ✓ Verified isUserSource distinguishes student source from CRT/MinGW headers');
+
+  // Struct member discovery across diverse internet formats
+  const leetcodePath = path.resolve(process.cwd(), 'examples', 'leetcode-206-reverse.cpp');
+  const gfgPath = path.resolve(process.cwd(), 'examples', 'gfg-push-delete.cpp');
+  const oopPath = path.resolve(process.cwd(), 'examples', 'oop-linked-list.cpp');
+
+  const structInfoBasic = StateExtractor.parseStructMembers(samplePath);
+  assert.strictEqual(structInfoBasic.dataField, 'data');
+  assert.strictEqual(structInfoBasic.nextField, 'next');
+
+  const structInfoLeetcode = StateExtractor.parseStructMembers(leetcodePath);
+  assert.strictEqual(structInfoLeetcode.dataField, 'val');
+  assert.strictEqual(structInfoLeetcode.nextField, 'next');
+
+  const structInfoGfg = StateExtractor.parseStructMembers(gfgPath);
+  assert.strictEqual(structInfoGfg.dataField, 'data');
+  assert.strictEqual(structInfoGfg.nextField, 'next');
+  console.log('  ✓ Verified parseStructMembers discovers data/val and next across LeetCode, GFG, and basic formats');
+
+  // User defined functions discovery (including free functions and class member methods)
+  const leetcodeFns = StateExtractor.getUserDefinedFunctions(leetcodePath);
+  assert.ok(leetcodeFns.has('reverseList'), 'Must detect reverseList');
+
+  const gfgFns = StateExtractor.getUserDefinedFunctions(gfgPath);
+  assert.ok(gfgFns.has('push'), 'Must detect push');
+  assert.ok(gfgFns.has('deleteNode'), 'Must detect deleteNode');
+
+  const oopFns = StateExtractor.getUserDefinedFunctions(oopPath);
+  assert.ok(oopFns.has('insertAtHead'), 'Must detect insertAtHead');
+  assert.ok(oopFns.has('display'), 'Must detect display');
+  console.log('  ✓ Verified getUserDefinedFunctions discovers helper functions and class methods (reverseList, push, deleteNode, insertAtHead, display)');
+
+  // Test 6: Compiling all internet examples
+  console.log('\n[Test 6] Testing Compilation of All Internet Examples...');
+  for (const file of [leetcodePath, gfgPath, oopPath]) {
+    const res = await CppCompiler.compile(file);
+    assert.strictEqual(res.success, true, `Should compile ${path.basename(file)}: ${res.errorMessage}`);
+    console.log(`  ✓ Successfully compiled ${path.basename(file)}`);
+  }
 
   console.log('\n=== All VS Code Debug Mentor Core Tests PASSED ===\n');
 }

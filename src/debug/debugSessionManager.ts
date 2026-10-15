@@ -95,7 +95,7 @@ export class DebugSessionManager {
     }
 
     const debugConfig: vscode.DebugConfiguration = {
-      name: 'Debug Mentor (C++)',
+      name: 'SimIDE (C++)',
       type: 'cppdbg',
       request: 'launch',
       program: executablePath,

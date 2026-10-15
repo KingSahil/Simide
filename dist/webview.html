@@ -22,7 +22,7 @@
           <line x1="18.5" y1="7" x2="18.5" y2="17" stroke="#2A3441" stroke-width="1.5"/>
           <circle cx="16.25" cy="12" r="1.5" fill="#F5F7FA"/>
         </svg>
-        <span class="brand-title">Debug Mentor</span>
+        <span class="brand-title">SimIDE</span>
       </div>
       <div class="header-actions">
         <div id="sessionBadge" class="session-badge">
@@ -47,7 +47,7 @@
         <path d="M11 12H14.5M14.5 12L13 10.5M14.5 12L13 13.5" stroke="#0066FF" stroke-width="1.5" stroke-linecap="round"/>
         <rect x="15" y="6" width="7" height="12" rx="2" stroke="#36C779" stroke-width="1.8" fill="#151B23"/>
       </svg>
-      <div class="initial-title">Debug Mentor</div>
+      <div class="initial-title">SimIDE</div>
       <p class="initial-subtitle">Understand your C++ code visually as you step through execution.</p>
       <button id="btnInitialVisualize" class="btn btn-primary btn-large">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -100,6 +100,24 @@
       <div class="explanation-card">
         <div class="explanation-title">Explanation</div>
         <div id="explanationText" class="explanation-text">Initial state</div>
+      </div>
+
+      <!-- Program Output Terminal Card -->
+      <div class="card terminal-card" id="terminalCard">
+        <div class="terminal-title-row">
+          <div class="terminal-title">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="4 17 10 11 4 5"></polyline>
+              <line x1="12" y1="19" x2="20" y2="19"></line>
+            </svg>
+            <span>Program Output</span>
+          </div>
+          <button id="btnClearTerminal" class="btn-text-action" title="Clear console output">Clear</button>
+        </div>
+        <div id="terminalViewport" class="terminal-viewport">
+          <span id="terminalPlaceholder" class="terminal-placeholder">No output printed yet...</span>
+          <pre id="terminalText" class="terminal-text" style="display: none;"></pre>
+        </div>
       </div>
 
       <!-- Controls -->

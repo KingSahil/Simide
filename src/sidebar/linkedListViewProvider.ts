@@ -38,7 +38,39 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       DebugTrackerFactory.onStopped(async (event: DebuggerStopEvent) => {
         ExecutionController.setPaused(true);
         // Small delay to ensure DAP stack frames are completely populated
-        await new Promise((r) => setTimeout(r, 80));
+        await new Promise((r) => setTimeout(r, 60));
+
+        // Inspect call stack to see if we stepped into library or CRT internals
+        try {
+          const stackRes = await event.session.customRequest('stackTrace', {
+            threadId: event.threadId,
+            startFrame: 0,
+            levels: 10,
+          });
+          const frames = stackRes?.stackFrames || [];
+          if (frames.length > 0) {
+            const topPath = frames[0].source?.path || frames[0].source?.name || '';
+            const topFunc = (frames[0].name || '').toLowerCase();
+            const isTopUser =
+              StateExtractor.isUserSource(topPath) &&
+              !topFunc.includes('crt') &&
+              !topFunc.includes('startup');
+            const hasUserCaller = frames.some((f: any) => {
+              const p = f.source?.path || f.source?.name || '';
+              const n = (f.name || '').toLowerCase();
+              return StateExtractor.isUserSource(p) && !n.includes('crt') && !n.includes('startup');
+            });
+
+            // If we are inside an internal library function (e.g. non-user file or CRT),
+            // automatically step out back into user source code
+            if (!isTopUser && hasUserCaller) {
+              await ExecutionController.stepOut();
+              return;
+            }
+          }
+        } catch {
+          // Ignore and continue
+        }
 
         const prev = this.snapshotManager.getLatestSnapshot();
         const snapshot = await StateExtractor.extractState(
@@ -116,18 +148,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case 'next':
-        if (this.snapshotManager.canGoNextHistory()) {
-          const nextSnap = this.snapshotManager.nextHistory();
-          if (nextSnap) {
-            this.broadcastState(nextSnap);
-          }
-        } else {
-          const curr = this.snapshotManager.getCurrentSnapshot();
-          if (curr && curr.changeType === 'final') {
-            return;
-          }
-          await ExecutionController.next();
-        }
+        await this.stepNext();
         break;
 
       case 'prev':
@@ -165,6 +186,84 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           this.broadcastState(curr);
         }
         break;
+    }
+  }
+
+  public async stepNext(): Promise<void> {
+    if (this.snapshotManager.canGoNextHistory()) {
+      const nextSnap = this.snapshotManager.nextHistory();
+      if (nextSnap) {
+        this.broadcastState(nextSnap);
+      }
+    } else {
+      const curr = this.snapshotManager.getCurrentSnapshot();
+      if (curr && curr.changeType === 'final' && !DebugSessionManager.getActiveSession()) {
+        return;
+      }
+      await this.executeSmartStep();
+    }
+  }
+
+  private async executeSmartStep(): Promise<void> {
+    const session = DebugSessionManager.getActiveSession();
+    if (!session) return;
+
+    const threadId = DebugTrackerFactory.getLastThreadId();
+
+    try {
+      const stackRes = await session.customRequest('stackTrace', {
+        threadId,
+        startFrame: 0,
+        levels: 10,
+      });
+      const frames = stackRes?.stackFrames || [];
+      const userFrame =
+        frames.find((f: any) => {
+          const p = f.source?.path || f.source?.name || '';
+          const name = (f.name || '').toLowerCase();
+          return StateExtractor.isUserSource(p) && !name.includes('crt') && !name.includes('startup');
+        }) || frames[0];
+
+      if (!userFrame) {
+        await ExecutionController.next();
+        return;
+      }
+
+      const rawPath = userFrame.source?.path || userFrame.source?.name || '';
+      const resolvedFile = StateExtractor.resolveFilePath(rawPath) || rawPath;
+      const currentLine = userFrame.line;
+      const lineText = StateExtractor.getLineText(resolvedFile, currentLine);
+
+      // Check user-defined helper functions in this file (e.g. printList, deleteNode, insertAtHead)
+      const userFunctions = StateExtractor.getUserDefinedFunctions(resolvedFile);
+
+      // If current line is a function definition header (e.g. `void printList(Node* node) {`), don't treat it as a function call
+      const isDefHeader =
+        /^\s*(?:void|int|bool|char|double|float|auto|Node\*?|ListNode\*?)\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\([^)]*\)\s*\{?$/.test(
+          lineText
+        ) || /^\s*#/.test(lineText);
+
+      let callsUserFunction = false;
+      if (!isDefHeader) {
+        for (const fnName of userFunctions) {
+          const regex = new RegExp(`\\b${fnName}\\s*\\(`);
+          if (regex.test(lineText)) {
+            callsUserFunction = true;
+            break;
+          }
+        }
+      }
+
+      // If current line calls a user helper function (like printList(head) or deleteNode(head, 30)),
+      // step INTO the helper function!
+      if (callsUserFunction) {
+        await ExecutionController.stepIn();
+      } else {
+        // Otherwise step OVER (so new Node(...) constructors and cout statements execute cleanly in 1 step)
+        await ExecutionController.next();
+      }
+    } catch {
+      await ExecutionController.next();
     }
   }
 
@@ -315,15 +414,22 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     const line = snapshot.source?.line;
     const filePath = snapshot.source?.file;
 
+    if (!line || line <= 0) {
+      this.clearEditorHighlight();
+      return;
+    }
+
+    const targetLine = line - 1;
+    const range = new vscode.Range(targetLine, 0, targetLine, 0);
+
+    let foundEditor = false;
     for (const editor of vscode.window.visibleTextEditors) {
       const isMatchingDoc =
         !filePath ||
         editor.document.fileName.endsWith(filePath) ||
         path.basename(editor.document.fileName) === path.basename(filePath);
 
-      if (line && line > 0 && isMatchingDoc) {
-        const targetLine = line - 1;
-        const range = new vscode.Range(targetLine, 0, targetLine, 0);
+      if (isMatchingDoc) {
         editor.setDecorations(this.activeLineDecorationType, [range]);
         editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 
@@ -331,9 +437,17 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           const pos = new vscode.Position(targetLine, 0);
           editor.selection = new vscode.Selection(pos, pos);
         }
-      } else {
-        editor.setDecorations(this.activeLineDecorationType, []);
+        foundEditor = true;
       }
+    }
+
+    if (!foundEditor && filePath && fs.existsSync(filePath)) {
+      vscode.workspace.openTextDocument(filePath).then((doc) => {
+        vscode.window.showTextDocument(doc, { preserveFocus: true }).then((editor) => {
+          editor.setDecorations(this.activeLineDecorationType, [range]);
+          editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+        });
+      });
     }
   }
 
@@ -354,9 +468,9 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({
       command: 'updateState',
       snapshot,
-      canStepNext: isHistorical ? true : (!isFinal && isPaused),
+      canStepNext: isHistorical ? true : ((!isFinal || !!DebugSessionManager.getActiveSession()) && isPaused),
       canStepPrev: this.snapshotManager.canGoPrev(),
-      canContinue: isPaused && !isHistorical && !isFinal,
+      canContinue: isPaused && !isHistorical && (!isFinal || !!DebugSessionManager.getActiveSession()),
       canPause: isRunning,
       canRestart: true,
       isPaused,

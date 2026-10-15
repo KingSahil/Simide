@@ -1,12 +1,12 @@
 # System Architecture
 
-This document provides a friendly, comprehensive architectural breakdown of **VS Code Debug Mentor**. It explains how the pieces fit together in plain, accessible language without sacrificing technical precision.
+This document provides a friendly, comprehensive architectural breakdown of **SimIDE** (*Simulation + IDE*). It explains how the pieces fit together in plain, accessible language without sacrificing technical precision.
 
 ---
 
 ## High-Level Architecture Overview
 
-VS Code Debug Mentor operates across three distinct process boundaries:
+SimIDE operates across three distinct process boundaries:
 
 ```mermaid
 flowchart TB
@@ -32,8 +32,9 @@ flowchart TB
         css["styles.css\n(Dark Mode Tokens & Canvas Styling)"]
         subgraph WebviewEngine ["Webview App Engine (app.ts)"]
             camera["Pan & Zoom Camera\n(Right-Click / Wheel / Space)"]
-            physics["Spring-Damper Physics Engine\n(d3-force & springLinks)"]
+            physics["Spring-Damper Physics Engine\n(d3-force & d3Links)"]
             svg["SVG Pointer Arrow Renderer"]
+            terminal["Program Output Terminal Card\n(Live stdout Stream)"]
         end
     end
 
@@ -65,13 +66,24 @@ The extension is organized into 4 cleanly decoupled subsystems:
   - `debugSessionManager.ts`: Dynamically discovers GDB/LLDB in system paths, constructs the `cppdbg` launch configuration, configures entry breakpoints (`stopAtEntry: true`), and starts the session.
   - `debugAdapterTracker.ts`: Intercepts low-level DAP events (`stopped`, `continued`, `terminated`) sent by the debugger adapter without interfering with VS Code's native debug tools.
   - `executionController.ts`: Dispatches execution commands (step over, step in, step out, continue, pause) via DAP custom requests or VS Code commands.
-  - `stateExtractor.ts`: The central inspection engine. Dynamically scans the user's C++ source file to discover all pointer declarations, tracks line thresholds, evaluates variables in scope, unrolls pointers, translates memory addresses to stable IDs, and filters out C Runtime (CRT) startup/exit frames.
+  - `stateExtractor.ts`: The central inspection engine.
+    - Dynamically scans the user's C++ source file to discover struct definitions (`Node`, `ListNode`), pointer declarations, and user-defined functions (`printList`, `reverseList`, `push`, `deleteNode`, class methods).
+    - Traverses memory chains from `head` as well as disconnected/detached chains.
+    - Tracks memory freeing via `delete` and records `deletedAddresses`.
+    - Captures `std::cout` / `printf` calls and accumulates terminal output.
+    - Filters out C Runtime (CRT) startup/exit frames to keep the final visual state intact.
 
 ### 2. The Visualization Engine (`src/visualization/`)
 * **Role**: Transforms raw runtime data into pedagogical models and manages non-destructive historical navigation.
 * **Key Components**:
   - `linkedListModel.ts`: Defines standard TypeScript interfaces (`ListNode`, `PointerVariable`, `LinkedListSnapshot`, `SourceLocation`, `ChangeType`).
-  - `explanationGenerator.ts`: A rule-based pedagogical explainer. It compares the previous snapshot with the current snapshot and analyzes active pointers to generate teaching explanations (e.g., explaining when `first` is created, when `head` is assigned to alias `first`, and when pointer connections are formed).
+  - `explanationGenerator.ts`: A rule-based pedagogical explainer. It compares the previous snapshot with the current snapshot to generate clear teaching explanations for:
+    - Node creation and detached allocations
+    - Head assignment and pointer aliasing
+    - Pointer linking and unlinking
+    - Node bypassing and memory deletions via `delete`
+    - Pointer movements during traversals (e.g. `curr = curr->next`)
+    - Live terminal output statements
   - `snapshotManager.ts`: Stores an immutable history of every execution step. Allows scrubbing backward and forward through previous states without restarting the process.
 
 ### 3. The Sidebar Webview Provider (`src/sidebar/`)
@@ -83,51 +95,45 @@ The extension is organized into 4 cleanly decoupled subsystems:
 ### 4. The Webview Presentation Layer (`webview/`)
 * **Role**: Runs inside an isolated Chromium iframe in VS Code to render the interactive UI.
 * **Key Components**:
-  - `index.html`: Clean, semantic HTML layout with dedicated containers for controls, linked list canvas, pedagogical explanation, and diagnostic banners.
-  - `styles.css`: Strict dark-mode styling utilizing `#0D1117` palette, rounded pill buttons, infinite dot-grid background, zero scrollbars, and accessibility-compliant contrast.
+  - `index.html`: Clean, semantic HTML layout with containers for controls, linked list canvas, terminal output card, pedagogical explanation, and diagnostic banners.
+  - `styles.css`: Strict dark-mode styling utilizing `#0D1117` palette, rounded pill buttons, infinite dot-grid background, zero scrollbars, and terminal card styling.
   - `app.ts`: Client-side rendering and physics simulation engine:
-    - **Spring-Damper Physics**: Models pointers as elastic springs and nodes as repulsive charged particles using a hybrid physics engine (integrated with `d3-force`).
-    - **Interactive Drag & Drop**: Users can click and drag any node card; connecting arrows stretch and adjust live with natural spring recoil.
+    - **D3 Force Simulation**: Models pointer connections as elastic distance springs and nodes as repulsive charged particles (`d3.forceManyBody()`, `d3.forceLink()`, `d3.forceCenter()`).
+    - **Interactive Drag & Drop**: Users can click and drag any node card; connecting springs react live.
     - **Pan & Zoom Camera**: Excalidraw-style canvas navigation with Right-Click Pan, Mouse Wheel Zoom (0.35x to 2.5x), Spacebar drag, and double-click to reset.
+    - **Live Terminal Card**: Displays real-time output printed by the running C++ program.
 
 ---
 
-## Dynamic Pointer Discovery vs Hardcoded Names
+## Dynamic Function & Paradigm Support
 
-A key architectural strength of Debug Mentor is **dynamic pointer discovery**:
+SimIDE handles complex real-world C++ patterns:
 
-Instead of hardcoding a fixed list of variable names (like `first`, `second`), `StateExtractor` dynamically parses the active C++ source file:
-1. **Source Scanning**: Scans source lines using regular expressions matching pointer declarations:
-   ```regex
-   (?:Node\s*\*|auto\s*\*?)\s*([a-zA-Z_][a-zA-Z0-9_]*)
-   ```
-   This accurately detects any variable names the student chooses (`head`, `first`, `newNode`, `curr`, `temp`, `secondNode`, etc.) along with the line number on which each is declared.
-2. **Declaration Line Thresholding**: In C++, a variable declared on line 12 contains garbage memory before line 12 executes. `StateExtractor` checks:
-   ```typescript
-   if (currentLine <= varInitLine) {
-     continue; // Skip variable until its declaration line has completed execution
-   }
-   ```
-3. **Active Pointer Collection**: When valid, each pointer is recorded into an `activePointers` array with its name, target address, target node ID, and null status.
-
----
-
-## Pointer Aliasing Explained Simply
-
-In linked list operations, multiple pointers frequently refer to the same node in memory:
+### 1. Multi-Function Call Stack Tracing
+When code calls helper functions like:
 ```cpp
-Node* first = new Node{10, nullptr};
-Node* head = first;
+void printList(Node* head) { ... }
+ListNode* reverseList(ListNode* head) { ... }
+void deleteNode(Node** head_ref, int key) { ... }
 ```
-Here, both `head` and `first` store the exact same memory address (e.g., `0x74a3b0`).
+`StateExtractor`:
+1. Identifies when the active stack frame enters a user-defined function.
+2. Extracts function arguments (e.g., `head_ref`, `key`, `head`).
+3. Tracks pointer advancements (`curr = curr->next`) as execution steps line-by-line within the function.
+4. Explains the traversal: *"Pointer 'curr' advanced to node containing 20."*
 
-Debug Mentor handles this explicitly:
-1. `StateExtractor` identifies that `head` and `first` point to `node_1`.
-2. Both pointer badges are rendered pointing to `node_1`:
-   - `head` is rendered with a prominent blue badge (`head`).
-   - `first` is rendered with an active green badge (`first`).
-3. `ExplanationGenerator` detects this alias and teaches the concept:
-   > *"head points to the node containing 10 (aliasing pointer 'first' at address 0x74a3b0)."*
+### 2. Heap Deletion & Memory Freeing (`delete temp`)
+When a node is deleted from memory:
+1. `StateExtractor` detects that `delete` has executed on an address.
+2. The address is added to `deletedAddresses`.
+3. The visualizer detaches the node and displays: *"Freed heap memory for node containing 20 ('temp') via delete."*
+4. If a preceding node's `next` pointer was redirected to bypass the deleted node, the explainer announces: *"Node containing 10 unlinked from node 20 and now points directly to node 30 (bypassing node 20)."*
+
+### 3. Live Program Output Terminal Stream
+When the program executes `std::cout << current->data << " -> ";`:
+1. `StateExtractor.evaluatePrintStatement()` extracts the evaluated text.
+2. Accumulates output into `accumulatedTerminalOutput`.
+3. Sends output to the Webview terminal card, streaming the console output live alongside the visual diagram!
 
 ---
 
@@ -153,37 +159,9 @@ Memory Address   ===>  Stable ID
 
 ---
 
-## C Runtime (CRT) Boundary Protection
+## The 8+ UI States
 
-When stepping through a C++ program in GDB, advancing past `return 0;` or the closing brace of `main()` enters the C Runtime startup/teardown routines (e.g. `__tmainCRTStartup` or `exit`).
-
-Without boundary protection, entering CRT frames causes:
-- The active source file to switch to internal GCC library paths.
-- Local variables (`head`, `first`) to be popped off the stack, flashing an empty or corrupted diagram.
-
-**Debug Mentor's Solution**:
-`StateExtractor` inspects the top stack frame function name and source path:
-```typescript
-const isMain = funcName === 'main' || funcName.startsWith('main(');
-const isCrt = funcName.toLowerCase().includes('crt') || ...;
-
-if (!isMain || isCrt) {
-  // Preserve the completed linked list diagram and mark changeType: 'final'
-  return {
-    ...previousSnapshot,
-    stepNumber,
-    explanation: 'Program execution completed. The linked list is complete.',
-    changeType: 'final',
-  };
-}
-```
-Furthermore, `LinkedListViewProvider` disables the **Next** button once `changeType === 'final'`, preventing students from accidentally stepping into runtime exit routines!
-
----
-
-## The 8 UI States
-
-The sidebar transitions through 8 clearly defined states:
+The sidebar transitions through clearly defined pedagogical states:
 
 ```mermaid
 stateDiagram-v2
@@ -192,23 +170,24 @@ stateDiagram-v2
     Screen2_Loading --> Screen8_Error: Compile/Launch Failed
     Screen8_Error --> Screen2_Loading: Click [ Retry ]
     Screen2_Loading --> Screen3_PausedInitial: Debugger Pauses at main()
-    Screen3_PausedInitial --> Screen4_FirstNodeCreated: Step (first allocated)
-    Screen4_FirstNodeCreated --> Screen5_FirstNodeConnected: Step (head = first)
-    Screen5_FirstNodeConnected --> Screen6_SecondNodeAdded: Step (second added)
-    Screen6_SecondNodeAdded --> Screen7_FinalList: Step (third added)
-    Screen7_FinalList --> Screen1_Initial: Reset / Restart
+    Screen3_PausedInitial --> Screen4_NodesCreated: Allocations (new Node)
+    Screen4_NodesCreated --> Screen5_NodesLinked: Pointer Linking (head->next = second)
+    Screen5_NodesLinked --> Screen6_TraversalOrReversal: Traversing / Reversing (curr = curr->next)
+    Screen6_TraversalOrReversal --> Screen7_DeletionOrFinal: Deletion / Program Complete
+    Screen7_DeletionOrFinal --> Screen1_Initial: Reset / Restart
 ```
 
 | State | UI Display | Pedagogical Explanation |
 | :--- | :--- | :--- |
 | **1. Initial IDE State** | Hero icon, subtitle, `[ ▶ Visualize ]` pill button | Ready to begin session. |
 | **2. Loading State** | Animated spinner, progress text | *"Preparing C++ program..."* → *"Compiling source..."* → *"Starting debugger..."* |
-| **3. Initial Paused State** | Empty canvas message or `head ──▶ nullptr`, step 1 indicator | *"Program paused at start of main(). Click Next to execute: Node* head = nullptr;"* |
-| **4. First Node Visualized** | Detached card `first` with value 10 | *"first pointer created, pointing to a new Node containing 10. head is still null."* |
-| **5. First Node Connected** | `head ──▶ [ 10 | • ] ──▶ nullptr` | *"head points to the node containing 10 (aliasing pointer 'first'...)"* |
-| **6. Second Node Added** | `head ──▶ [ 10 | • ] ──▶ [ 20 | • ] ──▶ nullptr` | *"The node containing 10 now points to the node containing 20."* |
-| **7. Final Linked List** | Complete 3-node chain (`10 → 20 → 30 → null`) | *"The linked list is complete: head → 10 → 20 → 30 → nullptr. Program execution finished."* |
-| **8. Error State** | Danger icon, error message, diagnostic stack, `[ Retry ]` button | Displays actionable troubleshooting details if compilation or debugger fails. |
+| **3. Initial Paused State** | Empty canvas message or `head ──▶ nullptr`, step 1 indicator | *"Program paused at start of main(). Click Next to allocate and initialize the linked list."* |
+| **4. Nodes Allocated** | Detached cards visible in the canvas with spring links | *"`first` pointer created, pointing to a new Node containing 10."* |
+| **5. Nodes Connected** | SVG arrows connect node cards with spring recoil | *"The node containing 10 now points to the node containing 20."* |
+| **6. Traversal / Loop** | Pointer badges move across nodes, live output in Terminal | *"Pointer 'current' advanced to node containing 20. Printed to terminal: '20 -> '"* |
+| **7. Reversal / Deletion** | Pointers flip or bypassed node is deleted via `delete` | *"Freed heap memory for node containing 20 via delete."* or *"Node unlinked and reversed."* |
+| **8. Final State** | Complete linked list remains on canvas, Next disabled | *"The linked list is complete: head → 10 → 20 → 30 → nullptr. Program execution finished."* |
+| **9. Error State** | Danger icon, error message, diagnostic stack, `[ Retry ]` button | Displays actionable troubleshooting details if compilation or debugger fails. |
 
 ---
 
@@ -216,7 +195,7 @@ stateDiagram-v2
 
 When debugging, learners frequently want to step backward to see how a pointer was assigned. However, standard GDB does not support reverse execution without specialized record/replay target architectures.
 
-Debug Mentor solves this with **non-destructive historical snapshots**:
+SimIDE solves this with **non-destructive historical snapshots**:
 1. Every time the debugger pauses, a complete snapshot is appended to `SnapshotManager`.
 2. When the user clicks **Previous**:
    - The running GDB process remains untouched and paused at its real location.

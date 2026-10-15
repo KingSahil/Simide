@@ -29,6 +29,10 @@ export type ChangeType =
   | 'node_created'
   | 'head_assigned'
   | 'node_linked'
+  | 'node_bypassed'
+  | 'node_deleted'
+  | 'pointer_moved'
+  | 'print'
   | 'step'
   | 'final';
 
@@ -41,5 +45,7 @@ export interface LinkedListSnapshot {
   pointers?: PointerVariable[];
   explanation: string;
   changeType: ChangeType;
+  terminalOutput?: string;
+  printedInStep?: string;
   isHistorical?: boolean;
 }

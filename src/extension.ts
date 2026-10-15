@@ -4,7 +4,7 @@ import { DebugTrackerFactory } from './debug/debugAdapterTracker';
 import { DebugSessionManager } from './debug/debugSessionManager';
 
 export function activate(context: vscode.ExtensionContext) {
-  console.log('[DebugMentor] Activating VS Code Debug Mentor extension...');
+  console.log('[SimIDE] Activating SimIDE extension...');
 
   // Register Webview Provider for the sidebar view
   const provider = new LinkedListViewProvider(context.extensionUri);
@@ -29,7 +29,11 @@ export function activate(context: vscode.ExtensionContext) {
   // Monitor active debug sessions
   context.subscriptions.push(
     vscode.debug.onDidStartDebugSession((session) => {
-      if (session.name.includes('Debug Mentor') || session.type === 'cppdbg') {
+      if (
+        session.name.includes('SimIDE') ||
+        session.name.includes('Debug Mentor') ||
+        session.type === 'cppdbg'
+      ) {
         DebugSessionManager.setActiveSession(session);
         provider.reveal();
       }
@@ -54,8 +58,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('debug-mentor.next', async () => {
-      // Forward to next step
-      await vscode.commands.executeCommand('workbench.action.debug.stepOver');
+      await provider.stepNext();
     })
   );
 

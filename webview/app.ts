@@ -38,6 +38,33 @@ const graphCanvas = document.getElementById('graphCanvas') as HTMLDivElement;
 const arrowsSvg = document.getElementById('arrowsSvg') as unknown as SVGSVGElement;
 const nodesLayer = document.getElementById('nodesLayer') as HTMLDivElement;
 const explanationText = document.getElementById('explanationText') as HTMLDivElement;
+const terminalPlaceholder = document.getElementById('terminalPlaceholder') as HTMLSpanElement;
+const terminalText = document.getElementById('terminalText') as HTMLPreElement;
+const btnClearTerminal = document.getElementById('btnClearTerminal') as HTMLButtonElement;
+
+function updateTerminal(output?: string) {
+  if (output && output.length > 0) {
+    if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+    if (terminalText) {
+      terminalText.style.display = 'block';
+      terminalText.textContent = output;
+    }
+    const vp = document.getElementById('terminalViewport');
+    if (vp) vp.scrollTop = vp.scrollHeight;
+  } else {
+    if (terminalPlaceholder) terminalPlaceholder.style.display = 'inline';
+    if (terminalText) {
+      terminalText.style.display = 'none';
+      terminalText.textContent = '';
+    }
+  }
+}
+
+if (btnClearTerminal) {
+  btnClearTerminal.addEventListener('click', () => {
+    updateTerminal('');
+  });
+}
 
 // Buttons
 const btnInitialVisualize = document.getElementById('btnInitialVisualize') as HTMLButtonElement;
@@ -216,15 +243,15 @@ function formatMemoryAddress(addr?: string | null, fallbackId?: string): string 
 }
 
 function getNextAddressDisplay(node: ListNode): string {
-  if (node.nextAddress) {
-    return formatMemoryAddress(node.nextAddress, 'nullptr');
-  }
   if (node.nextId) {
     const target = currentSnapshot?.nodes.find((n) => n.id === node.nextId);
     if (target?.address) {
       return formatMemoryAddress(target.address, 'nullptr');
     }
     return node.nextId;
+  }
+  if (node.nextAddress && currentSnapshot?.nodes.some((n) => n.address === node.nextAddress)) {
+    return formatMemoryAddress(node.nextAddress, 'nullptr');
   }
   return 'nullptr';
 }
@@ -453,7 +480,7 @@ function renderArrows() {
   const paths = arrowsSvg.querySelectorAll('path');
   paths.forEach((p) => p.remove());
 
-  if (!currentSnapshot) return;
+  if (!currentSnapshot || !currentSnapshot.hasHead) return;
 
   // 1. Arrows from Pointer Badges (head, first, second, third, etc.)
   for (const ptr of currentSnapshot.pointers || []) {
@@ -582,6 +609,12 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
 
   // 0. If head has not been declared/initialized yet (before line 10 executes)
   if (!snapshot.hasHead) {
+    nodePositions.clear();
+    d3NodesMap.clear();
+    d3Links = [];
+    const paths = arrowsSvg.querySelectorAll('path');
+    paths.forEach((p) => p.remove());
+
     const emptyMsg = document.createElement('div');
     emptyMsg.className = 'empty-canvas-message';
     emptyMsg.innerHTML = `
@@ -592,16 +625,13 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
         </svg>
       </div>
       <div class="empty-title">Canvas Empty</div>
-      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to execute: <code>Node* head = nullptr;</code></div>
+      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to allocate and initialize the linked list.</div>
     `;
     nodesLayer.appendChild(emptyMsg);
-    d3NodesMap.clear();
-    d3Links = [];
     if (simulation) {
       simulation.stop();
       simulation.nodes([]);
     }
-    renderArrows();
     return;
   }
 
@@ -729,20 +759,18 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
     registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 126, 50, 'node', resetPositions);
     makeDraggable(nodeEl, node.id);
 
-    // Spring connection to next node
-    if (node.nextId) {
+    const targetNodeExists = Boolean(node.nextId && nodes.some((n) => n.id === node.nextId));
+    if (targetNodeExists) {
       d3Links.push({
         source: node.id,
-        target: node.nextId,
+        target: node.nextId!,
         distance: 160,
         strength: 0.65,
       });
       nodePositions.delete(`badge-null-${node.id}`);
       d3NodesMap.delete(`badge-null-${node.id}`);
-    }
-
-    // Terminal nullptr badge for last node
-    if (i === reachableNodes.length - 1 && !node.nextId) {
+    } else {
+      // Terminal nullptr badge for node without target
       const nullId = `badge-null-${node.id}`;
       activeIds.add(nullId);
 
@@ -796,10 +824,11 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
     registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 126, 50, 'node', resetPositions);
     makeDraggable(nodeEl, node.id);
 
-    if (node.nextId) {
+    const targetExists = Boolean(node.nextId && nodes.some((n) => n.id === node.nextId));
+    if (targetExists) {
       d3Links.push({
         source: node.id,
-        target: node.nextId,
+        target: node.nextId!,
         distance: 160,
         strength: 0.65,
       });
@@ -835,8 +864,15 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
     }
   }
 
+  // Filter out any link whose source or target is not in d3NodesMap to avoid D3 force crash
+  const validLinks = d3Links.filter((l) => {
+    const srcId = typeof l.source === 'string' ? l.source : (l.source as any).id;
+    const tgtId = typeof l.target === 'string' ? l.target : (l.target as any).id;
+    return d3NodesMap.has(srcId) && d3NodesMap.has(tgtId);
+  });
+
   // Update and wake D3 simulation
-  initOrUpdateSimulation(Array.from(d3NodesMap.values()), d3Links, resetPositions);
+  initOrUpdateSimulation(Array.from(d3NodesMap.values()), validLinks, resetPositions);
 }
 
 // Event Listeners
@@ -983,8 +1019,16 @@ window.addEventListener('message', (event) => {
       btnPrev.disabled = !canStepPrev;
       btnRestart.disabled = !canRestart;
 
+      // Terminal output
+      updateTerminal(snapshot.terminalOutput);
+
       // Render interactive diagram
       renderDiagram(snapshot, false);
+      break;
+    }
+
+    case 'terminalOutput': {
+      updateTerminal(msg.fullOutput);
       break;
     }
 

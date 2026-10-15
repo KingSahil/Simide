@@ -12,19 +12,36 @@ import { ExplanationGenerator } from '../visualization/explanationGenerator';
 export class StateExtractor {
   private static addressToIdMap = new Map<string, string>();
   private static nextIdCounter = 1;
-  private static initLinesCache = new Map<string, Map<string, number>>();
   private static activeSourceFile: string | null = null;
   private static lastPausedLine: number | null = null;
+  private static deletedAddresses = new Set<string>();
+  private static cachedDataField: string | null = null;
+  private static cachedNextField: string | null = null;
+  private static accumulatedTerminalOutput: string = '';
+  private static hasInitializedList: boolean = false;
 
   public static setActiveSourceFile(filePath: string): void {
     this.activeSourceFile = filePath;
   }
 
+  public static getAccumulatedTerminalOutput(): string {
+    return this.accumulatedTerminalOutput;
+  }
+
+  public static appendDapOutput(_text: string): void {
+    // Intentionally no-op: pure cout/printf statements in student code generate terminal output.
+    // This completely cuts off any GDB banner, copyright, thread, or debugger chatter.
+  }
+
   public static reset(): void {
     this.addressToIdMap.clear();
     this.nextIdCounter = 1;
-    this.initLinesCache.clear();
     this.lastPausedLine = null;
+    this.deletedAddresses.clear();
+    this.cachedDataField = null;
+    this.cachedNextField = null;
+    this.accumulatedTerminalOutput = '';
+    this.hasInitializedList = false;
   }
 
   public static resolveFilePath(sourceFilePath?: string): string | null {
@@ -53,6 +70,42 @@ export class StateExtractor {
     return null;
   }
 
+  public static isUserSource(filePath?: string): boolean {
+    if (!filePath) return false;
+    const norm = filePath.replace(/\\/g, '/').toLowerCase();
+    // Exclude CRT, MinGW, standard library headers, Windows system libraries
+    if (
+      norm.includes('/include/c++/') ||
+      norm.includes('/mingw') ||
+      norm.includes('crt') ||
+      norm.includes('startup') ||
+      norm.includes('<built-in>') ||
+      norm.includes('/bits/') ||
+      norm.includes('/ext/') ||
+      norm.includes('ostream') ||
+      norm.includes('istream') ||
+      norm.includes('streambuf')
+    ) {
+      return false;
+    }
+    if (this.activeSourceFile) {
+      const activeNorm = this.activeSourceFile.replace(/\\/g, '/').toLowerCase();
+      if (norm === activeNorm || norm.endsWith('/' + path.basename(activeNorm))) {
+        return true;
+      }
+    }
+    const folders = vscode.workspace.workspaceFolders;
+    if (folders) {
+      for (const f of folders) {
+        const rootNorm = f.uri.fsPath.replace(/\\/g, '/').toLowerCase();
+        if (norm.startsWith(rootNorm)) {
+          return true;
+        }
+      }
+    }
+    return !norm.includes('/mingw') && !norm.includes('crt');
+  }
+
   public static getLineText(filePath: string, lineNum: number): string {
     const resolved = this.resolveFilePath(filePath);
     if (!resolved) return '';
@@ -68,24 +121,171 @@ export class StateExtractor {
     return '';
   }
 
-  private static getVariableInitLines(sourceFilePath?: string): Map<string, number> {
+  public static discoverNodeTypes(resolvedPath?: string): Set<string> {
+    const types = new Set<string>([
+      'Node',
+      'ListNode',
+      'LinkNode',
+      'LinkedListNode',
+      'SinglyLinkedListNode',
+      'DoublyLinkedListNode',
+      'Node_t',
+      'Item',
+      'Element',
+      'node',
+      'listnode',
+    ]);
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+      return types;
+    }
+    try {
+      const content = fs.readFileSync(resolvedPath, 'utf8');
+      const structMatches = content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g);
+      for (const m of structMatches) {
+        types.add(m[1]);
+      }
+    } catch {
+      // ignore
+    }
+    return types;
+  }
+
+  public static getUserDefinedFunctions(sourceFilePath?: string): Set<string> {
     const resolvedPath = this.resolveFilePath(sourceFilePath) || sourceFilePath || '';
-    const map = new Map<string, number>();
+    const funcNames = new Set<string>();
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+      return funcNames;
+    }
+    try {
+      const content = fs.readFileSync(resolvedPath, 'utf8');
+      const lines = content.split('\n');
+      const nodeTypes = this.discoverNodeTypes(resolvedPath);
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('#') || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
+          continue;
+        }
+
+        // Match free functions or class member functions:
+        // [return_type] [func_name]([args]) [{ or : or newline]
+        const fnMatch = trimmed.match(
+          /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]*\)\s*(?:const\s*)?(?:\{|:\s*|;|$)/
+        );
+        if (fnMatch) {
+          const name = fnMatch[1];
+          if (
+            name !== 'main' &&
+            name !== 'if' &&
+            name !== 'while' &&
+            name !== 'for' &&
+            name !== 'switch' &&
+            name !== 'catch' &&
+            name !== 'return' &&
+            name !== 'sizeof' &&
+            name !== 'void' &&
+            !nodeTypes.has(name)
+          ) {
+            funcNames.add(name);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return funcNames;
+  }
+
+  public static parseStructMembers(resolvedPath?: string): { dataField: string; nextField: string } {
+    let dataField = 'data';
+    let nextField = 'next';
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+      return { dataField, nextField };
+    }
+    try {
+      const content = fs.readFileSync(resolvedPath, 'utf8');
+      const structMatches = content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g);
+      for (const sm of structMatches) {
+        const structIdx = sm.index ?? content.indexOf(sm[0]);
+        const startBrace = content.indexOf('{', structIdx);
+        if (startBrace === -1) continue;
+
+        let depth = 1;
+        let endBrace = -1;
+        for (let i = startBrace + 1; i < content.length; i++) {
+          if (content[i] === '{') depth++;
+          else if (content[i] === '}') {
+            depth--;
+            if (depth === 0) {
+              endBrace = i;
+              break;
+            }
+          }
+        }
+        if (endBrace === -1) continue;
+
+        const body = content.substring(startBrace + 1, endBrace);
+        // Look for pointer to next node: e.g. Node* next; or struct Node* next; or ListNode *next;
+        const nextMatch = body.match(
+          /(?:(?:struct\s+)?(?:[a-zA-Z_][a-zA-Z0-9_]*|<[a-zA-Z0-9_,\s]+>)\s*\*+|\*+\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*;/
+        );
+        if (nextMatch) {
+          nextField = nextMatch[1];
+        }
+
+        const dataMatches = body.matchAll(
+          /(?:int|long|short|char|string|double|float|T|uint[0-9]+_t|int[0-9]+_t|auto)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;/g
+        );
+        for (const dm of dataMatches) {
+          if (dm[1] !== nextField && dm[1] !== 'prev' && dm[1] !== 'previous') {
+            dataField = dm[1];
+            break;
+          }
+        }
+
+        if (nextField && dataField) {
+          break;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return { dataField, nextField };
+  }
+
+  public static getVariableDeclarations(sourceFilePath?: string): Map<string, number[]> {
+    const resolvedPath = this.resolveFilePath(sourceFilePath) || sourceFilePath || '';
+    const map = new Map<string, number[]>();
     try {
       if (fs.existsSync(resolvedPath)) {
         const content = fs.readFileSync(resolvedPath, 'utf8');
         const lines = content.split('\n');
-        let insideFunction = false;
+        const nodeTypes = this.discoverNodeTypes(resolvedPath);
+        const typePattern = Array.from(nodeTypes).join('|');
+        const declRegex = new RegExp(
+          `(?:(?:struct\\s+)?(?:${typePattern})\\s*\\*&?|auto\\s*\\*?)\\s*([a-zA-Z_][a-zA-Z0-9_]*)`
+        );
+
+        let inStructDef = false;
+        let braceDepth = 0;
+
         for (let i = 0; i < lines.length; i++) {
           const lineText = lines[i].trim();
           const lineNum = i + 1;
 
-          // Only scan variables inside main() or function bodies, ignore struct definitions!
-          if (lineText.includes('main(') || lineText.includes('main (')) {
-            insideFunction = true;
-            continue;
+          // Ignore struct / class bodies so struct member pointers aren't treated as local variables
+          if (lineText.match(/^(?:struct|class)\s+[a-zA-Z_]/)) {
+            inStructDef = true;
           }
-          if (!insideFunction) {
+          if (inStructDef) {
+            if (lineText.includes('{')) braceDepth++;
+            if (lineText.includes('}')) {
+              braceDepth--;
+              if (braceDepth <= 0) {
+                inStructDef = false;
+                braceDepth = 0;
+              }
+            }
             continue;
           }
 
@@ -93,22 +293,155 @@ export class StateExtractor {
           if (lineText.includes('->') || lineText.startsWith('.')) {
             continue;
           }
-          // Match Node pointer declarations like Node* first = ... or Node *second = ...
-          const match = lineText.match(/(?:Node\s*\*|auto\s*\*?)\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
+
+          const match = lineText.match(declRegex);
           if (match) {
             const varName = match[1];
-            // Blacklist struct members
-            if (varName === 'next' || varName === 'data') {
+            if (
+              varName === 'nullptr' ||
+              varName === 'NULL' ||
+              varName === 'return' ||
+              varName === 'new'
+            ) {
               continue;
             }
             if (!map.has(varName)) {
-              map.set(varName, lineNum);
+              map.set(varName, []);
+            }
+            map.get(varName)!.push(lineNum);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return map;
+  }
+
+  public static getFunctionRanges(
+    resolvedPath?: string
+  ): Array<{ name: string; startLine: number; endLine: number }> {
+    const ranges: Array<{ name: string; startLine: number; endLine: number }> = [];
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) return ranges;
+
+    try {
+      const content = fs.readFileSync(resolvedPath, 'utf8');
+      const lines = content.split('\n');
+
+      let currentFunc: { name: string; startLine: number } | null = null;
+      let depth = 0;
+      let inStruct = false;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        const lineNum = i + 1;
+
+        if (trimmed.startsWith('#') || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
+          continue;
+        }
+
+        if (trimmed.match(/^(?:struct|class)\s+[a-zA-Z_]/)) {
+          inStruct = true;
+        }
+        if (inStruct) {
+          if (trimmed.includes('{')) depth++;
+          if (trimmed.includes('}')) {
+            depth--;
+            if (depth <= 0) {
+              inStruct = false;
+              depth = 0;
+            }
+          }
+          continue;
+        }
+
+        if (!currentFunc) {
+          const fnMatch = trimmed.match(
+            /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]*\)\s*(?:const\s*)?\{?/
+          );
+          if (fnMatch) {
+            const name = fnMatch[1];
+            if (
+              name !== 'if' &&
+              name !== 'while' &&
+              name !== 'for' &&
+              name !== 'switch' &&
+              name !== 'catch' &&
+              name !== 'sizeof'
+            ) {
+              currentFunc = { name, startLine: lineNum };
+              depth = 0;
+            }
+          }
+        }
+
+        if (currentFunc) {
+          for (let c = 0; c < line.length; c++) {
+            if (line[c] === '{') depth++;
+            else if (line[c] === '}') {
+              depth--;
+              if (depth <= 0) {
+                ranges.push({
+                  name: currentFunc.name,
+                  startLine: currentFunc.startLine,
+                  endLine: lineNum,
+                });
+                currentFunc = null;
+                depth = 0;
+                break;
+              }
             }
           }
         }
       }
     } catch {
-      // Ignore read errors
+      // ignore
+    }
+
+    return ranges;
+  }
+
+  public static getEnclosingFunction(
+    resolvedPath: string | undefined,
+    line: number
+  ): { name: string; startLine: number; endLine: number } | null {
+    const ranges = this.getFunctionRanges(resolvedPath);
+    return ranges.find((r) => line >= r.startLine && line <= r.endLine) || null;
+  }
+
+  public static isVariableInitialized(
+    varName: string,
+    rawLine: number,
+    varDecls: Map<string, number[]>,
+    funcRange: { name: string; startLine: number; endLine: number } | null
+  ): boolean {
+    const declLines = varDecls.get(varName);
+    if (!declLines || declLines.length === 0) {
+      return true;
+    }
+
+    // Filter declarations to only those within the current function
+    const relevantDecls = funcRange
+      ? declLines.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine)
+      : declLines;
+
+    if (relevantDecls.length === 0) {
+      return true;
+    }
+
+    // A variable is only initialized once execution has stepped strictly PAST its declaration line
+    const executedDecl = relevantDecls.filter((l) => l < rawLine);
+    return executedDecl.length > 0;
+  }
+
+  public static getVariableInitLines(sourceFilePath?: string): Map<string, number> {
+    const decls = this.getVariableDeclarations(sourceFilePath);
+    const map = new Map<string, number>();
+    for (const [k, v] of decls.entries()) {
+      if (v.length > 0) {
+        map.set(k, v[0]);
+      }
     }
     return map;
   }
@@ -121,9 +454,14 @@ export class StateExtractor {
     return this.addressToIdMap.get(norm)!;
   }
 
-  private static parsePointer(valStr?: string | null): string | null {
+  public static parsePointer(valStr?: string | null): string | null {
     if (!valStr) return null;
-    const s = valStr.trim();
+    let s = valStr.trim();
+    // In C++ references to pointers, GDB produces: (Node *&) @0x16fdee0: 0x7da3a0
+    // The target address is after the colon!
+    if (s.includes(':')) {
+      s = s.substring(s.lastIndexOf(':') + 1).trim();
+    }
     if (
       s === '0x0' ||
       s === 'nullptr' ||
@@ -131,7 +469,19 @@ export class StateExtractor {
       s.includes('0x0 <') ||
       s.includes('nullptr') ||
       s.includes('NULL') ||
-      s.includes('0x00000000')
+      s.includes('0x00000000') ||
+      s.includes('(nil)') ||
+      s.includes('error') ||
+      s.includes('Cannot access') ||
+      s.includes('No symbol') ||
+      s.includes('not defined') ||
+      s.includes('optimized out') ||
+      s.includes('incomplete') ||
+      s.includes('baadf00d') ||
+      s.includes('cccccccc') ||
+      s.includes('cdcdcdcd') ||
+      s.includes('feeefeee') ||
+      s.includes('abababab')
     ) {
       return null;
     }
@@ -145,7 +495,166 @@ export class StateExtractor {
   private static parseData(valStr?: string | null): number | string {
     if (!valStr) return 0;
     const match = valStr.match(/-?\d+/);
-    return match ? parseInt(match[0], 10) : valStr.trim();
+    if (match) {
+      const n = parseInt(match[0], 10);
+      // Filter out debug heap fill patterns for uninitialized memory:
+      // -1163005939 (0xbaadf00d), -858993460 (0xcccccccc), -842150451 (0xcdcdcdcd), -17895697 (0xfeeefeee)
+      if (
+        n === -1163005939 ||
+        n === -858993460 ||
+        n === -842150451 ||
+        n === -17895697 ||
+        n < -10000000 ||
+        n > 100000000
+      ) {
+        return 0;
+      }
+      return n;
+    }
+    return valStr.trim();
+  }
+
+  private static async resolveDataField(
+    evalExpr: (expr: string) => Promise<string | null>,
+    ptrExpr: string
+  ): Promise<string> {
+    if (this.cachedDataField) return this.cachedDataField;
+    const candidates = ['data', 'val', 'value', 'item', 'key', 'element', 'info', 'payload', 'num', 'x', 'd'];
+    for (const c of candidates) {
+      const res = await evalExpr(`${ptrExpr}->${c}`);
+      if (
+        res !== null &&
+        !res.includes('has no member') &&
+        !res.includes('error') &&
+        !res.includes('Cannot access') &&
+        !res.includes('not defined') &&
+        !res.includes('No symbol')
+      ) {
+        this.cachedDataField = c;
+        return c;
+      }
+    }
+    return 'data';
+  }
+
+  private static async resolveNextField(
+    evalExpr: (expr: string) => Promise<string | null>,
+    ptrExpr: string
+  ): Promise<string> {
+    if (this.cachedNextField) return this.cachedNextField;
+    const candidates = ['next', 'next_node', 'link', 'ptr', 'pNext', 'nxt', 'succ'];
+    for (const c of candidates) {
+      const res = await evalExpr(`${ptrExpr}->${c}`);
+      if (
+        res !== null &&
+        !res.includes('has no member') &&
+        !res.includes('error') &&
+        !res.includes('Cannot access') &&
+        !res.includes('not defined') &&
+        !res.includes('No symbol')
+      ) {
+        this.cachedNextField = c;
+        return c;
+      }
+    }
+    return 'next';
+  }
+
+  private static splitStreamTokens(expr: string): string[] {
+    const tokens: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    let quoteChar = '';
+
+    for (let i = 0; i < expr.length; i++) {
+      const ch = expr[i];
+      if (inQuotes) {
+        current += ch;
+        if (ch === quoteChar && expr[i - 1] !== '\\') {
+          inQuotes = false;
+        }
+      } else if (ch === '"' || ch === "'") {
+        inQuotes = true;
+        quoteChar = ch;
+        current += ch;
+      } else if (ch === '<' && expr[i + 1] === '<') {
+        tokens.push(current.trim());
+        current = '';
+        i++; // skip second '<'
+      } else {
+        current += ch;
+      }
+    }
+    if (current.trim().length > 0) {
+      tokens.push(current.trim());
+    }
+    return tokens;
+  }
+
+  private static async evaluatePrintStatement(
+    evalExpr: (expr: string) => Promise<string | null>,
+    lineText: string
+  ): Promise<string | null> {
+    const trimmed = lineText.trim();
+
+    // Match std::cout << or cout <<
+    const coutIndex = trimmed.search(/(?:std::)?cout\s*<</);
+    if (coutIndex !== -1) {
+      const exprPart = trimmed
+        .substring(coutIndex)
+        .replace(/^(?:std::)?cout\s*<<\s*/, '')
+        .replace(/;.*$/, '');
+      const tokens = this.splitStreamTokens(exprPart);
+      let output = '';
+
+      for (const tok of tokens) {
+        const t = tok.trim();
+        if (t === 'endl' || t === 'std::endl') {
+          output += '\n';
+        } else if (
+          (t.startsWith('"') && t.endsWith('"')) ||
+          (t.startsWith("'") && t.endsWith("'"))
+        ) {
+          output += t
+            .slice(1, -1)
+            .replace(/\\n/g, '\n')
+            .replace(/\\t/g, '\t');
+        } else if (t.length > 0) {
+          const val = await evalExpr(t);
+          if (
+            val !== null &&
+            !val.includes('error') &&
+            !val.includes('No symbol') &&
+            !val.includes('Cannot access')
+          ) {
+            const parsed = this.parseData(val);
+            output += String(parsed);
+          }
+        }
+      }
+      return output.length > 0 ? output : null;
+    }
+
+    // Match printf("...", ...)
+    const printfMatch = trimmed.match(/(?:printf)\s*\(\s*(".*?")\s*(?:,\s*(.*?))?\s*\)/);
+    if (printfMatch) {
+      let format = printfMatch[1]
+        .slice(1, -1)
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t');
+      const argsStr = printfMatch[2];
+      if (argsStr) {
+        const args = argsStr.split(',').map((a) => a.trim());
+        for (const arg of args) {
+          const val = await evalExpr(arg);
+          const parsed = val !== null ? String(this.parseData(val)) : '';
+          format = format.replace(/%[a-zA-Z0-9.-]+/, parsed);
+        }
+      }
+      return format;
+    }
+
+    return null;
   }
 
   public static async extractState(
@@ -155,72 +664,79 @@ export class StateExtractor {
     previousSnapshot?: LinkedListSnapshot
   ): Promise<LinkedListSnapshot | null> {
     try {
-      // 1. Get Top Stack Frame
+      // 1. Get Stack Frames (up to 25 levels)
       const stackResponse = await session.customRequest('stackTrace', {
         threadId,
         startFrame: 0,
-        levels: 1,
+        levels: 25,
       });
 
-      const topFrame = stackResponse?.stackFrames?.[0];
-      if (!topFrame) {
+      const frames = stackResponse?.stackFrames || [];
+      if (frames.length === 0) {
         return null;
       }
 
-      const frameId = topFrame.id;
-      const funcName = (topFrame.name || '').trim();
-      const rawPath = topFrame.source?.path || topFrame.source?.name || 'source.cpp';
+      // Find the topmost stack frame located in user source code (not CRT, MinGW, or system stdlib)
+      const userFrame = frames.find((f: any) => {
+        const p = f.source?.path || f.source?.name || '';
+        const name = (f.name || '').toLowerCase();
+        return this.isUserSource(p) && !name.includes('crt') && !name.includes('startup');
+      });
 
-      // Check if this frame is outside main() or in CRT startup/exit
-      const isMain = funcName === 'main' || funcName.startsWith('main(') || funcName.startsWith('main()');
-      const isCrt =
-        funcName.toLowerCase().includes('crt') ||
-        funcName.toLowerCase().includes('startup') ||
-        rawPath.toLowerCase().includes('crt') ||
-        rawPath.toLowerCase().includes('startup') ||
-        !funcName;
-
-      // If stepping outside main() or into C runtime exit/startup, keep the completed linked list
-      if (!isMain || isCrt) {
+      // If execution has completely exited user code (e.g. into CRT exit/shutdown), conclude session
+      if (!userFrame) {
         if (previousSnapshot) {
           return {
             ...previousSnapshot,
             stepNumber,
             explanation: 'Program execution completed. The linked list is complete.',
             changeType: 'final',
+            terminalOutput: this.accumulatedTerminalOutput || previousSnapshot.terminalOutput,
             isHistorical: false,
           };
         }
         return null;
       }
 
-      const rawLine = topFrame.line;
+      const frameId = userFrame.id;
+      const funcName = (userFrame.name || '').trim();
+      const rawPath = userFrame.source?.path || userFrame.source?.name || 'source.cpp';
+      const rawLine = userFrame.line;
       const resolvedFile = this.resolveFilePath(rawPath) || rawPath;
 
-      // Parse variable initialization lines from source code
-      const initLines = this.getVariableInitLines(resolvedFile);
-      const currentLine = rawLine;
+      // Check variable declarations across all functions in the file
+      const varDecls = this.getVariableDeclarations(resolvedFile);
+      const funcRange = this.getEnclosingFunction(resolvedFile, rawLine);
 
-      // 'head' is only valid after its declaration line has completed execution
-      const headInitLine = initLines.get('head');
-      const hasHead = headInitLine !== undefined ? currentLine > headInitLine : true;
+      // Once the list is initialized, hasHead remains true for all subsequent steps/functions
+      const isInsideMain =
+        funcName === 'main' || funcName.startsWith('main(') || funcName.startsWith('main()');
+      let hasHead = this.hasInitializedList;
+      if (!hasHead) {
+        if (isInsideMain) {
+          hasHead = this.isVariableInitialized('head', rawLine, varDecls, funcRange);
+        } else {
+          hasHead = true;
+        }
+      }
 
-      // If head declaration line hasn't finished executing, return clean empty canvas!
+      // If program has just entered before head declaration line executed, return clean entry state
       if (!hasHead) {
         this.lastPausedLine = rawLine;
         return {
           stepNumber,
           source: {
             file: resolvedFile,
-            line: 0,
-            functionName: topFrame.name,
+            line: rawLine,
+            functionName: userFrame.name,
           },
           hasHead: false,
           headId: null,
           nodes: [],
           pointers: [],
-          explanation: 'Program paused at start of main(). Click Next to execute: Node* head = nullptr;',
+          explanation: 'Program paused at start. Click Next to execute: Node* head = ...',
           changeType: 'init',
+          terminalOutput: '',
           isHistorical: false,
         };
       }
@@ -232,32 +748,42 @@ export class StateExtractor {
       const sourceLoc: SourceLocation = {
         file: resolvedFile,
         line: executedLine,
-        functionName: topFrame.name,
+        functionName: userFrame.name,
       };
 
-      const lineText = this.getLineText(sourceLoc.file, sourceLoc.line);
-      const isReturnOrEnd = lineText.startsWith('return') || lineText === '}';
+      const lineText = this.getLineText(sourceLoc.file, rawLine);
+      const executedLineText = this.getLineText(sourceLoc.file, executedLine);
+      const isReturnOrEnd =
+        isInsideMain &&
+        (lineText.startsWith('return') || lineText === '}');
 
-      // 2. Discover local variables via Scopes or direct evaluation
-      let localVars: Record<string, { value: string; variablesReference: number }> = {};
+      // 2. Discover local variables & parameters via Scopes
+      let localVars: Record<
+        string,
+        { value: string; type?: string; variablesReference: number; isArgument: boolean }
+      > = {};
       try {
         const scopesRes = await session.customRequest('scopes', { frameId });
-        const localScope = scopesRes?.scopes?.find(
-          (s: any) =>
-            s.name.toLowerCase().includes('local') ||
-            s.name.toLowerCase().includes('variables')
-        ) || scopesRes?.scopes?.[0];
-
-        if (localScope && localScope.variablesReference > 0) {
-          const varsRes = await session.customRequest('variables', {
-            variablesReference: localScope.variablesReference,
-          });
-          if (varsRes?.variables) {
-            for (const v of varsRes.variables) {
-              localVars[v.name] = {
-                value: v.value,
-                variablesReference: v.variablesReference,
-              };
+        const scopes = scopesRes?.scopes || [];
+        for (const scope of scopes) {
+          const sName = (scope.name || '').toLowerCase();
+          const isArg = sName.includes('arg') || sName.includes('param');
+          const isLocal = sName.includes('local') || sName.includes('var');
+          if ((isArg || isLocal) && scope.variablesReference > 0) {
+            const varsRes = await session.customRequest('variables', {
+              variablesReference: scope.variablesReference,
+            });
+            if (varsRes?.variables) {
+              for (const v of varsRes.variables) {
+                if (!localVars[v.name]) {
+                  localVars[v.name] = {
+                    value: v.value,
+                    type: v.type,
+                    variablesReference: v.variablesReference,
+                    isArgument: isArg,
+                  };
+                }
+              }
             }
           }
         }
@@ -265,12 +791,12 @@ export class StateExtractor {
         // Scopes request might not be supported; we'll evaluate directly
       }
 
-      // Safe evaluation helper
-      const evalExpr = async (expr: string): Promise<string | null> => {
+      // Evaluation helper in current frame or specific target frame
+      const evalExpr = async (expr: string, targetFrameId: number = frameId): Promise<string | null> => {
         try {
           const res = await session.customRequest('evaluate', {
             expression: expr,
-            frameId,
+            frameId: targetFrameId,
             context: 'watch',
           });
           return res?.result ?? null;
@@ -279,56 +805,195 @@ export class StateExtractor {
         }
       };
 
-      // 3. Inspect 'head'
+      // Check if the executed line was a deletion / deallocation (e.g. `delete temp;` or `free(temp);`)
+      const isDelLine =
+        executedLineText.includes('delete') || executedLineText.includes('free');
+      const deleteMatch = isDelLine
+        ? executedLineText.match(
+            /(?:delete\s+(?:\[\s*\]\s*)?|free\s*\(\s*)([a-zA-Z_][a-zA-Z0-9_]*)/
+          )
+        : null;
+      if (deleteMatch) {
+        const delVar = deleteMatch[1];
+        let delAddr: string | null = null;
+        if (previousSnapshot?.pointers) {
+          const ptr = previousSnapshot.pointers.find((p) => p.name === delVar);
+          if (ptr && ptr.targetAddress) {
+            delAddr = ptr.targetAddress;
+          }
+        }
+        if (!delAddr) {
+          const delVal = localVars[delVar]?.value ?? (await evalExpr(delVar));
+          delAddr = this.parsePointer(delVal);
+        }
+        if (delAddr) {
+          this.deletedAddresses.add(delAddr.toLowerCase());
+        }
+      }
+
+      // Discover struct fields
+      const { dataField: parsedDataField, nextField: parsedNextField } = this.parseStructMembers(resolvedFile);
+      if (!this.cachedDataField && parsedDataField) {
+        this.cachedDataField = parsedDataField;
+      }
+      if (!this.cachedNextField && parsedNextField) {
+        this.cachedNextField = parsedNextField;
+      }
+
+      // 3. Inspect 'head' across current frame and caller frames
       let headAddr: string | null = null;
       let headId: string | null = null;
-      if (hasHead) {
-        const headValStr = localVars['head']?.value ?? (await evalExpr('head'));
-        headAddr = this.parsePointer(headValStr);
-        if (headAddr) {
-          headId = this.getStableId(headAddr);
+      const headCandidates = [
+        'head',
+        'this->head',
+        'pHead',
+        'this->pHead',
+        'root',
+        'this->root',
+        'headNode',
+        'this->headNode',
+        'first',
+        'this->first',
+        'start',
+        'list',
+        'dummy',
+        'dummyHead',
+        'h',
+        'l1',
+        'l2',
+        'head_ref',
+        'top',
+        'front',
+        'listHead',
+        '_head',
+        'm_head',
+      ];
+
+      // A: Try current user frame
+      for (const cand of headCandidates) {
+        let valStr = localVars[cand]?.value;
+        if (!valStr) {
+          valStr = (await evalExpr(cand)) || undefined;
+        }
+        if (valStr) {
+          if (cand === 'head_ref' || valStr.includes('**')) {
+            const derefVal = await evalExpr(`*${cand}`);
+            headAddr = this.parsePointer(derefVal);
+          } else {
+            headAddr = this.parsePointer(valStr);
+          }
+          if (headAddr && !this.deletedAddresses.has(headAddr)) {
+            break;
+          }
         }
       }
 
-      // 4. Traverse reachable linked list from head
-      const reachableNodes: Map<string, ListNode> = new Map();
-      let currAddr: string | null = headAddr;
-      let currExpr = 'head';
+      // B: Check caller frames if not found in current frame (e.g. inside printList helper)
+      if (!headAddr) {
+        for (let i = 1; i < frames.length; i++) {
+          const callerFrame = frames[i];
+          const callerPath = callerFrame.source?.path || callerFrame.source?.name || '';
+          if (this.isUserSource(callerPath)) {
+            for (const cand of headCandidates) {
+              const valStr = await evalExpr(cand, callerFrame.id);
+              if (valStr) {
+                if (cand === 'head_ref' || valStr.includes('**')) {
+                  const derefVal = await evalExpr(`*${cand}`, callerFrame.id);
+                  headAddr = this.parsePointer(derefVal);
+                } else {
+                  headAddr = this.parsePointer(valStr);
+                }
+                if (headAddr && !this.deletedAddresses.has(headAddr)) {
+                  break;
+                }
+              }
+            }
+            if (headAddr) break;
+          }
+        }
+      }
+
+      // C: Retain previous head address if still valid and not deleted
+      if (!headAddr && previousSnapshot?.headId) {
+        const prevHeadNode = previousSnapshot.nodes.find((n) => n.id === previousSnapshot.headId);
+        if (prevHeadNode && !this.deletedAddresses.has(prevHeadNode.address)) {
+          headAddr = prevHeadNode.address;
+        }
+      }
+
+      if (headAddr && !this.deletedAddresses.has(headAddr)) {
+        headId = this.getStableId(headAddr);
+        this.hasInitializedList = true;
+      } else {
+        headAddr = null;
+      }
+
+      // Discovered node struct type name
+      const discoveredTypes = Array.from(this.discoverNodeTypes(resolvedFile));
+      const nodeType = discoveredTypes[0] || 'Node';
+
+      // 4. Multi-Chain Sublist Traversal Engine
+      const allDiscoveredNodes = new Map<string, ListNode>();
       const visitedAddrs = new Set<string>();
-      let depth = 0;
-      const MAX_DEPTH = 30; // Bound traversal to prevent cycle crashes
 
-      while (currAddr && !visitedAddrs.has(currAddr) && depth < MAX_DEPTH) {
-        visitedAddrs.add(currAddr);
-        depth++;
-        const id = this.getStableId(currAddr);
+      const traverseChain = async (
+        startAddr: string,
+        isHeadChain: boolean,
+        associatedVar?: string
+      ): Promise<void> => {
+        let currAddr: string | null = startAddr;
+        let depth = 0;
+        const MAX_DEPTH = 50;
 
-        // Evaluate data and next
-        const dataStr = await evalExpr(`${currExpr}->data`);
-        const nextValStr = await evalExpr(`${currExpr}->next`);
-        const nextAddr = this.parsePointer(nextValStr);
-        const nextId = nextAddr ? this.getStableId(nextAddr) : null;
+        while (currAddr && !visitedAddrs.has(currAddr) && depth < MAX_DEPTH) {
+          if (this.deletedAddresses.has(currAddr)) {
+            break;
+          }
+          visitedAddrs.add(currAddr);
+          depth++;
 
-        reachableNodes.set(currAddr, {
-          id,
-          address: currAddr,
-          data: this.parseData(dataStr || '0'),
-          nextId,
-          nextAddress: nextAddr,
-          isHead: currAddr === headAddr,
-          isDetached: false,
-          variableName: currAddr === headAddr ? 'head' : undefined,
-        });
+          const id = this.getStableId(currAddr);
+          const ptrCast = `((${nodeType}*)${currAddr})`;
 
-        if (nextAddr) {
-          currAddr = nextAddr;
-          currExpr = `${currExpr}->next`;
-        } else {
-          break;
+          const dataField = await this.resolveDataField(evalExpr, ptrCast);
+          const nextField = await this.resolveNextField(evalExpr, ptrCast);
+
+          const dataStr = await evalExpr(`${ptrCast}->${dataField}`);
+          const nextValStr = await evalExpr(`${ptrCast}->${nextField}`);
+          const nextAddr = this.parsePointer(nextValStr);
+
+          const nextId =
+            nextAddr && !this.deletedAddresses.has(nextAddr)
+              ? this.getStableId(nextAddr)
+              : null;
+
+          const isNodeHead = currAddr === headAddr;
+
+          allDiscoveredNodes.set(currAddr, {
+            id,
+            address: currAddr,
+            data: this.parseData(dataStr || '0'),
+            nextId,
+            nextAddress: nextAddr,
+            isHead: isNodeHead,
+            isDetached: !isHeadChain && !isNodeHead,
+            variableName: isNodeHead ? 'head' : depth === 1 ? associatedVar : undefined,
+          });
+
+          if (nextAddr && !this.deletedAddresses.has(nextAddr)) {
+            currAddr = nextAddr;
+          } else {
+            break;
+          }
         }
+      };
+
+      // Traverse from head first
+      if (headAddr) {
+        await traverseChain(headAddr, true, 'head');
       }
 
-      // 5. Track Active Pointer Variables (ONLY variables that exist in the student's code)
+      // 5. Track Active Pointer Variables & Traverse any Disconnected Chains
       const activePointers: PointerVariable[] = [];
 
       // Collect head pointer
@@ -341,54 +1006,103 @@ export class StateExtractor {
         });
       }
 
-      const detachedNodes: ListNode[] = [];
-
-      // ONLY iterate over variables discovered in the source code!
-      for (const [varName, varInitLine] of initLines.entries()) {
-        if (varName === 'head') continue;
-        if (currentLine <= varInitLine) {
+      for (const [varName, varInfo] of Object.entries(localVars)) {
+        if (varName === 'head' || varName === 'this') continue;
+        if (
+          varName === 'data' ||
+          varName === 'val' ||
+          varName === 'key' ||
+          varName === 'argc' ||
+          varName === 'argv' ||
+          varName === 'count' ||
+          varName === 'i' ||
+          varName === 'j' ||
+          varName === 'k' ||
+          varName.startsWith('__')
+        ) {
           continue;
         }
 
-        const varValStr = localVars[varName]?.value ?? (await evalExpr(varName));
-        const varAddr = this.parsePointer(varValStr);
-        const targetId = varAddr ? this.getStableId(varAddr) : null;
+        // Variable initialization check: ignore local variables whose declaration line has not executed yet
+        if (!varInfo.isArgument) {
+          if (!this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
+            continue;
+          }
+        }
 
-        activePointers.push({
-          name: varName,
-          targetNodeId: targetId,
-          targetAddress: varAddr,
-          isNull: varAddr === null,
-        });
+        const varAddr = this.parsePointer(varInfo.value);
+        const isFreed = varAddr ? this.deletedAddresses.has(varAddr) : false;
+        const targetId = varAddr && !isFreed ? this.getStableId(varAddr) : null;
 
-        // If this pointer points to an allocated node not yet in reachableNodes, extract it
-        if (varAddr && !reachableNodes.has(varAddr)) {
-          if (!detachedNodes.some((d) => d.address === varAddr)) {
-            const dataStr = await evalExpr(`${varName}->data`);
-            const nextValStr = await evalExpr(`${varName}->next`);
-            const nextAddr = this.parsePointer(nextValStr);
-            const nextId = nextAddr ? this.getStableId(nextAddr) : null;
-            const id = this.getStableId(varAddr);
+        const isTargetingKnownNode = varAddr ? allDiscoveredNodes.has(varAddr) : false;
+        const isPointerType =
+          (varInfo.type && (varInfo.type.includes('*') || varInfo.type.includes('&'))) ||
+          varName === 'temp' ||
+          varName === 'prev' ||
+          varName === 'curr' ||
+          varName === 'current' ||
+          varName === 'forward' ||
+          varName === 'next' ||
+          varName === 'node' ||
+          varName === 'first' ||
+          varName === 'second' ||
+          varName === 'third' ||
+          varName === 'tail' ||
+          varName === 'last' ||
+          varName === 'p' ||
+          varName === 'q' ||
+          varName === 'l1' ||
+          varName === 'l2' ||
+          varName === 'dummy' ||
+          varName === 'fast' ||
+          varName === 'slow';
 
-            detachedNodes.push({
-              id,
-              address: varAddr,
-              data: this.parseData(dataStr || '0'),
-              nextId,
-              nextAddress: nextAddr,
-              isHead: false,
-              isDetached: true,
-              isNewlyCreated: true,
-            });
+        if (isPointerType || isTargetingKnownNode) {
+          activePointers.push({
+            name: varName,
+            targetNodeId: targetId,
+            targetAddress: isFreed ? null : varAddr,
+            isNull: varAddr === null || isFreed,
+          });
+
+          // Traverse disconnected subchains (e.g. second -> third before linking, or during reverseList)
+          if (varAddr && !isFreed && !visitedAddrs.has(varAddr)) {
+            await traverseChain(varAddr, false, varName);
           }
         }
       }
 
-      // 6. Combine nodes
-      const allNodes: ListNode[] = [
-        ...Array.from(reachableNodes.values()),
-        ...detachedNodes,
-      ];
+      // Check if any previous nodes still exist in memory but weren't visited
+      if (previousSnapshot?.nodes && previousSnapshot.hasHead && stepNumber > 1) {
+        for (const prevNode of previousSnapshot.nodes) {
+          if (!this.deletedAddresses.has(prevNode.address) && !visitedAddrs.has(prevNode.address)) {
+            await traverseChain(prevNode.address, false);
+          }
+        }
+      }
+
+      // 6. Determine Reachability from Head & Combine Nodes
+      const reachableFromHead = new Set<string>();
+      if (headId) {
+        let currId: string | null = headId;
+        const headVisited = new Set<string>();
+        while (currId && !headVisited.has(currId)) {
+          headVisited.add(currId);
+          reachableFromHead.add(currId);
+          const foundNode = Array.from(allDiscoveredNodes.values()).find((n) => n.id === currId);
+          if (foundNode && foundNode.nextId) {
+            currId = foundNode.nextId;
+          } else {
+            break;
+          }
+        }
+      }
+
+      for (const node of allDiscoveredNodes.values()) {
+        node.isDetached = !reachableFromHead.has(node.id);
+      }
+
+      const allNodes: ListNode[] = Array.from(allDiscoveredNodes.values());
 
       // Mark newly connected node
       if (previousSnapshot) {
@@ -402,13 +1116,25 @@ export class StateExtractor {
         }
       }
 
+      // Check if the executed line printed something (cout / printf)
+      const hasPrint =
+        executedLineText.includes('cout') || executedLineText.includes('printf');
+      const printedInStep = hasPrint
+        ? await this.evaluatePrintStatement(evalExpr, executedLineText)
+        : null;
+      if (printedInStep) {
+        this.accumulatedTerminalOutput += printedInStep;
+      }
+
       // 7. Generate Pedagogical Explanation
       let { explanation, changeType } = ExplanationGenerator.generate(
         allNodes,
         headId,
         previousSnapshot,
         hasHead,
-        activePointers
+        activePointers,
+        printedInStep,
+        this.accumulatedTerminalOutput
       );
 
       // If execution reached the return statement or end of main, mark as final
@@ -431,6 +1157,8 @@ export class StateExtractor {
         pointers: activePointers,
         explanation,
         changeType,
+        terminalOutput: this.accumulatedTerminalOutput,
+        printedInStep: printedInStep || undefined,
         isHistorical: false,
       };
 

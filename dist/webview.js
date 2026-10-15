@@ -1037,6 +1037,34 @@
   var arrowsSvg = document.getElementById("arrowsSvg");
   var nodesLayer = document.getElementById("nodesLayer");
   var explanationText = document.getElementById("explanationText");
+  var terminalPlaceholder = document.getElementById("terminalPlaceholder");
+  var terminalText = document.getElementById("terminalText");
+  var btnClearTerminal = document.getElementById("btnClearTerminal");
+  function updateTerminal(output) {
+    if (output && output.length > 0) {
+      if (terminalPlaceholder)
+        terminalPlaceholder.style.display = "none";
+      if (terminalText) {
+        terminalText.style.display = "block";
+        terminalText.textContent = output;
+      }
+      const vp = document.getElementById("terminalViewport");
+      if (vp)
+        vp.scrollTop = vp.scrollHeight;
+    } else {
+      if (terminalPlaceholder)
+        terminalPlaceholder.style.display = "inline";
+      if (terminalText) {
+        terminalText.style.display = "none";
+        terminalText.textContent = "";
+      }
+    }
+  }
+  if (btnClearTerminal) {
+    btnClearTerminal.addEventListener("click", () => {
+      updateTerminal("");
+    });
+  }
   var btnInitialVisualize = document.getElementById("btnInitialVisualize");
   var btnPrev = document.getElementById("btnPrev");
   var btnNext = document.getElementById("btnNext");
@@ -1147,15 +1175,15 @@
     return addr;
   }
   function getNextAddressDisplay(node) {
-    if (node.nextAddress) {
-      return formatMemoryAddress(node.nextAddress, "nullptr");
-    }
     if (node.nextId) {
       const target = currentSnapshot?.nodes.find((n) => n.id === node.nextId);
       if (target?.address) {
         return formatMemoryAddress(target.address, "nullptr");
       }
       return node.nextId;
+    }
+    if (node.nextAddress && currentSnapshot?.nodes.some((n) => n.address === node.nextAddress)) {
+      return formatMemoryAddress(node.nextAddress, "nullptr");
     }
     return "nullptr";
   }
@@ -1318,7 +1346,7 @@
   function renderArrows() {
     const paths = arrowsSvg.querySelectorAll("path");
     paths.forEach((p) => p.remove());
-    if (!currentSnapshot)
+    if (!currentSnapshot || !currentSnapshot.hasHead)
       return;
     for (const ptr of currentSnapshot.pointers || []) {
       const badgeId = `badge-ptr-${ptr.name}`;
@@ -1429,6 +1457,11 @@
     }
     const { headId, nodes } = snapshot;
     if (!snapshot.hasHead) {
+      nodePositions.clear();
+      d3NodesMap.clear();
+      d3Links = [];
+      const paths = arrowsSvg.querySelectorAll("path");
+      paths.forEach((p) => p.remove());
       const emptyMsg = document.createElement("div");
       emptyMsg.className = "empty-canvas-message";
       emptyMsg.innerHTML = `
@@ -1439,16 +1472,13 @@
         </svg>
       </div>
       <div class="empty-title">Canvas Empty</div>
-      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to execute: <code>Node* head = nullptr;</code></div>
+      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to allocate and initialize the linked list.</div>
     `;
       nodesLayer.appendChild(emptyMsg);
-      d3NodesMap.clear();
-      d3Links = [];
       if (simulation) {
         simulation.stop();
         simulation.nodes([]);
       }
-      renderArrows();
       return;
     }
     const pointers = snapshot.pointers || [];
@@ -1554,7 +1584,8 @@
       const targetCenterY = 135;
       registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 126, 50, "node", resetPositions);
       makeDraggable(nodeEl, node.id);
-      if (node.nextId) {
+      const targetNodeExists = Boolean(node.nextId && nodes.some((n) => n.id === node.nextId));
+      if (targetNodeExists) {
         d3Links.push({
           source: node.id,
           target: node.nextId,
@@ -1563,8 +1594,7 @@
         });
         nodePositions.delete(`badge-null-${node.id}`);
         d3NodesMap.delete(`badge-null-${node.id}`);
-      }
-      if (i === reachableNodes.length - 1 && !node.nextId) {
+      } else {
         const nullId = `badge-null-${node.id}`;
         activeIds.add(nullId);
         const nullBadge = document.createElement("div");
@@ -1608,7 +1638,8 @@
       const targetCenterY = 135;
       registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 126, 50, "node", resetPositions);
       makeDraggable(nodeEl, node.id);
-      if (node.nextId) {
+      const targetExists = Boolean(node.nextId && nodes.some((n) => n.id === node.nextId));
+      if (targetExists) {
         d3Links.push({
           source: node.id,
           target: node.nextId,
@@ -1641,7 +1672,12 @@
         nodePositions.delete(bodyId);
       }
     }
-    initOrUpdateSimulation(Array.from(d3NodesMap.values()), d3Links, resetPositions);
+    const validLinks = d3Links.filter((l) => {
+      const srcId = typeof l.source === "string" ? l.source : l.source.id;
+      const tgtId = typeof l.target === "string" ? l.target : l.target.id;
+      return d3NodesMap.has(srcId) && d3NodesMap.has(tgtId);
+    });
+    initOrUpdateSimulation(Array.from(d3NodesMap.values()), validLinks, resetPositions);
   }
   btnInitialVisualize.onclick = () => vscode.postMessage({ command: "visualize" });
   btnPrev.onclick = () => vscode.postMessage({ command: "prev" });
@@ -1757,7 +1793,12 @@
         btnNext.disabled = !canStepNext;
         btnPrev.disabled = !canStepPrev;
         btnRestart.disabled = !canRestart;
+        updateTerminal(snapshot.terminalOutput);
         renderDiagram(snapshot, false);
+        break;
+      }
+      case "terminalOutput": {
+        updateTerminal(msg.fullOutput);
         break;
       }
       case "error": {
