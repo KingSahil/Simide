@@ -1,0 +1,79 @@
+{
+  "name": "vscode-debug-mentor",
+  "displayName": "VS Code Debug Mentor",
+  "description": "Real-time C++ debugging and DSA visualization extension for VS Code",
+  "version": "0.1.0",
+  "publisher": "debug-mentor",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers",
+    "Education"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:cpp",
+    "onView:debug-mentor.sidebar",
+    "onCommand:debug-mentor.visualize"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "debug-mentor-view-container",
+          "title": "Debug Mentor",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "debug-mentor-view-container": [
+        {
+          "type": "webview",
+          "id": "debug-mentor.sidebar",
+          "name": "Debug Mentor"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "debug-mentor.visualize",
+        "title": "Debug Mentor: Visualize C++ Execution",
+        "category": "Debug Mentor",
+        "icon": "$(play)"
+      },
+      {
+        "command": "debug-mentor.next",
+        "title": "Debug Mentor: Next Step",
+        "category": "Debug Mentor",
+        "icon": "$(arrow-right)"
+      },
+      {
+        "command": "debug-mentor.prev",
+        "title": "Debug Mentor: Previous Step",
+        "category": "Debug Mentor",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "debug-mentor.restart",
+        "title": "Debug Mentor: Restart Session",
+        "category": "Debug Mentor",
+        "icon": "$(debug-restart)"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "test": "node test/runAll.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.3"
+  }
+}
