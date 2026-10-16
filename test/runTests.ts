@@ -222,6 +222,98 @@ async function runTests() {
   assert.ok(valUpdateRes.explanation.includes('data updated: 10 → 99'));
   console.log(`  ✓ In-place value update state: "${valUpdateRes.explanation}"`);
 
+  // State 10 (Tree): Tree Root Initialization
+  const treeRootNode: ListNode = {
+    id: 'tree_1',
+    address: '0x3000',
+    data: 50,
+    isHead: true,
+    isRoot: true,
+    isDetached: false,
+    leftId: null,
+    rightId: null,
+  };
+  const treeRootRes = ExplanationGenerator.generate(
+    [treeRootNode],
+    'tree_1',
+    {
+      stepNumber: 1,
+      structureType: 'tree',
+      hasHead: true,
+      headId: null,
+      nodes: [],
+      explanation: 'Empty tree',
+      changeType: 'init',
+    },
+    true,
+    [{ name: 'root', targetNodeId: 'tree_1', isNull: false }],
+    null,
+    '',
+    'tree'
+  );
+  assert.strictEqual(treeRootRes.changeType, 'tree_root_assigned');
+  assert.ok(treeRootRes.explanation.includes('Tree root initialized to node containing 50'));
+  console.log(`  ✓ Tree Root Connected state: "${treeRootRes.explanation}"`);
+
+  // State 11 (Tree): Left and Right child insertions in BST
+  const treeLeftNode: ListNode = {
+    id: 'tree_2',
+    address: '0x3040',
+    data: 30,
+    isHead: false,
+    isRoot: false,
+    isDetached: false,
+    leftId: null,
+    rightId: null,
+  };
+  const treeRootLinked: ListNode = { ...treeRootNode, leftId: 'tree_2' };
+  const treeChildRes = ExplanationGenerator.generate(
+    [treeRootLinked, treeLeftNode],
+    'tree_1',
+    {
+      stepNumber: 2,
+      structureType: 'tree',
+      hasHead: true,
+      headId: 'tree_1',
+      nodes: [treeRootNode],
+      explanation: treeRootRes.explanation,
+      changeType: 'tree_root_assigned',
+    },
+    true,
+    [{ name: 'root', targetNodeId: 'tree_1', isNull: false }],
+    null,
+    '',
+    'tree'
+  );
+  assert.strictEqual(treeChildRes.changeType, 'tree_child_linked');
+  assert.ok(treeChildRes.explanation.includes('Node containing 30 inserted as LEFT child of node 50'));
+  console.log(`  ✓ BST Child Connected state: "${treeChildRes.explanation}"`);
+
+  // State 12 (Tree): Active Traversal Visiting Node State (inorder visit)
+  const treeVisitRes = ExplanationGenerator.generate(
+    [treeRootLinked, treeLeftNode],
+    'tree_1',
+    {
+      stepNumber: 3,
+      structureType: 'tree',
+      hasHead: true,
+      headId: 'tree_1',
+      nodes: [treeRootLinked, treeLeftNode],
+      explanation: treeChildRes.explanation,
+      changeType: 'tree_child_linked',
+    },
+    true,
+    [{ name: 'root', targetNodeId: 'tree_1', isNull: false }],
+    null,
+    '',
+    'tree',
+    'tree_2',
+    'inorder'
+  );
+  assert.strictEqual(treeVisitRes.changeType, 'tree_traversal_visit');
+  assert.ok(treeVisitRes.explanation.includes('Visiting tree node containing 30 in inorder()'));
+  console.log(`  ✓ BST Traversal Visit state: "${treeVisitRes.explanation}"`);
+
   // Test 4: SnapshotManager historical navigation
   console.log('\n[Test 4] Testing SnapshotManager Non-Destructive History...');
   const manager = new SnapshotManager();
@@ -282,6 +374,7 @@ async function runTests() {
   const leetcodePath = path.resolve(process.cwd(), 'examples', 'leetcode-206-reverse.cpp');
   const gfgPath = path.resolve(process.cwd(), 'examples', 'gfg-push-delete.cpp');
   const oopPath = path.resolve(process.cwd(), 'examples', 'oop-linked-list.cpp');
+  const bstPath = path.resolve(process.cwd(), 'examples', 'bst-traversals.cpp');
 
   const structInfoBasic = StateExtractor.parseStructMembers(samplePath);
   assert.strictEqual(structInfoBasic.dataField, 'data');
@@ -294,7 +387,13 @@ async function runTests() {
   const structInfoGfg = StateExtractor.parseStructMembers(gfgPath);
   assert.strictEqual(structInfoGfg.dataField, 'data');
   assert.strictEqual(structInfoGfg.nextField, 'next');
-  console.log('  ✓ Verified parseStructMembers discovers data/val and next across LeetCode, GFG, and basic formats');
+
+  const structInfoBst = StateExtractor.parseStructMembers(bstPath);
+  assert.strictEqual(structInfoBst.structureType, 'tree');
+  assert.strictEqual(structInfoBst.dataField, 'val');
+  assert.strictEqual(structInfoBst.leftField, 'left');
+  assert.strictEqual(structInfoBst.rightField, 'right');
+  console.log('  ✓ Verified parseStructMembers discovers data/val, next, and BST left/right tree fields');
 
   // User defined functions discovery (including free functions and class member methods)
   const leetcodeFns = StateExtractor.getUserDefinedFunctions(leetcodePath);
@@ -307,11 +406,17 @@ async function runTests() {
   const oopFns = StateExtractor.getUserDefinedFunctions(oopPath);
   assert.ok(oopFns.has('insertAtHead'), 'Must detect insertAtHead');
   assert.ok(oopFns.has('display'), 'Must detect display');
-  console.log('  ✓ Verified getUserDefinedFunctions discovers helper functions and class methods (reverseList, push, deleteNode, insertAtHead, display)');
+
+  const bstFns = StateExtractor.getUserDefinedFunctions(bstPath);
+  assert.ok(bstFns.has('insert'), 'Must detect insert');
+  assert.ok(bstFns.has('preorder'), 'Must detect preorder');
+  assert.ok(bstFns.has('inorder'), 'Must detect inorder');
+  assert.ok(bstFns.has('postorder'), 'Must detect postorder');
+  console.log('  ✓ Verified getUserDefinedFunctions discovers helper functions (reverseList, insert, preorder, inorder, postorder)');
 
   // Test 6: Compiling all internet examples
-  console.log('\n[Test 6] Testing Compilation of All Internet Examples...');
-  for (const file of [leetcodePath, gfgPath, oopPath]) {
+  console.log('\n[Test 6] Testing Compilation of All Internet Examples & BST...');
+  for (const file of [leetcodePath, gfgPath, oopPath, bstPath]) {
     const res = await CppCompiler.compile(file);
     assert.strictEqual(res.success, true, `Should compile ${path.basename(file)}: ${res.errorMessage}`);
     console.log(`  ✓ Successfully compiled ${path.basename(file)}`);

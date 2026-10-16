@@ -436,6 +436,28 @@ function getPerimeterIntersection(rect: Rect, targetCenter: { x: number; y: numb
   }
 }
 
+/**
+ * Calculates the exact intersection point on the perimeter of a circular node
+ * along the ray towards or from targetPoint.
+ */
+function getCirclePerimeterIntersection(
+  circleCenter: { x: number; y: number },
+  radius: number,
+  targetPoint: { x: number; y: number }
+): PerimeterPoint {
+  const dx = targetPoint.x - circleCenter.x;
+  const dy = targetPoint.y - circleCenter.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const nx = dx / dist;
+  const ny = dy / dist;
+  return {
+    x: circleCenter.x + nx * radius,
+    y: circleCenter.y + ny * radius,
+    nx,
+    ny,
+  };
+}
+
 // Draw smooth bezier curved arrows seamlessly anchored to box borders
 function drawBezierArrow(
   startX: number,
@@ -493,8 +515,11 @@ function renderArrows() {
       const centerA = { x: badgePos.x + badgePos.width / 2, y: badgePos.y + badgePos.height / 2 };
       const centerB = { x: targetPos.x + targetPos.width / 2, y: targetPos.y + targetPos.height / 2 };
       const start = getPerimeterIntersection(badgePos, centerB);
-      const end = getPerimeterIntersection(targetPos, centerA);
-      const isHead = ptr.name === 'head';
+      const end =
+        currentSnapshot.structureType === 'tree'
+          ? getCirclePerimeterIntersection(centerB, targetPos.width / 2, centerA)
+          : getPerimeterIntersection(targetPos, centerA);
+      const isHead = ptr.name === 'head' || ptr.name === 'root';
       drawBezierArrow(
         start.x,
         start.y,
@@ -531,7 +556,63 @@ function renderArrows() {
     }
   }
 
-  // 2. Arrows between nodes: node.next -> targetNode or nullptr
+  // 2. Tree branch arrows: node.leftId and node.rightId (connecting circular value cards)
+  if (currentSnapshot.structureType === 'tree') {
+    for (const node of currentSnapshot.nodes) {
+      const nodePos = nodePositions.get(node.id);
+      if (!nodePos) continue;
+
+      const pCenter = { x: nodePos.x + nodePos.width / 2, y: nodePos.y + nodePos.height / 2 };
+      const pRadius = nodePos.width / 2;
+
+      // Left child arrow (curves downward to the left)
+      if (node.leftId && nodePositions.has(node.leftId)) {
+        const targetPos = nodePositions.get(node.leftId)!;
+        const cCenter = { x: targetPos.x + targetPos.width / 2, y: targetPos.y + targetPos.height / 2 };
+        const cRadius = targetPos.width / 2;
+        const start = getCirclePerimeterIntersection(pCenter, pRadius, cCenter);
+        const end = getCirclePerimeterIntersection(cCenter, cRadius, pCenter);
+
+        drawBezierArrow(
+          start.x,
+          start.y,
+          start.nx,
+          start.ny,
+          end.x,
+          end.y,
+          end.nx,
+          end.ny,
+          false,
+          '#0066FF'
+        );
+      }
+
+      // Right child arrow (curves downward to the right)
+      if (node.rightId && nodePositions.has(node.rightId)) {
+        const targetPos = nodePositions.get(node.rightId)!;
+        const cCenter = { x: targetPos.x + targetPos.width / 2, y: targetPos.y + targetPos.height / 2 };
+        const cRadius = targetPos.width / 2;
+        const start = getCirclePerimeterIntersection(pCenter, pRadius, cCenter);
+        const end = getCirclePerimeterIntersection(cCenter, cRadius, pCenter);
+
+        drawBezierArrow(
+          start.x,
+          start.y,
+          start.nx,
+          start.ny,
+          end.x,
+          end.y,
+          end.nx,
+          end.ny,
+          false,
+          '#0066FF'
+        );
+      }
+    }
+    return;
+  }
+
+  // 3. Arrows between nodes: node.next -> targetNode or nullptr
   for (const node of currentSnapshot.nodes) {
     const nodePos = nodePositions.get(node.id);
     if (!nodePos) continue;
@@ -615,6 +696,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
     const paths = arrowsSvg.querySelectorAll('path');
     paths.forEach((p) => p.remove());
 
+    const dsName = snapshot.structureType === 'tree' ? 'tree' : 'linked list';
     const emptyMsg = document.createElement('div');
     emptyMsg.className = 'empty-canvas-message';
     emptyMsg.innerHTML = `
@@ -625,7 +707,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
         </svg>
       </div>
       <div class="empty-title">Canvas Empty</div>
-      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to allocate and initialize the linked list.</div>
+      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to allocate and initialize the ${dsName}.</div>
     `;
     nodesLayer.appendChild(emptyMsg);
     if (simulation) {
@@ -635,7 +717,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
     return;
   }
 
-  // 1. Render all Pointer Badges (head, first, second, third, etc.)
+  // 1. Render all Pointer Badges (head, root, first, second, etc.)
   const pointers = snapshot.pointers || [];
   for (let pIdx = 0; pIdx < pointers.length; pIdx++) {
     const ptr = pointers[pIdx];
@@ -644,7 +726,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
 
     const badgeEl = document.createElement('div');
     badgeEl.id = badgeId;
-    const isHead = ptr.name === 'head';
+    const isHead = ptr.name === 'head' || ptr.name === 'root';
     badgeEl.className = `graph-badge-node ${isHead ? 'head-badge' : 'local-ptr-badge'}`;
     badgeEl.innerHTML = `<span>${ptr.name}</span>`;
     nodesLayer.appendChild(badgeEl);
@@ -652,7 +734,20 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
     // Compute layout slot
     let targetCenterX = 85;
     let targetCenterY = 48;
-    if (!isHead) {
+    if (snapshot.structureType === 'tree') {
+      if (ptr.targetNodeId) {
+        const targetNode = nodes.find((n) => n.id === ptr.targetNodeId);
+        if (targetNode) {
+          const col = targetNode.treeColumn !== undefined ? targetNode.treeColumn : 0;
+          const depth = targetNode.treeDepth !== undefined ? targetNode.treeDepth : 0;
+          targetCenterX = 140 + col * 75 + (pIdx % 2 === 0 ? -16 : 16);
+          targetCenterY = 75 + depth * 85 - 42;
+        }
+      } else {
+        targetCenterX = 140 + pIdx * 90;
+        targetCenterY = 32;
+      }
+    } else if (!isHead) {
       if (ptr.name === 'first') {
         targetCenterX = 85;
         targetCenterY = 145;
@@ -705,6 +800,85 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
       nodePositions.delete(`badge-null-${ptr.name}`);
       d3NodesMap.delete(`badge-null-${ptr.name}`);
     }
+  }
+
+  // Handle Tree Rendering
+  if (snapshot.structureType === 'tree') {
+    const detachedNodes = nodes.filter((n) => n.isDetached);
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      activeIds.add(node.id);
+
+      const nodeEl = document.createElement('div');
+      nodeEl.id = `node-${node.id}`;
+      nodeEl.className = 'tree-node-card';
+      if (node.isVisiting || node.id === snapshot.activeVisitingNodeId) {
+        nodeEl.classList.add('visiting');
+      }
+      if (node.isNewlyConnected) {
+        nodeEl.classList.add('new-connected');
+      } else if (node.isNewlyCreated) {
+        nodeEl.classList.add('new-created');
+      }
+      if (node.isDetached) {
+        nodeEl.classList.add('detached');
+      }
+
+      // Value only
+      nodeEl.innerHTML = `<span class="tree-node-val">${node.data}</span>`;
+      nodesLayer.appendChild(nodeEl);
+
+      let targetCenterX: number;
+      let targetCenterY: number;
+
+      if (node.isDetached) {
+        const detachedIdx = detachedNodes.indexOf(node);
+        targetCenterX = 80 + detachedIdx * 65;
+        targetCenterY = 320;
+      } else {
+        const col = node.treeColumn !== undefined ? node.treeColumn : i;
+        const depth = node.treeDepth !== undefined ? node.treeDepth : 0;
+        targetCenterX = 140 + col * 75;
+        targetCenterY = 75 + depth * 85;
+      }
+
+      registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 46, 46, 'node', resetPositions);
+      makeDraggable(nodeEl, node.id);
+
+      if (node.leftId && nodes.some((n) => n.id === node.leftId)) {
+        d3Links.push({
+          source: node.id,
+          target: node.leftId,
+          distance: 85,
+          strength: 0.8,
+        });
+      }
+      if (node.rightId && nodes.some((n) => n.id === node.rightId)) {
+        d3Links.push({
+          source: node.id,
+          target: node.rightId,
+          distance: 85,
+          strength: 0.8,
+        });
+      }
+    }
+
+    // Remove obsolete bodies
+    for (const [bodyId] of d3NodesMap.entries()) {
+      if (!activeIds.has(bodyId)) {
+        d3NodesMap.delete(bodyId);
+        nodePositions.delete(bodyId);
+      }
+    }
+
+    const currentD3Nodes = Array.from(d3NodesMap.values());
+    const validLinks = d3Links.filter(
+      (l) =>
+        d3NodesMap.has(typeof l.source === 'string' ? l.source : l.source.id) &&
+        d3NodesMap.has(typeof l.target === 'string' ? l.target : l.target.id)
+    );
+    initOrUpdateSimulation(currentD3Nodes, validLinks, resetPositions);
+    return;
   }
 
   // Follow reachable chain from head

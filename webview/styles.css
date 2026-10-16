@@ -520,6 +520,95 @@ body.is-canvas-panning * {
   font-style: italic;
 }
 
+/* Tree Node (Value Only - Sleek Circular Card) */
+.tree-node-card {
+  position: absolute;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  box-sizing: border-box;
+  background: radial-gradient(circle at 35% 35%, #1f2937 0%, #111827 100%);
+  border: 2px solid #374151;
+  border-radius: 50%;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+  z-index: 10;
+  user-select: none;
+}
+
+.tree-node-card:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 0 16px rgba(59, 130, 246, 0.4);
+  transform: scale(1.06);
+}
+
+.tree-node-card.dragging {
+  cursor: grabbing !important;
+  z-index: 100 !important;
+  border-color: #60a5fa;
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.6);
+  transform: scale(1.1);
+}
+
+.tree-node-card.new-created {
+  border-color: #10b981;
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.6);
+  animation: treeNodePop 0.35s ease-out;
+}
+
+.tree-node-card.new-connected {
+  border-color: #3b82f6;
+  box-shadow: 0 0 16px rgba(59, 130, 246, 0.6);
+}
+
+.tree-node-card.detached {
+  border-style: dashed;
+  border-color: #f59e0b;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+}
+
+.tree-node-card.visiting {
+  border-color: #10b981;
+  background: radial-gradient(circle at 35% 35%, #064e3b 0%, #022c22 100%);
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.8), 0 0 40px rgba(16, 185, 129, 0.4);
+  transform: scale(1.15);
+  z-index: 20;
+  animation: treePulse 1.2s infinite ease-in-out;
+}
+
+@keyframes treeNodePop {
+  0% { transform: scale(0.3); opacity: 0; }
+  70% { transform: scale(1.2); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes treePulse {
+  0%, 100% {
+    box-shadow: 0 0 14px rgba(16, 185, 129, 0.7), 0 0 28px rgba(16, 185, 129, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 24px rgba(16, 185, 129, 0.95), 0 0 44px rgba(16, 185, 129, 0.5);
+  }
+}
+
+.tree-node-val {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: #f9fafb;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 38px;
+}
+
 /* Head & Local Pointer Badges (Clean name pill without Node* or port dots) */
 .graph-badge-node {
   position: absolute;

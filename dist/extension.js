@@ -519,7 +519,76 @@ var path3 = __toESM(require("path"));
 
 // src/visualization/explanationGenerator.ts
 var ExplanationGenerator = class {
-  static generate(currentNodes, headId, previousSnapshot, hasHead = true, pointers = [], printedInStep, accumulatedOutput) {
+  static generate(currentNodes, headId, previousSnapshot, hasHead = true, pointers = [], printedInStep, accumulatedOutput, structureType = "linked_list", activeVisitingNodeId, currentFuncName) {
+    if (structureType === "tree") {
+      if (!hasHead) {
+        return {
+          explanation: "Program paused at main(). Click Next to execute: TreeNode* root = nullptr;",
+          changeType: "init"
+        };
+      }
+      if (printedInStep) {
+        const cleanPrint = printedInStep.replace(/\n$/, "");
+        const totalClean = (accumulatedOutput || "").trim();
+        const summaryText = totalClean.length > 0 ? ` Program output: ${totalClean}` : "";
+        return {
+          explanation: `Printed to terminal: "${cleanPrint}".${summaryText}`,
+          changeType: "print"
+        };
+      }
+      const prevNodes2 = previousSnapshot?.nodes || [];
+      if (previousSnapshot) {
+        const newNodes = currentNodes.filter((c) => !prevNodes2.some((p) => p.id === c.id));
+        if (newNodes.length > 0) {
+          const newest = newNodes[newNodes.length - 1];
+          const parent = currentNodes.find((n) => n.leftId === newest.id || n.rightId === newest.id);
+          if (parent) {
+            const isLeft = parent.leftId === newest.id;
+            return {
+              explanation: `Node containing ${newest.data} inserted as ${isLeft ? "LEFT" : "RIGHT"} child of node ${parent.data}.`,
+              changeType: "tree_child_linked"
+            };
+          } else if (newest.id === headId) {
+            return {
+              explanation: `Tree root initialized to node containing ${newest.data}.`,
+              changeType: "tree_root_assigned"
+            };
+          } else {
+            return {
+              explanation: `Created new tree node containing ${newest.data}.`,
+              changeType: "tree_node_created"
+            };
+          }
+        }
+      }
+      if (activeVisitingNodeId) {
+        const visitingNode = currentNodes.find((n) => n.id === activeVisitingNodeId);
+        if (visitingNode) {
+          const fnInfo = currentFuncName ? ` in ${currentFuncName}()` : "";
+          return {
+            explanation: `Visiting tree node containing ${visitingNode.data}${fnInfo}.`,
+            changeType: "tree_traversal_visit"
+          };
+        }
+      }
+      if (currentNodes.length === 0) {
+        return {
+          explanation: "root is initialized to nullptr. The tree is currently empty.",
+          changeType: "init"
+        };
+      }
+      if (headId) {
+        const rootNode = currentNodes.find((n) => n.id === headId);
+        return {
+          explanation: `Binary tree with root containing ${rootNode?.data ?? ""} (${currentNodes.length} node${currentNodes.length > 1 ? "s" : ""}).`,
+          changeType: "step"
+        };
+      }
+      return {
+        explanation: `Binary tree state updated (${currentNodes.length} node${currentNodes.length > 1 ? "s" : ""}).`,
+        changeType: "step"
+      };
+    }
     if (!hasHead) {
       return {
         explanation: "Program paused at main(). Click Next to execute: Node* head = nullptr;",
@@ -718,6 +787,9 @@ var StateExtractor = class {
   static deletedAddresses = /* @__PURE__ */ new Set();
   static cachedDataField = null;
   static cachedNextField = null;
+  static cachedLeftField = null;
+  static cachedRightField = null;
+  static cachedStructureType = null;
   static accumulatedTerminalOutput = "";
   static hasInitializedList = false;
   static setActiveSourceFile(filePath) {
@@ -735,6 +807,9 @@ var StateExtractor = class {
     this.deletedAddresses.clear();
     this.cachedDataField = null;
     this.cachedNextField = null;
+    this.cachedLeftField = null;
+    this.cachedRightField = null;
+    this.cachedStructureType = null;
     this.accumulatedTerminalOutput = "";
     this.hasInitializedList = false;
   }
@@ -808,6 +883,11 @@ var StateExtractor = class {
       "LinkedListNode",
       "SinglyLinkedListNode",
       "DoublyLinkedListNode",
+      "TreeNode",
+      "BSTNode",
+      "BinaryTreeNode",
+      "Tree_node",
+      "treenode",
       "Node_t",
       "Item",
       "Element",
@@ -859,13 +939,18 @@ var StateExtractor = class {
   static parseStructMembers(resolvedPath) {
     let dataField = "data";
     let nextField = "next";
+    let leftField = "left";
+    let rightField = "right";
+    let structureType = "linked_list";
     if (!resolvedPath || !fs3.existsSync(resolvedPath)) {
-      return { dataField, nextField };
+      return { dataField, nextField, leftField, rightField, structureType };
     }
     try {
       const content = fs3.readFileSync(resolvedPath, "utf8");
       const structMatches = content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g);
       for (const sm of structMatches) {
+        const structName = sm[1];
+        const isTreeNamed = /tree|bst/i.test(structName);
         const structIdx = sm.index ?? content.indexOf(sm[0]);
         const startBrace = content.indexOf("{", structIdx);
         if (startBrace === -1)
@@ -886,28 +971,45 @@ var StateExtractor = class {
         if (endBrace === -1)
           continue;
         const body = content.substring(startBrace + 1, endBrace);
-        const nextMatch = body.match(
-          /(?:(?:struct\s+)?(?:[a-zA-Z_][a-zA-Z0-9_]*|<[a-zA-Z0-9_,\s]+>)\s*\*+|\*+\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*;/
+        const ptrMatches = Array.from(
+          body.matchAll(/(?:(?:struct\s+)?(?:[a-zA-Z_][a-zA-Z0-9_]*|<[a-zA-Z0-9_,\s]+>)\s*\*+|\*+\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*;/g)
+        ).map((m) => m[1]);
+        const hasLeft = ptrMatches.find(
+          (p) => ["left", "lchild", "left_node", "lc", "pleft", "l"].includes(p.toLowerCase())
         );
-        if (nextMatch) {
-          nextField = nextMatch[1];
+        const hasRight = ptrMatches.find(
+          (p) => ["right", "rchild", "right_node", "rc", "pright", "r"].includes(p.toLowerCase())
+        );
+        const hasNext = ptrMatches.find(
+          (p) => ["next", "next_node", "link", "ptr", "pnext", "nxt"].includes(p.toLowerCase())
+        );
+        if (hasLeft || hasRight || isTreeNamed) {
+          structureType = "tree";
+          if (hasLeft)
+            leftField = hasLeft;
+          if (hasRight)
+            rightField = hasRight;
+        } else if (hasNext) {
+          structureType = "linked_list";
+          nextField = hasNext;
         }
         const dataMatches = body.matchAll(
           /(?:int|long|short|char|string|double|float|T|uint[0-9]+_t|int[0-9]+_t|auto)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;/g
         );
         for (const dm of dataMatches) {
-          if (dm[1] !== nextField && dm[1] !== "prev" && dm[1] !== "previous") {
-            dataField = dm[1];
+          const fn = dm[1];
+          if (fn !== nextField && fn !== leftField && fn !== rightField && fn !== "prev" && fn !== "previous") {
+            dataField = fn;
             break;
           }
         }
-        if (nextField && dataField) {
+        if (dataField && (hasLeft || hasRight || hasNext)) {
           break;
         }
       }
     } catch {
     }
-    return { dataField, nextField };
+    return { dataField, nextField, leftField, rightField, structureType };
   }
   static getVariableDeclarations(sourceFilePath) {
     const resolvedPath = this.resolveFilePath(sourceFilePath) || sourceFilePath || "";
@@ -1081,6 +1183,9 @@ var StateExtractor = class {
   static parseData(valStr) {
     if (!valStr)
       return 0;
+    if (valStr.includes("-var-create") || valStr.includes("unable to create") || valStr.includes("error:") || valStr.includes("Error:") || valStr.includes("Cannot access") || valStr.includes("No symbol") || valStr.includes("has no member") || valStr.includes("not defined") || valStr.includes("optimized out") || valStr.includes("incomplete")) {
+      return 0;
+    }
     const match = valStr.match(/-?\d+/);
     if (match) {
       const n = parseInt(match[0], 10);
@@ -1116,6 +1221,32 @@ var StateExtractor = class {
       }
     }
     return "next";
+  }
+  static async resolveLeftField(evalExpr, ptrExpr) {
+    if (this.cachedLeftField)
+      return this.cachedLeftField;
+    const candidates = ["left", "lchild", "left_node", "lc", "pLeft", "l"];
+    for (const c of candidates) {
+      const res = await evalExpr(`${ptrExpr}->${c}`);
+      if (res !== null && !res.includes("has no member") && !res.includes("error") && !res.includes("Cannot access") && !res.includes("not defined") && !res.includes("No symbol")) {
+        this.cachedLeftField = c;
+        return c;
+      }
+    }
+    return "left";
+  }
+  static async resolveRightField(evalExpr, ptrExpr) {
+    if (this.cachedRightField)
+      return this.cachedRightField;
+    const candidates = ["right", "rchild", "right_node", "rc", "pRight", "r"];
+    for (const c of candidates) {
+      const res = await evalExpr(`${ptrExpr}->${c}`);
+      if (res !== null && !res.includes("has no member") && !res.includes("error") && !res.includes("Cannot access") && !res.includes("not defined") && !res.includes("No symbol")) {
+        this.cachedRightField = c;
+        return c;
+      }
+    }
+    return "right";
   }
   static splitStreamTokens(expr) {
     const tokens = [];
@@ -1219,21 +1350,41 @@ var StateExtractor = class {
       const rawPath = userFrame.source?.path || userFrame.source?.name || "source.cpp";
       const rawLine = userFrame.line;
       const resolvedFile = this.resolveFilePath(rawPath) || rawPath;
+      const {
+        dataField: parsedDataField,
+        nextField: parsedNextField,
+        leftField: parsedLeftField,
+        rightField: parsedRightField,
+        structureType: parsedStructureType
+      } = this.parseStructMembers(resolvedFile);
+      if (!this.cachedDataField && parsedDataField)
+        this.cachedDataField = parsedDataField;
+      if (!this.cachedNextField && parsedNextField)
+        this.cachedNextField = parsedNextField;
+      if (!this.cachedLeftField && parsedLeftField)
+        this.cachedLeftField = parsedLeftField;
+      if (!this.cachedRightField && parsedRightField)
+        this.cachedRightField = parsedRightField;
+      if (!this.cachedStructureType && parsedStructureType)
+        this.cachedStructureType = parsedStructureType;
+      const structureType = this.cachedStructureType || parsedStructureType || "linked_list";
       const varDecls = this.getVariableDeclarations(resolvedFile);
       const funcRange = this.getEnclosingFunction(resolvedFile, rawLine);
       const isInsideMain = funcName === "main" || funcName.startsWith("main(") || funcName.startsWith("main()");
       let hasHead = this.hasInitializedList;
       if (!hasHead) {
         if (isInsideMain) {
-          hasHead = this.isVariableInitialized("head", rawLine, varDecls, funcRange);
+          hasHead = this.isVariableInitialized("head", rawLine, varDecls, funcRange) || this.isVariableInitialized("root", rawLine, varDecls, funcRange) || this.isVariableInitialized("tree", rawLine, varDecls, funcRange);
         } else {
           hasHead = true;
         }
       }
       if (!hasHead) {
         this.lastPausedLine = rawLine;
+        const initExplanation = structureType === "tree" ? "Program paused at start. Click Next to allocate and initialize tree: TreeNode* root = ..." : "Program paused at start. Click Next to execute: Node* head = ...";
         return {
           stepNumber,
+          structureType,
           source: {
             file: resolvedFile,
             line: rawLine,
@@ -1243,7 +1394,7 @@ var StateExtractor = class {
           headId: null,
           nodes: [],
           pointers: [],
-          explanation: "Program paused at start. Click Next to execute: Node* head = ...",
+          explanation: initExplanation,
           changeType: "init",
           terminalOutput: "",
           isHistorical: false
@@ -1320,22 +1471,20 @@ var StateExtractor = class {
           this.deletedAddresses.add(delAddr.toLowerCase());
         }
       }
-      const { dataField: parsedDataField, nextField: parsedNextField } = this.parseStructMembers(resolvedFile);
-      if (!this.cachedDataField && parsedDataField) {
-        this.cachedDataField = parsedDataField;
-      }
-      if (!this.cachedNextField && parsedNextField) {
-        this.cachedNextField = parsedNextField;
-      }
       let headAddr = null;
       let headId = null;
       const headCandidates = [
+        "root",
+        "this->root",
+        "pRoot",
+        "this->pRoot",
+        "tree",
+        "this->tree",
+        "t",
         "head",
         "this->head",
         "pHead",
         "this->pHead",
-        "root",
-        "this->root",
         "headNode",
         "this->headNode",
         "first",
@@ -1348,51 +1497,65 @@ var StateExtractor = class {
         "l1",
         "l2",
         "head_ref",
+        "root_ref",
         "top",
         "front",
         "listHead",
         "_head",
-        "m_head"
+        "_root",
+        "m_head",
+        "m_root"
       ];
-      for (const cand of headCandidates) {
-        let valStr = localVars[cand]?.value;
-        if (!valStr) {
-          valStr = await evalExpr(cand) || void 0;
-        }
-        if (valStr) {
-          if (cand === "head_ref" || valStr.includes("**")) {
-            const derefVal = await evalExpr(`*${cand}`);
-            headAddr = this.parsePointer(derefVal);
-          } else {
-            headAddr = this.parsePointer(valStr);
+      const isInMain = isInsideMain;
+      if (isInMain) {
+        for (const cand of headCandidates) {
+          let valStr = localVars[cand]?.value;
+          if (!valStr) {
+            valStr = await evalExpr(cand) || void 0;
           }
-          if (headAddr && !this.deletedAddresses.has(headAddr)) {
-            break;
+          if (valStr) {
+            if (cand === "head_ref" || cand === "root_ref" || valStr.includes("**")) {
+              const derefVal = await evalExpr(`*${cand}`);
+              headAddr = this.parsePointer(derefVal);
+            } else {
+              headAddr = this.parsePointer(valStr);
+            }
+            if (headAddr && !this.deletedAddresses.has(headAddr)) {
+              break;
+            } else {
+              headAddr = null;
+            }
           }
         }
       }
       if (!headAddr) {
-        for (let i = 1; i < frames.length; i++) {
+        for (let i = isInMain ? 1 : 0; i < frames.length; i++) {
           const callerFrame = frames[i];
           const callerPath = callerFrame.source?.path || callerFrame.source?.name || "";
-          if (this.isUserSource(callerPath)) {
-            for (const cand of headCandidates) {
-              const valStr = await evalExpr(cand, callerFrame.id);
-              if (valStr) {
-                if (cand === "head_ref" || valStr.includes("**")) {
-                  const derefVal = await evalExpr(`*${cand}`, callerFrame.id);
-                  headAddr = this.parsePointer(derefVal);
-                } else {
-                  headAddr = this.parsePointer(valStr);
-                }
-                if (headAddr && !this.deletedAddresses.has(headAddr)) {
-                  break;
-                }
+          if (!this.isUserSource(callerPath))
+            continue;
+          const callerName = (callerFrame.name || "").toLowerCase();
+          const isCallerMain = callerName === "main" || callerName.startsWith("main(");
+          for (const cand of headCandidates) {
+            const valStr = await evalExpr(cand, callerFrame.id);
+            if (valStr) {
+              let candidate = null;
+              if (cand === "head_ref" || cand === "root_ref" || valStr.includes("**")) {
+                const derefVal = await evalExpr(`*${cand}`, callerFrame.id);
+                candidate = this.parsePointer(derefVal);
+              } else {
+                candidate = this.parsePointer(valStr);
+              }
+              if (candidate && !this.deletedAddresses.has(candidate)) {
+                headAddr = candidate;
+                break;
               }
             }
-            if (headAddr)
-              break;
           }
+          if (headAddr)
+            break;
+          if (isCallerMain && !headAddr)
+            break;
         }
       }
       if (!headAddr && previousSnapshot?.headId) {
@@ -1407,8 +1570,24 @@ var StateExtractor = class {
       } else {
         headAddr = null;
       }
-      const discoveredTypes = Array.from(this.discoverNodeTypes(resolvedFile));
-      const nodeType = discoveredTypes[0] || "Node";
+      let nodeType;
+      {
+        let sourceDefinedType = null;
+        try {
+          if (fs3.existsSync(resolvedFile)) {
+            const content = fs3.readFileSync(resolvedFile, "utf8");
+            const structMatches = Array.from(content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\{([^}]*?)\}/gs));
+            for (const sm of structMatches) {
+              const body = sm[2] || "";
+              if (body.includes("*")) {
+                sourceDefinedType = sm[1];
+              }
+            }
+          }
+        } catch {
+        }
+        nodeType = sourceDefinedType || (structureType === "tree" ? "TreeNode" : "Node");
+      }
       const allDiscoveredNodes = /* @__PURE__ */ new Map();
       const visitedAddrs = /* @__PURE__ */ new Set();
       const traverseChain = async (startAddr, isHeadChain, associatedVar) => {
@@ -1447,20 +1626,72 @@ var StateExtractor = class {
           }
         }
       };
+      const traverseTree = async (startAddr, isRootTree, associatedVar) => {
+        const queue = [{ addr: startAddr, depth: 0 }];
+        const MAX_NODES = 100;
+        let count = 0;
+        while (queue.length > 0 && count < MAX_NODES) {
+          const item = queue.shift();
+          const currAddr = item.addr;
+          const depth = item.depth;
+          if (!currAddr || visitedAddrs.has(currAddr) || this.deletedAddresses.has(currAddr)) {
+            continue;
+          }
+          visitedAddrs.add(currAddr);
+          count++;
+          const id = this.getStableId(currAddr);
+          const ptrCast = `((${nodeType}*)${currAddr})`;
+          const dataField = await this.resolveDataField(evalExpr, ptrCast);
+          const leftField = await this.resolveLeftField(evalExpr, ptrCast);
+          const rightField = await this.resolveRightField(evalExpr, ptrCast);
+          const dataStr = await evalExpr(`${ptrCast}->${dataField}`);
+          const leftValStr = await evalExpr(`${ptrCast}->${leftField}`);
+          const rightValStr = await evalExpr(`${ptrCast}->${rightField}`);
+          const leftAddr = this.parsePointer(leftValStr);
+          const rightAddr = this.parsePointer(rightValStr);
+          const leftId = leftAddr && !this.deletedAddresses.has(leftAddr) ? this.getStableId(leftAddr) : null;
+          const rightId = rightAddr && !this.deletedAddresses.has(rightAddr) ? this.getStableId(rightAddr) : null;
+          const isNodeRoot = currAddr === headAddr;
+          allDiscoveredNodes.set(currAddr, {
+            id,
+            address: currAddr,
+            data: this.parseData(dataStr || "0"),
+            leftId,
+            leftAddress: leftAddr,
+            rightId,
+            rightAddress: rightAddr,
+            isHead: isNodeRoot,
+            isRoot: isNodeRoot,
+            isDetached: !isRootTree && !isNodeRoot,
+            treeDepth: depth,
+            variableName: isNodeRoot ? structureType === "tree" ? "root" : "head" : depth === 0 ? associatedVar : void 0
+          });
+          if (leftAddr && !this.deletedAddresses.has(leftAddr) && !visitedAddrs.has(leftAddr)) {
+            queue.push({ addr: leftAddr, depth: depth + 1 });
+          }
+          if (rightAddr && !this.deletedAddresses.has(rightAddr) && !visitedAddrs.has(rightAddr)) {
+            queue.push({ addr: rightAddr, depth: depth + 1 });
+          }
+        }
+      };
       if (headAddr) {
-        await traverseChain(headAddr, true, "head");
+        if (structureType === "tree") {
+          await traverseTree(headAddr, true, "root");
+        } else {
+          await traverseChain(headAddr, true, "head");
+        }
       }
       const activePointers = [];
       if (hasHead) {
         activePointers.push({
-          name: "head",
+          name: structureType === "tree" ? "root" : "head",
           targetNodeId: headId,
           targetAddress: headAddr,
           isNull: headAddr === null
         });
       }
       for (const [varName, varInfo] of Object.entries(localVars)) {
-        if (varName === "head" || varName === "this")
+        if (varName === "head" || varName === "root" || varName === "this")
           continue;
         if (varName === "data" || varName === "val" || varName === "key" || varName === "argc" || varName === "argv" || varName === "count" || varName === "i" || varName === "j" || varName === "k" || varName.startsWith("__")) {
           continue;
@@ -1483,34 +1714,100 @@ var StateExtractor = class {
             isNull: varAddr === null || isFreed
           });
           if (varAddr && !isFreed && !visitedAddrs.has(varAddr)) {
-            await traverseChain(varAddr, false, varName);
+            if (structureType === "tree") {
+              await traverseTree(varAddr, false, varName);
+            } else {
+              await traverseChain(varAddr, false, varName);
+            }
           }
         }
       }
       if (previousSnapshot?.nodes && previousSnapshot.hasHead && stepNumber > 1) {
         for (const prevNode of previousSnapshot.nodes) {
-          if (!this.deletedAddresses.has(prevNode.address) && !visitedAddrs.has(prevNode.address)) {
-            await traverseChain(prevNode.address, false);
+          if (prevNode.address && !this.deletedAddresses.has(prevNode.address) && !visitedAddrs.has(prevNode.address)) {
+            if (structureType === "tree") {
+              await traverseTree(prevNode.address, false);
+            } else {
+              await traverseChain(prevNode.address, false);
+            }
           }
         }
       }
-      const reachableFromHead = /* @__PURE__ */ new Set();
-      if (headId) {
-        let currId = headId;
-        const headVisited = /* @__PURE__ */ new Set();
-        while (currId && !headVisited.has(currId)) {
-          headVisited.add(currId);
-          reachableFromHead.add(currId);
-          const foundNode = Array.from(allDiscoveredNodes.values()).find((n) => n.id === currId);
-          if (foundNode && foundNode.nextId) {
-            currId = foundNode.nextId;
-          } else {
-            break;
+      if (structureType === "tree") {
+        const reachableFromRoot = /* @__PURE__ */ new Set();
+        if (headId) {
+          const queue = [headId];
+          const visitedTree = /* @__PURE__ */ new Set();
+          while (queue.length > 0) {
+            const currId = queue.shift();
+            if (visitedTree.has(currId))
+              continue;
+            visitedTree.add(currId);
+            reachableFromRoot.add(currId);
+            const foundNode = Array.from(allDiscoveredNodes.values()).find((n) => n.id === currId);
+            if (foundNode) {
+              if (foundNode.leftId)
+                queue.push(foundNode.leftId);
+              if (foundNode.rightId)
+                queue.push(foundNode.rightId);
+            }
           }
         }
+        for (const node of allDiscoveredNodes.values()) {
+          node.isDetached = !reachableFromRoot.has(node.id);
+        }
+        if (headId) {
+          let inOrderCol = 0;
+          const nodeMap = /* @__PURE__ */ new Map();
+          for (const n of allDiscoveredNodes.values()) {
+            nodeMap.set(n.id, n);
+          }
+          const assignInOrder = (nodeId, depth) => {
+            if (!nodeId)
+              return;
+            const n = nodeMap.get(nodeId);
+            if (!n)
+              return;
+            n.treeDepth = depth;
+            if (n.leftId)
+              assignInOrder(n.leftId, depth + 1);
+            n.treeColumn = inOrderCol++;
+            if (n.rightId)
+              assignInOrder(n.rightId, depth + 1);
+          };
+          assignInOrder(headId, 0);
+        }
+      } else {
+        const reachableFromHead = /* @__PURE__ */ new Set();
+        if (headId) {
+          let currId = headId;
+          const headVisited = /* @__PURE__ */ new Set();
+          while (currId && !headVisited.has(currId)) {
+            headVisited.add(currId);
+            reachableFromHead.add(currId);
+            const foundNode = Array.from(allDiscoveredNodes.values()).find((n) => n.id === currId);
+            if (foundNode && foundNode.nextId) {
+              currId = foundNode.nextId;
+            } else {
+              break;
+            }
+          }
+        }
+        for (const node of allDiscoveredNodes.values()) {
+          node.isDetached = !reachableFromHead.has(node.id);
+        }
       }
-      for (const node of allDiscoveredNodes.values()) {
-        node.isDetached = !reachableFromHead.has(node.id);
+      let activeVisitingNodeId = null;
+      const activeVar = localVars["root"] || localVars["node"] || localVars["curr"] || localVars["current"] || localVars["p"] || localVars["temp"];
+      if (activeVar) {
+        const activeAddr = this.parsePointer(activeVar.value);
+        if (activeAddr && allDiscoveredNodes.has(activeAddr)) {
+          activeVisitingNodeId = this.getStableId(activeAddr);
+          const vNode = allDiscoveredNodes.get(activeAddr);
+          if (vNode) {
+            vNode.isVisiting = true;
+          }
+        }
       }
       const allNodes = Array.from(allDiscoveredNodes.values());
       if (previousSnapshot) {
@@ -1535,22 +1832,31 @@ var StateExtractor = class {
         hasHead,
         activePointers,
         printedInStep,
-        this.accumulatedTerminalOutput
+        this.accumulatedTerminalOutput,
+        structureType,
+        activeVisitingNodeId,
+        funcName
       );
       if (isReturnOrEnd) {
         changeType = "final";
-        const chainNodes = allNodes.filter((n) => !n.isDetached);
-        if (chainNodes.length > 0) {
-          explanation = `The linked list is complete: head \u2192 ${chainNodes.map((n) => n.data).join(" \u2192 ")} \u2192 nullptr. Program execution finished.`;
+        if (structureType === "tree") {
+          explanation = `Binary tree execution complete (${allNodes.length} nodes). Program execution finished.`;
         } else {
-          explanation = "Program execution finished.";
+          const chainNodes = allNodes.filter((n) => !n.isDetached);
+          if (chainNodes.length > 0) {
+            explanation = `The linked list is complete: head \u2192 ${chainNodes.map((n) => n.data).join(" \u2192 ")} \u2192 nullptr. Program execution finished.`;
+          } else {
+            explanation = "Program execution finished.";
+          }
         }
       }
       const snapshot = {
         stepNumber,
+        structureType,
         source: sourceLoc,
         hasHead,
         headId,
+        activeVisitingNodeId,
         nodes: allNodes,
         pointers: activePointers,
         explanation,

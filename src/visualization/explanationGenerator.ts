@@ -8,8 +8,92 @@ export class ExplanationGenerator {
     hasHead: boolean = true,
     pointers: PointerVariable[] = [],
     printedInStep?: string | null,
-    accumulatedOutput?: string
+    accumulatedOutput?: string,
+    structureType: 'linked_list' | 'tree' = 'linked_list',
+    activeVisitingNodeId?: string | null,
+    currentFuncName?: string
   ): { explanation: string; changeType: LinkedListSnapshot['changeType'] } {
+    if (structureType === 'tree') {
+      if (!hasHead) {
+        return {
+          explanation: 'Program paused at main(). Click Next to execute: TreeNode* root = nullptr;',
+          changeType: 'init',
+        };
+      }
+
+      // Check if the executed step printed output to terminal
+      if (printedInStep) {
+        const cleanPrint = printedInStep.replace(/\n$/, '');
+        const totalClean = (accumulatedOutput || '').trim();
+        const summaryText = totalClean.length > 0 ? ` Program output: ${totalClean}` : '';
+        return {
+          explanation: `Printed to terminal: "${cleanPrint}".${summaryText}`,
+          changeType: 'print',
+        };
+      }
+
+      const prevNodes = previousSnapshot?.nodes || [];
+
+      // Check for New Tree Node Creation / Linking
+      if (previousSnapshot) {
+        const newNodes = currentNodes.filter((c) => !prevNodes.some((p) => p.id === c.id));
+        if (newNodes.length > 0) {
+          const newest = newNodes[newNodes.length - 1];
+          const parent = currentNodes.find((n) => n.leftId === newest.id || n.rightId === newest.id);
+          if (parent) {
+            const isLeft = parent.leftId === newest.id;
+            return {
+              explanation: `Node containing ${newest.data} inserted as ${isLeft ? 'LEFT' : 'RIGHT'} child of node ${parent.data}.`,
+              changeType: 'tree_child_linked',
+            };
+          } else if (newest.id === headId) {
+            return {
+              explanation: `Tree root initialized to node containing ${newest.data}.`,
+              changeType: 'tree_root_assigned',
+            };
+          } else {
+            return {
+              explanation: `Created new tree node containing ${newest.data}.`,
+              changeType: 'tree_node_created',
+            };
+          }
+        }
+      }
+
+      // Check for Traversal Visit
+      if (activeVisitingNodeId) {
+        const visitingNode = currentNodes.find((n) => n.id === activeVisitingNodeId);
+        if (visitingNode) {
+          const fnInfo = currentFuncName ? ` in ${currentFuncName}()` : '';
+          return {
+            explanation: `Visiting tree node containing ${visitingNode.data}${fnInfo}.`,
+            changeType: 'tree_traversal_visit',
+          };
+        }
+      }
+
+      // Initial tree state
+      if (currentNodes.length === 0) {
+        return {
+          explanation: 'root is initialized to nullptr. The tree is currently empty.',
+          changeType: 'init',
+        };
+      }
+
+      if (headId) {
+        const rootNode = currentNodes.find((n) => n.id === headId);
+        return {
+          explanation: `Binary tree with root containing ${rootNode?.data ?? ''} (${currentNodes.length} node${currentNodes.length > 1 ? 's' : ''}).`,
+          changeType: 'step',
+        };
+      }
+
+      return {
+        explanation: `Binary tree state updated (${currentNodes.length} node${currentNodes.length > 1 ? 's' : ''}).`,
+        changeType: 'step',
+      };
+    }
+
     if (!hasHead) {
       return {
         explanation: 'Program paused at main(). Click Next to execute: Node* head = nullptr;',
