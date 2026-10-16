@@ -62,27 +62,32 @@ The extension is organized into 4 cleanly decoupled subsystems:
 ### 1. The Debugger Subsystem (`src/debug/`)
 * **Role**: Orchestrates the native C++ toolchain and communicates with GDB/LLDB using VS Code's Debug Adapter Protocol (DAP).
 * **Key Components**:
-  - `compiler.ts`: Locates installed compilers (`g++`, `clang++`), creates an isolated build directory (`.debug-mentor/`), and builds C++ files with essential debugging flags (`-g -O0 -std=c++17`). Handles file-lock collisions on Windows via timestamped fallback binaries.
-  - `debugSessionManager.ts`: Dynamically discovers GDB/LLDB in system paths, constructs the `cppdbg` launch configuration, configures entry breakpoints (`stopAtEntry: true`), and starts the session.
+  - `compiler.ts`: Locates installed compilers (`g++`, `clang++`), creates an isolated build directory (`.debug-mentor/`), and builds C++ files with essential debugging flags (`-g -O0 -std=c++17`). Handles file-lock collisions on Windows via timestamped fallback binaries. Tracks the actively focused editor tab (`setLastActiveSourceFile`, `resolveSourceFile`) across tab switches and multi-file workspaces.
+  - `debugSessionManager.ts`: Dynamically discovers GDB/LLDB in system paths, constructs the `cppdbg` launch configuration, configures entry breakpoints (`stopAtEntry: true`), and starts the session with `internalConsoleOptions: 'neverOpen'` and `suppressDebugView: true` to prevent intrusive debug panels from opening.
   - `debugAdapterTracker.ts`: Intercepts low-level DAP events (`stopped`, `continued`, `terminated`) sent by the debugger adapter without interfering with VS Code's native debug tools.
   - `executionController.ts`: Dispatches execution commands (step over, step in, step out, continue, pause) via DAP custom requests or VS Code commands.
   - `stateExtractor.ts`: The central inspection engine.
-    - Dynamically scans the user's C++ source file to discover struct definitions (`Node`, `ListNode`), pointer declarations, and user-defined functions (`printList`, `reverseList`, `push`, `deleteNode`, class methods).
+    - Dynamically scans the user's C++ source file to discover struct definitions (`Node`, `ListNode`, `TreeNode`), pointer declarations, and user-defined functions (`printList`, `reverseList`, `push`, `deleteNode`, `insert`, `inorder`, class methods).
+    - Detects data structure mode (`linked_list` vs `tree`) based on struct member definitions (`left` & `right` vs `next`).
     - Traverses memory chains from `head` as well as disconnected/detached chains.
-    - Tracks memory freeing via `delete` and records `deletedAddresses`.
+    - In tree mode, runs BFS `traverseTree` from root address, calculates depth levels (`treeDepth`), and assigns non-overlapping horizontal columns (`treeColumn`) via in-order traversal indexing.
+    - Resolves root pointers across recursive helper stack frames by looking up caller frames if the current frame receives a by-value `nullptr` parameter.
+    - Prevents uninitialized stack memory from appearing as ghost nodes on Step 1 by enforcing `rawLine > declLine` and `hasSteppedPastFirstPointerDecl`.
+    - Tracks memory freeing via `delete` and records `deletedAddresses` (including Case A leaf and single-child BST deletions).
     - Captures `std::cout` / `printf` calls and accumulates terminal output.
     - Filters out C Runtime (CRT) startup/exit frames to keep the final visual state intact.
 
 ### 2. The Visualization Engine (`src/visualization/`)
 * **Role**: Transforms raw runtime data into pedagogical models and manages non-destructive historical navigation.
 * **Key Components**:
-  - `linkedListModel.ts`: Defines standard TypeScript interfaces (`ListNode`, `PointerVariable`, `LinkedListSnapshot`, `SourceLocation`, `ChangeType`).
+  - `linkedListModel.ts`: Defines standard TypeScript interfaces (`ListNode`, `PointerVariable`, `LinkedListSnapshot`, `SourceLocation`, `ChangeType`, `StructureType`). Includes tree layout coordinates (`treeDepth`, `treeColumn`), branch links (`leftId`, `rightId`), and node state flags (`isRoot`, `isVisiting`).
   - `explanationGenerator.ts`: A rule-based pedagogical explainer. It compares the previous snapshot with the current snapshot to generate clear teaching explanations for:
     - Node creation and detached allocations
-    - Head assignment and pointer aliasing
+    - Head/Root assignment and pointer aliasing
     - Pointer linking and unlinking
-    - Node bypassing and memory deletions via `delete`
-    - Pointer movements during traversals (e.g. `curr = curr->next`)
+    - Binary Search Tree branch links (`left`, `right`) and traversal visits (`inorder`, `preorder`, `postorder`)
+    - Node bypassing and memory deletions via `delete` (including BST Case A deletions)
+    - Pointer movements during traversals (e.g. `curr = curr->next` or tree recursions)
     - Live terminal output statements
   - `snapshotManager.ts`: Stores an immutable history of every execution step. Allows scrubbing backward and forward through previous states without restarting the process.
 
@@ -90,16 +95,19 @@ The extension is organized into 4 cleanly decoupled subsystems:
 * **Role**: Acts as the central hub bridging VS Code, the debugger, and the user interface.
 * **Key Components**:
   - `linkedListViewProvider.ts`: Implements `vscode.WebviewViewProvider`. Manages the sidebar lifecycle, registers listeners for debugger events, highlights source code lines in the active editor during historical playback, guards against stepping past the final state, and handles bidirectional message passing.
+  - **Non-Intrusive Tab Switching**: Monitors `onDidChangeActiveTextEditor` without forcing editor focus or redirecting the user back via `showTextDocument` when they intentionally switch tabs.
+  - **Panel Suppression**: Automatically closes bottom terminal/output panels (`workbench.action.closePanel`) upon clicking Visualize to provide an unobstructed canvas view.
   - `messages.ts`: Strongly typed message protocols (`ExtensionMessage` and `WebviewMessage`) preventing runtime IPC protocol mismatches.
 
 ### 4. The Webview Presentation Layer (`webview/`)
 * **Role**: Runs inside an isolated Chromium iframe in VS Code to render the interactive UI.
 * **Key Components**:
-  - `index.html`: Clean, semantic HTML layout with containers for controls, linked list canvas, terminal output card, pedagogical explanation, and diagnostic banners.
-  - `styles.css`: Strict dark-mode styling utilizing `#0D1117` palette, rounded pill buttons, infinite dot-grid background, zero scrollbars, and terminal card styling.
+  - `index.html`: Clean, semantic HTML layout with containers for controls, linked list/tree canvas, terminal output card, pedagogical explanation, and diagnostic banners.
+  - `styles.css`: Strict dark-mode styling utilizing `#0D1117` palette, rounded pill buttons, infinite dot-grid background, zero scrollbars, terminal card styling, circular tree nodes (`.tree-node-card`), and green pulse visiting animations (`.visiting`).
   - `app.ts`: Client-side rendering and physics simulation engine:
-    - **D3 Force Simulation**: Models pointer connections as elastic distance springs and nodes as repulsive charged particles (`d3.forceManyBody()`, `d3.forceLink()`, `d3.forceCenter()`).
-    - **Interactive Drag & Drop**: Users can click and drag any node card; connecting springs react live.
+    - **Dual-Mode Layout**: Adapts layout based on `snapshot.structureType`:
+      - **Linked List**: D3 force-directed physics simulation (`d3.forceManyBody()`, `d3.forceLink()`, `d3.forceCenter()`) with interactive drag & drop.
+      - **Binary Search Tree**: Fixed-coordinate in-order column and depth layout (`node.treeColumn * 64px`, `node.treeDepth * 70px`), with downward cubic bezier branch arrows clipped to circular node perimeters via `getCirclePerimeterIntersection`.
     - **Pan & Zoom Camera**: Excalidraw-style canvas navigation with Right-Click Pan, Mouse Wheel Zoom (0.35x to 2.5x), Spacebar drag, and double-click to reset.
     - **Live Terminal Card**: Displays real-time output printed by the running C++ program.
 
@@ -135,6 +143,27 @@ When the program executes `std::cout << current->data << " -> ";`:
 2. Accumulates output into `accumulatedTerminalOutput`.
 3. Sends output to the Webview terminal card, streaming the console output live alongside the visual diagram!
 
+### 4. Binary Search Trees (BST) & Traversal Tracing
+SimIDE dynamically switches from linked list to tree mode when it detects `left` and `right` struct members:
+1. **Dynamic Type & Member Resolution**: Inspects the struct type (`Node`, `TreeNode`) directly from user code, avoiding GDB variable cast errors.
+2. **In-Order Horizontal Positioning**: Runs an in-order traversal to compute deterministic horizontal columns (`treeColumn = colIndex++`), guaranteeing that left children always render to the left of their parents and right children render to the right.
+3. **Depth Levels**: Measures hierarchical level from root (`treeDepth`), placing the root at level 0 and subsequent generations at descending levels.
+4. **Visiting Indicator Pulse**: Highlights the node actively being visited during recursive or iterative traversals (`inorder`, `preorder`, `postorder`) with a pulsing green indicator (`.visiting`).
+5. **Caller Frame Root Discovery**: In recursive functions like `insert(root, val)` or `inorder(root)`, if a base-case stack frame receives `root == nullptr`, `StateExtractor` walks up the call stack to find the original root pointer in `main()` so the full tree topology is never lost during recursive steps.
+6. **Case A Deletion Support**: Accurately tracks leaf and single-child node deletions, unlinking parent branch pointers and updating heap allocation tracking.
+
+### 5. Multi-File Switching & Non-Intrusive Active Editor Tracking
+In multi-file educational workspaces (e.g., alternating between `linked-list.cpp` and `bst-traversals.cpp`):
+1. **Active Editor Registration**: `CppCompiler.setLastActiveSourceFile` and `LinkedListViewProvider` track the focused C++ file across visible editors and tab focus changes.
+2. **Zero-Redirect Tab Switching**: When users open or click another tab, `LinkedListViewProvider` updates its internal active file pointer without invoking `vscode.window.showTextDocument` to force-redirect the user back to the old file.
+3. **Isolated Binary Compilation**: Each source file compiles to its own isolated target in `.debug-mentor/`, preserving independent build states and executables.
+
+### 6. Zero-Distraction Debugging & Panel Suppression
+To maximize visual screen real estate on smaller laptop screens:
+1. **Debug Console Suppression**: `DebugSessionManager` configures `internalConsoleOptions: 'neverOpen'` so VS Code's native Debug Console does not steal focus or pop open on every breakpoint.
+2. **AI Sidebar Suppression**: Suppresses third-party and background AI agent sidebars when starting a debugging session.
+3. **Terminal Auto-Dismissal**: When the user clicks `[ Visualize ]`, `LinkedListViewProvider` dispatches `workbench.action.closePanel`, dismissing bottom task output panels and leaving the editor and SimIDE simulation canvas front and center.
+
 ---
 
 ## Memory Address Virtualization & Stable IDs
@@ -154,7 +183,7 @@ Memory Address   ===>  Stable ID
 0x74a3f0         ===>  node_2
 0x750bf0         ===>  node_3
 ```
-- When a pointer points to `0x74a3f0`, the snapshot records `nextId: "node_2"`.
+- When a pointer points to `0x74a3f0`, the snapshot records `nextId: "node_2"` (or `leftId` / `rightId` for trees).
 - The Webview uses `node_1`, `node_2` as DOM and SVG element IDs. When a node moves or updates, its physics body and drag positions remain completely stable.
 
 ---
@@ -170,9 +199,9 @@ stateDiagram-v2
     Screen2_Loading --> Screen8_Error: Compile/Launch Failed
     Screen8_Error --> Screen2_Loading: Click [ Retry ]
     Screen2_Loading --> Screen3_PausedInitial: Debugger Pauses at main()
-    Screen3_PausedInitial --> Screen4_NodesCreated: Allocations (new Node)
-    Screen4_NodesCreated --> Screen5_NodesLinked: Pointer Linking (head->next = second)
-    Screen5_NodesLinked --> Screen6_TraversalOrReversal: Traversing / Reversing (curr = curr->next)
+    Screen3_PausedInitial --> Screen4_NodesCreated: Allocations (new Node / TreeNode)
+    Screen4_NodesCreated --> Screen5_NodesLinked: Pointer Linking (head->next or root->left/right)
+    Screen5_NodesLinked --> Screen6_TraversalOrReversal: Traversing / Reversing / BST Traversal
     Screen6_TraversalOrReversal --> Screen7_DeletionOrFinal: Deletion / Program Complete
     Screen7_DeletionOrFinal --> Screen1_Initial: Reset / Restart
 ```
@@ -181,12 +210,12 @@ stateDiagram-v2
 | :--- | :--- | :--- |
 | **1. Initial IDE State** | Hero icon, subtitle, `[ ▶ Visualize ]` pill button | Ready to begin session. |
 | **2. Loading State** | Animated spinner, progress text | *"Preparing C++ program..."* → *"Compiling source..."* → *"Starting debugger..."* |
-| **3. Initial Paused State** | Empty canvas message or `head ──▶ nullptr`, step 1 indicator | *"Program paused at start of main(). Click Next to allocate and initialize the linked list."* |
-| **4. Nodes Allocated** | Detached cards visible in the canvas with spring links | *"`first` pointer created, pointing to a new Node containing 10."* |
-| **5. Nodes Connected** | SVG arrows connect node cards with spring recoil | *"The node containing 10 now points to the node containing 20."* |
-| **6. Traversal / Loop** | Pointer badges move across nodes, live output in Terminal | *"Pointer 'current' advanced to node containing 20. Printed to terminal: '20 -> '"* |
-| **7. Reversal / Deletion** | Pointers flip or bypassed node is deleted via `delete` | *"Freed heap memory for node containing 20 via delete."* or *"Node unlinked and reversed."* |
-| **8. Final State** | Complete linked list remains on canvas, Next disabled | *"The linked list is complete: head → 10 → 20 → 30 → nullptr. Program execution finished."* |
+| **3. Initial Paused State** | Empty canvas message or `head / root ──▶ nullptr`, step 1 indicator | *"Program paused at start of main(). Click Next to allocate and initialize."* |
+| **4. Nodes Allocated** | Detached cards in staging row | *"`first` pointer created, pointing to a new Node containing 10."* or *"Allocated new tree node containing 50."* |
+| **5. Nodes Connected** | SVG arrows connect node cards | *"Node 10 now points to node 20."* or *"Node 30 attached as left child of 50."* |
+| **6. Traversal / Loop** | Pointer badges move across nodes, visiting pulse in BST, live output in Terminal | *"Pointer 'current' advanced to node 20."* or *"Visiting node 30 during inorder traversal. Printed: '30 '"* |
+| **7. Reversal / Deletion** | Pointers flip or bypassed node is deleted via `delete` | *"Freed heap memory for node containing 20 via delete."* or *"Case A deletion: removed leaf node 20."* |
+| **8. Final State** | Complete structure remains on canvas, Next disabled | *"The linked list / tree is complete. Program execution finished."* |
 | **9. Error State** | Danger icon, error message, diagnostic stack, `[ Retry ]` button | Displays actionable troubleshooting details if compilation or debugger fails. |
 
 ---

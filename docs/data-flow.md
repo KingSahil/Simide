@@ -182,3 +182,65 @@ sequenceDiagram
     Webview->>WebviewApp: Render previous nodes, rewind terminal text & show banner
     WebviewApp-->>User: Historical state shown (GDB remains untouched!)
 ```
+
+---
+
+## 6. Binary Search Tree (BST) Traversal & Visiting Node Flow
+
+When running recursive traversals (such as `inorder(root)` or `caseA` deletions) on a Binary Search Tree:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant ExecCtrl as ExecutionController
+    participant GDB as Native GDB / LLDB
+    participant Extractor as StateExtractor
+    participant Explainer as ExplanationGenerator
+    participant Webview as Webview (app.ts)
+
+    User->>ExecCtrl: Clicks [ Next ]
+    ExecCtrl->>GDB: Step line inside inorder(TreeNode* root)
+    GDB-->>Extractor: Paused at cout << root->data << " ";
+    Extractor->>Extractor: Detects active tree structure (left & right pointers)
+    Extractor->>Extractor: BFS traverseTree() collects all tree nodes from root
+    Extractor->>Extractor: Calculates in-order columns (treeColumn) & depth levels (treeDepth)
+    Extractor->>Extractor: Marks current node as isVisiting = true
+    Extractor->>Extractor: Captures cout output "20 "
+    Extractor->>Explainer: changeType: 'tree_traversal_visit'
+    Explainer-->>Extractor: "Visiting node containing 20 during inorder traversal. Printed: '20 '"
+    Extractor-->>Webview: Snapshot with structureType: 'tree', nodes with treeColumn/treeDepth
+    Webview->>Webview: Applies .tree-node-card.visiting green pulse animation
+    Webview->>Webview: Clips SVG branch arrows to node perimeter via getCirclePerimeterIntersection()
+    Webview-->>User: Visiting node pulses green as terminal prints value!
+```
+
+---
+
+## 7. Multi-File Switching Lifecycle
+
+When switching between different C++ source files (e.g. from `linked-list.cpp` to `bst-traversals.cpp`):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant VSCode as VS Code Editor Window
+    participant Provider as LinkedListViewProvider
+    participant Compiler as CppCompiler
+    participant Webview as Webview UI
+
+    User->>VSCode: Clicks tab: bst-traversals.cpp
+    VSCode->>Provider: onDidChangeActiveTextEditor(editor)
+    Provider->>Compiler: setLastActiveSourceFile(bst-traversals.cpp)
+    Note over Provider: Deliberately does NOT call showTextDocument<br/>(avoids redirect loop back to previous tab!)
+    
+    User->>Webview: Clicks [ Visualize ]
+    Webview->>Provider: postMessage({ command: 'visualize' })
+    Provider->>Compiler: resolveSourceFile() -> bst-traversals.cpp
+    Provider->>VSCode: vscode.commands.executeCommand('workbench.action.closePanel')
+    Note over VSCode: Dismisses bottom terminal panel for clean canvas
+    Provider->>Compiler: compile(bst-traversals.cpp)
+    Compiler-->>Provider: .debug-mentor/bst-traversals.exe
+    Provider->>Webview: Starts BST visualization session cleanly!
+```

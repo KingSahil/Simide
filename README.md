@@ -66,6 +66,9 @@ Learning pointer-based data structures in C++ is notoriously challenging:
 - **Excalidraw-Style Infinite Pan & Zoom**: Navigate complex structures with Right-Click Pan, Mouse Wheel Zoom (0.35x to 2.5x), Spacebar drag, double-click reset, and a quick `↺ Reset` layout button—with zero clunky scrollbars!
 - **Detached Allocation Tracking**: Uniquely tracks local unlinked node allocations before they are linked into `head`, helping students visualize the moment memory is allocated versus when it is connected.
 - **C Runtime (CRT) Boundary Protection**: Detects when execution reaches `return 0;` or C runtime exit routines, cleanly finishing execution and preserving the completed linked list diagram without flickering.
+- **Binary Search Tree (BST) Simulation**: Automatic tree mode detection, calculating in-order horizontal layout columns and depth levels, and animating active visiting nodes during traversals.
+- **Seamless Multi-File Switching**: Effortlessly switch between different C++ files (e.g., from linked lists to BSTs); SimIDE automatically tracks the active file, compiles the correct file, and eliminates tab-switch hijacking.
+- **Zero-Distraction Debugging**: Automatically suppresses internal debug console popups, build task terminals, and third-party AI sidebars, keeping your workspace clean.
 - **Non-Destructive Time Travel**: Review past states by clicking **Previous** without terminating or corrupting the running C++ process. Step forward again to seamlessly resume live debugging.
 
 ---
@@ -78,6 +81,7 @@ SimIDE is tested and verified on real-world C++ patterns:
 2. **LeetCode Problems**: Three-pointer in-place reversals (`prev`, `curr`, `forward`) using standard `ListNode` structures ([`examples/leetcode-206-reverse.cpp`](file:///c:/Projects/vscode-extension/examples/leetcode-206-reverse.cpp)).
 3. **GeeksforGeeks Patterns**: Double pointer references (`Node** head_ref`) and key deletion with heap memory management (`delete temp`) ([`examples/gfg-push-delete.cpp`](file:///c:/Projects/vscode-extension/examples/gfg-push-delete.cpp)).
 4. **Object-Oriented Programming (OOP)**: Encapsulated linked lists with C++ classes, member methods (`insertAtHead`, `display`), and `this` pointer resolution ([`examples/oop-linked-list.cpp`](file:///c:/Projects/vscode-extension/examples/oop-linked-list.cpp)).
+5. **Binary Search Trees (BST)**: Dynamic tree root tracking, insertion, in-order/pre-order/post-order traversals, visiting node highlighting, and Case A deletion (leaf & single-child nodes) ([`examples/bst-traversals.cpp`](file:///c:/Projects/vscode-extension/examples/bst-traversals.cpp)).
 
 ---
 
@@ -249,6 +253,7 @@ Explore our ready-to-run C++ programs in [`examples/`](file:///c:/Projects/vscod
 | **[`leetcode-206-reverse.cpp`](file:///c:/Projects/vscode-extension/examples/leetcode-206-reverse.cpp)** | LeetCode 206 | In-place iterative pointer reversal (`prev`, `curr`, `forward`). |
 | **[`gfg-push-delete.cpp`](file:///c:/Projects/vscode-extension/examples/gfg-push-delete.cpp)** | GeeksforGeeks | Double pointers (`Node** head_ref`) and heap memory freeing (`delete`). |
 | **[`oop-linked-list.cpp`](file:///c:/Projects/vscode-extension/examples/oop-linked-list.cpp)** | OOP C++ | `class LinkedList`, member methods, and `this` pointer resolution. |
+| **[`bst-traversals.cpp`](file:///c:/Projects/vscode-extension/examples/bst-traversals.cpp)** | Binary Search Tree | BST insertion, traversals, visiting indicators, and Case A deletion (leaf/single-child). |
 
 ---
 
@@ -290,9 +295,10 @@ npm test
 | **Test 3: Pedagogical Engine** | Verifies explanations for creation, linking, deletion, traversal & output | **PASSED** |
 | **Test 4: Snapshot History** | Verifies non-destructive `prev()` and `nextHistory()` time travel | **PASSED** |
 | **Test 5: Robust Pointer Parsing** | Verifies AST parsing across LeetCode, GFG, and OOP paradigms | **PASSED** |
-| **Test 6: Compilation Matrix** | Compiles `leetcode-206-reverse.cpp`, `gfg-push-delete.cpp`, and `oop-linked-list.cpp` | **PASSED** |
+| **Test 6: Compilation Matrix** | Compiles `leetcode-206-reverse.cpp`, `gfg-push-delete.cpp`, `oop-linked-list.cpp`, and `bst-traversals.cpp` | **PASSED** |
 | **Test 7: Real GDB Stepping** | Steps through C++ binary line-by-line and validates runtime values | **PASSED** |
 | **Test 8: Real GDB LeetCode Reversal** | Verifies real runtime execution of in-place reversal (3 → 2 → 1) | **PASSED** |
+| **Test 9: Real GDB BST Traversals** | Verifies BST runtime stops, tree pointer chasing, and Case A deletions | **PASSED** |
 
 ---
 
@@ -317,7 +323,7 @@ On Windows, a running debugger locks the output `.exe`. SimIDE automatically det
 - [x] **Milestone 1**: Singly Linked List visualization with GDB integration, spring-damper physics canvas, pan/zoom camera, dynamic pointer discovery, and time-travel history.
 - [x] **Milestone 2**: In-place pointer reversals (LeetCode 206), heap deletions (`delete`), OOP classes, and live program output terminal.
 - [ ] **Milestone 3**: Doubly Linked Lists with bidirectional SVG arrows (`prev` and `next`).
-- [ ] **Milestone 4**: Binary Search Trees (BST) with tree layout algorithm and branch visualization.
+- [x] **Milestone 4**: Binary Search Trees (BST) with in-order column depth layout, preorder/inorder/postorder traversals, visiting badges, and Case A deletions.
 - [ ] **Milestone 5**: Stacks and Queues with push/pop animations.
 - [ ] **Milestone 6**: Memory leak detection highlighting unreferenced heap allocations that fall out of scope without `delete`.
 

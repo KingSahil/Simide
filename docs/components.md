@@ -36,7 +36,8 @@ c:\Projects\vscode-extension\
 │   ├── linked-list.cpp              # Singly linked list with printList traversal
 │   ├── leetcode-206-reverse.cpp     # LeetCode 206 in-place three-pointer reversal
 │   ├── gfg-push-delete.cpp          # GeeksforGeeks push(&head_ref) and deleteNode
-│   └── oop-linked-list.cpp          # Object-Oriented C++ class LinkedList
+│   ├── oop-linked-list.cpp          # Object-Oriented C++ class LinkedList
+│   └── bst-traversals.cpp           # BST insertion, traversals, visiting indicators & Case A deletion
 ├── esbuild.js                       # Fast build script bundling extension and webview
 └── package.json                     # Extension manifest, commands & dependencies
 ```
@@ -69,13 +70,14 @@ c:\Projects\vscode-extension\
   - **Output Sandboxing**: Places executables in a `.debug-mentor/` directory inside the source file's folder.
   - **Flag Selection**: Compiles with `-g -O0 -std=c++17`. Disabling optimization (`-O0`) guarantees that local node pointers are not optimized away into CPU registers.
   - **Windows Executable Lock Handling**: On Windows, running binaries cannot be overwritten if still held open by GDB. `CppCompiler` checks if the output file is locked; if locked, it generates a timestamped alternative (`linked-list_1792051440937.exe`) to prevent compiler crashes.
+  - **Active Editor File Tracking**: Exposes `setLastActiveSourceFile()`, `getLastActiveSourceFile()`, and `resolveSourceFile()`. When switching between files (e.g. `linked-list.cpp` and `bst-traversals.cpp`), it dynamically inspects `vscode.window.activeTextEditor` and `vscode.window.visibleTextEditors` to compile whichever file the user is currently working on.
 
 ### [`src/debug/debugSessionManager.ts`](file:///c:/Projects/vscode-extension/src/debug/debugSessionManager.ts)
 * **What it does**: Finds the native debugger and configures VS Code's `cppdbg` debug adapter.
 * **Key Features**:
   - **Debugger Discovery**: Looks in system PATH and common installation directories (MinGW-w64, MSYS2, LLVM) for `gdb.exe` or `lldb.exe`.
   - **Dynamic Launch Configuration**: Generates a runtime `vscode.DebugConfiguration` object with `stopAtEntry: true` and `-enable-pretty-printing`.
-  - **`suppressDebugView: true`**: Launches debugging without aggressively forcing open the default VS Code Call Stack / Breakpoints sidebars, keeping user focus on SimIDE's simulation.
+  - **Distraction-Free Launch**: Sets `suppressDebugView: true` and `internalConsoleOptions: 'neverOpen'`, preventing VS Code's Call Stack sidebar and internal Debug Console from aggressively stealing focus.
 
 ### [`src/debug/debugAdapterTracker.ts`](file:///c:/Projects/vscode-extension/src/debug/debugAdapterTracker.ts)
 * **What it does**: Intercepts the raw Debug Adapter Protocol (DAP) JSON messages flowing between VS Code and GDB.
@@ -94,13 +96,16 @@ c:\Projects\vscode-extension\
 ### [`src/debug/stateExtractor.ts`](file:///c:/Projects/vscode-extension/src/debug/stateExtractor.ts)
 * **What it does**: The central inspection engine. Extracts variables, resolves structs, tracks multi-function call stacks, emulates terminal output, and manages memory lifetimes.
 * **Extraction Pipeline**:
-  1. **Multi-Function Stack Frame Inspection**: Identifies user-defined functions (`printList`, `reverseList`, `deleteNode`, OOP methods) versus CRT internal routines.
-  2. **Struct & Field Discovery**: Automatically discovers data fields (`data`, `val`) and pointer fields (`next`) across standard and custom struct definitions.
-  3. **Declaration Line Thresholding**: Ignores variables whose declaration line has not yet executed.
-  4. **Pointer Translation**: Reads memory addresses, checks for null (`0x0`, `nullptr`), and maps valid addresses to stable node IDs (`node_1`, `node_2`).
-  5. **Chain Traversal & Detached Detection**: Traverses chains from `head` as well as disconnected pointer variables.
-  6. **Memory Deallocation Tracking**: Detects heap deallocations via `delete` statements, recording freed addresses in `deletedAddresses`.
-  7. **Terminal Output Emulation**: Evaluates `cout` and `printf` statements in real time, appending output to `accumulatedTerminalOutput`.
+  1. **Multi-Function Stack Frame Inspection**: Identifies user-defined functions (`printList`, `reverseList`, `deleteNode`, `insert`, `inorder`, OOP methods) versus CRT internal routines.
+  2. **Struct & Field Discovery**: Automatically discovers data fields (`data`, `val`) and pointer fields (`next` for lists, `left` and `right` for trees) across struct definitions.
+  3. **Structure Type Detection**: Assigns `structureType: 'tree'` if `left` and `right` pointer fields exist; otherwise defaults to `'linked_list'`.
+  4. **Uninitialized Stack Pointer Protection**: Validates `rawLine > declLine` and enforces `hasSteppedPastFirstPointerDecl` so uninitialized stack garbage is never parsed as real nodes on Step 1.
+  5. **Pointer Translation**: Reads memory addresses, checks for null (`0x0`, `nullptr`), and maps valid addresses to stable node IDs (`node_1`, `node_2`).
+  6. **Tree Topology & In-Order Column Calculation**: For trees, executes BFS `traverseTree(rootAddr)` to harvest all reachable nodes, measures `treeDepth`, and applies in-order traversal to calculate deterministic `treeColumn` positions.
+  7. **Recursive Stack Frame Root Resolution**: In recursive functions, looks up caller frames if the current frame receives a by-value `nullptr` parameter, preventing the tree root from vanishing.
+  8. **GDB Error String Filtering**: Filters out internal GDB error responses (such as `-var-create: unable to create variable object`) from being parsed as integer values.
+  9. **Memory Deallocation Tracking**: Detects heap deallocations via `delete` statements, recording freed addresses in `deletedAddresses` (supporting both linked-list node deletions and BST Case A deletions).
+  10. **Terminal Output Emulation**: Evaluates `cout` and `printf` statements in real time, appending output to `accumulatedTerminalOutput`.
 
 ---
 
@@ -109,6 +114,7 @@ c:\Projects\vscode-extension\
 ### [`src/visualization/linkedListModel.ts`](file:///c:/Projects/vscode-extension/src/visualization/linkedListModel.ts)
 * **What it does**: Defines pure data models used across the extension and webview.
 * **Core Interfaces**:
+  - `StructureType`: `'linked_list' | 'tree'`.
   - `ChangeType`:
     ```typescript
     export type ChangeType =
@@ -121,7 +127,27 @@ c:\Projects\vscode-extension\
       | 'pointer_moved'
       | 'print'
       | 'step'
-      | 'final';
+      | 'final'
+      | 'tree_root_assigned'
+      | 'tree_node_created'
+      | 'tree_child_linked'
+      | 'tree_traversal_visit';
+    ```
+  - `ListNode`:
+    ```typescript
+    export interface ListNode {
+      id: string;
+      value: number | string;
+      address: string;
+      nextId: string | null;
+      // Tree extensions:
+      leftId?: string | null;
+      rightId?: string | null;
+      treeDepth?: number;
+      treeColumn?: number;
+      isRoot?: boolean;
+      isVisiting?: boolean;
+    }
     ```
   - `LinkedListSnapshot`:
     ```typescript
@@ -130,6 +156,7 @@ c:\Projects\vscode-extension\
       source?: SourceLocation;
       hasHead: boolean;
       headId: string | null;
+      structureType?: StructureType;
       nodes: ListNode[];
       pointers?: PointerVariable[];
       explanation: string;
@@ -144,10 +171,11 @@ c:\Projects\vscode-extension\
 * **What it does**: A pedagogical teacher in code. Generates natural, understandable explanations for every mutation.
 * **Key Handlers**:
   - **Node Creation**: *"first pointer created, pointing to a new Node containing 10."*
-  - **Head Assignment & Aliasing**: *"head points to the node containing 10 (aliasing pointer 'first' at address 0x74a3b0)."*
-  - **Linking**: *"The node containing 10 now points to the node containing 20."*
+  - **Head / Root Assignment**: *"head points to the node containing 10."* or *"Assigned node containing 50 as the root of the Binary Search Tree."*
+  - **Linking**: *"The node containing 10 now points to the node containing 20."* or *"Node containing 30 attached as left child of 50."*
+  - **Tree Traversal Visits**: *"Visiting node containing 30 during inorder traversal."*
   - **Node Bypassed**: *"Node containing 10 unlinked from node 20 and now points directly to node 30 (bypassing node 20)."*
-  - **Node Deleted**: *"Freed heap memory for node containing 20 ('second') via delete."*
+  - **Node Deleted**: *"Freed heap memory for node containing 20 ('second') via delete."* or *"Case A deletion: removed leaf node containing 20."*
   - **Pointer Traversal**: *"Pointer 'curr' advanced to node containing 20."*
   - **Terminal Output**: *"Printed to terminal: "10 -> ". Program output: 10 -> "*
 
@@ -167,12 +195,14 @@ c:\Projects\vscode-extension\
 ### [`src/sidebar/linkedListViewProvider.ts`](file:///c:/Projects/vscode-extension/src/sidebar/linkedListViewProvider.ts)
 * **What it does**: Bridges the VS Code extension host with the Webview HTML UI.
 * **Key Features**:
-  - Sets active source file in `StateExtractor`.
+  - Sets active source file in `StateExtractor` and synchronizes with `CppCompiler`.
+  - **Non-Redirecting Editor Tab Listener**: Listens to `onDidChangeActiveTextEditor` to update current source paths, but deliberately avoids calling `showTextDocument` when the user navigates between files, eliminating tab redirection loops.
+  - **Panel Dismissal**: Automatically closes the bottom panel (`workbench.action.closePanel`) upon clicking Visualize.
   - Guards against overstepping: if `changeType === 'final'`, disables **Next** and **Continue** to prevent entering C runtime cleanup routines.
   - Injects compiled `webview.js` and `webview.css` bundles into `webview.html`.
   - Dispatches `postMessage` calls with `ExtensionMessage` types.
   - Handles incoming user button clicks (`visualize`, `next`, `prev`, `restart`, `retry`).
-  - **Historical Line Highlighting**: When navigating past snapshots, decorates the relevant source code line in the VS Code editor using a blue dashed border.
+  - **Historical Line Highlighting**: When navigating past snapshots, decorates the relevant source code line in the VS Code editor using a blue dashed border (`updateEditorActiveLineHighlight(snap, false)`).
 
 ### [`src/sidebar/messages.ts`](file:///c:/Projects/vscode-extension/src/sidebar/messages.ts)
 * **What it does**: Discriminated union types defining all IPC communication between Extension and Webview (`WebviewMessage` and `ExtensionMessage`).
@@ -197,17 +227,23 @@ c:\Projects\vscode-extension\
   5. Error View: Diagnostic title, scrollable error log, and `[ Retry ]` button.
 
 ### [`webview/styles.css`](file:///c:/Projects/vscode-extension/webview/styles.css)
-* **What it does**: Dark-mode design system, dot-grid canvas, and terminal styling.
+* **What it does**: Dark-mode design system, dot-grid canvas, terminal styling, and BST components.
 * **Design Principles**:
   - Color palette matches VS Code's dark theme: Background `#0D1117`, Cards `#151B23`, Borders `#2A3441`.
+  - Circular tree nodes: `.tree-node-card` (46px diameter circle, centered value display).
+  - Visiting indicator: `.tree-node-card.visiting` with glowing green pulse animation.
+  - Staging row: Detached unlinked nodes styled with dashed amber borders in staging row.
   - Terminal styling: Monospace font, dark elevated background, scrollable console output.
   - Dot-grid viewport: `radial-gradient(#202936 1.2px, transparent 1.2px)` with 16px grid spacing.
   - Zero scrollbars on viewport with intuitive grab/grabbing cursors.
 
 ### [`webview/app.ts`](file:///c:/Projects/vscode-extension/webview/app.ts)
-* **What it does**: Client-side rendering, D3 force physics simulation, terminal output updater, and infinite canvas camera.
+* **What it does**: Client-side rendering, D3 force physics simulation, BST tree geometry, terminal output updater, and infinite canvas camera.
 * **Key Features**:
-  - **D3 Force Simulation**: Uses `d3.forceManyBody()`, `d3.forceLink()`, and `d3.forceCenter()` to maintain natural spacing between nodes and badges.
+  - **Dual Structure Support**:
+    - **Linked List Mode**: Uses `d3.forceManyBody()`, `d3.forceLink()`, and `d3.forceCenter()` for spring-damper node connections and interactive dragging.
+    - **Tree Mode**: Computes deterministic tree coordinates using in-order columns (`node.treeColumn * 64px`) and depth levels (`node.treeDepth * 70px`), placing detached nodes in a top staging area.
+  - **Circular Perimeter Arrow Clipping**: Uses `getCirclePerimeterIntersection()` to anchor smooth downward cubic bezier branch arrows precisely to the circular boundaries of parent and child tree nodes.
   - **Link Filtering**: Ensures only links between currently active physics bodies are passed to the simulation (`validLinks`), preventing D3 crash edge-cases during deletions.
   - **Live Terminal Updates**: Updates `#terminalText` live with auto-scrolling to bottom.
   - **Infinite Pan/Zoom Camera**:

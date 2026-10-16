@@ -31,8 +31,11 @@ SimIDE solves this by:
 5. **Rendering a dynamic, interactive physics canvas** in the sidebar featuring spring-damper node connections, smooth SVG pointer arrows, and Excalidraw-style infinite pan & zoom.
 6. **Live-streaming console output** from `std::cout` and `printf` in a dedicated sidebar terminal card.
 7. **Tracking heap memory freeing** via `delete`, visually explaining unlinking, bypassing, and deletions.
-8. **Generating pedagogical teaching explanations** explaining pointer aliasing, heap allocations, and chain mutations.
-9. **Enabling non-destructive time-travel scrubbing**, allowing learners to walk backward and forward through previous snapshots without restarting the C++ process.
+8. **Binary Search Tree (BST) Simulation**: Automatic tree mode detection, non-overlapping in-order column depth layout, visiting node animations, and Case A deletions.
+9. **Seamless Multi-File Switching**: Effortlessly switch between different C++ files without editor tab hijacking or redirect loops.
+10. **Zero-Distraction Debugging**: Automatically suppresses internal debug console popups, build task terminals, and third-party AI sidebars.
+11. **Generating pedagogical teaching explanations** explaining pointer aliasing, heap allocations, tree branching, and chain mutations.
+12. **Enabling non-destructive time-travel scrubbing**, allowing learners to walk backward and forward through previous snapshots without restarting the C++ process.
 
 ---
 

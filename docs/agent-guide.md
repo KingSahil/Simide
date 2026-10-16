@@ -23,7 +23,7 @@ This guide is specifically designed for **AI coding assistants** and automated t
 | Command | What it does | When to run |
 | :--- | :--- | :--- |
 | `npm run compile` | Compiles TypeScript and bundles webview assets via `esbuild.js` into `dist/`. | After modifying any `.ts`, `.html`, or `.css` file. |
-| `npm test` | Runs the full test suite (6 core tests + 2 real GDB headless runtime tests). | Always run to verify changes before concluding tasks! |
+| `npm test` | Runs the full test suite (7 core tests + 2 real GDB headless runtime tests including BST). | Always run to verify changes before concluding tasks! |
 | `npx @vscode/vsce package` | Packages extension into installable `simide-ide-0.1.0.vsix`. | When preparing extension releases. |
 | `npm run watch` | Runs `esbuild` in watch mode for live updates. | During interactive development sessions. |
 
@@ -57,20 +57,37 @@ const args = ['-g', '-O0', '-std=c++17', sourcePath, '-o', executablePath];
 ```
 If `-O1`, `-O2`, or `-O3` are passed, GCC will optimize local temporary pointers directly into CPU registers or inline them, preventing GDB's `Locals` scope from inspecting them.
 
+### Gotcha 6: Uninitialized Stack Pointer Protection (Step 1 Ghost Nodes)
+On Step 1 at `main()`, local pointer variables reside on the stack and hold arbitrary uninitialized garbage memory addresses before their declaration lines execute.
+- **Rule**: [`StateExtractor.hasSteppedPastFirstPointerDecl`](file:///c:/Projects/vscode-extension/src/debug/stateExtractor.ts) verifies whether execution has crossed the declaration line (`rawLine > declLine`). Never parse stack pointer values or evaluate dereferences before their declaration lines have completed!
+
+### Gotcha 7: Recursive Frame Root Resolution in BSTs
+In recursive tree algorithms (like `insert(root, val)` or `inorder(root)`), helper functions pass node pointers by value. When recursion hits a base case (`root == nullptr`), querying `root` in the topmost stack frame yields `0x0`, which would wipe out the entire tree visualization.
+- **Rule**: When `root == nullptr` inside recursive frames, [`StateExtractor.extractTreeNodes`](file:///c:/Projects/vscode-extension/src/debug/stateExtractor.ts) inspects caller stack frames to retrieve the canonical root pointer from `main()`, preserving complete tree topology throughout recursion.
+
+### Gotcha 8: Active Editor vs Visualized File Decoupling
+In multi-file workflows, a user may switch tabs to inspect another file (e.g., from `linked-list.cpp` to `bst-traversals.cpp`).
+- **Rule**: Never call `vscode.window.showTextDocument()` inside `onDidChangeActiveTextEditor`! Doing so creates an inescapable redirect loop that snaps the user's cursor back to the previously active file. Use `updateEditorActiveLineHighlight(snap, false)` with `openIfNotVisible: false`.
+
+### Gotcha 9: Terminal & AI Sidebar Popup Suppression
+When a debug session starts, default VS Code configurations may pop open the Debug Console or bottom terminal panel, and third-party AI extensions may open sidebars that crush the user's workspace layout.
+- **Rule**: Always pass `internalConsoleOptions: 'neverOpen'` and `suppressDebugView: true` in the launch configuration, and invoke `vscode.commands.executeCommand('workbench.action.closePanel')` upon visualization to ensure an unobstructed canvas.
+
 ---
 
 ## 4. Test Suite Map
 
-When running `npm test`, the following 8 validations are executed:
+When running `npm test`, the following 9 validations are executed:
 
 1. **Compiler Detection**: Validates `g++` / `clang++` in PATH.
 2. **Debugger Discovery**: Validates `gdb.exe` in PATH or MinGW.
-3. **Pedagogical Explanation Generator**: Validates all `changeType` cases (creation, linking, deletion, traversal, bypass, terminal print, in-place value update).
+3. **Pedagogical Explanation Generator**: Validates all `changeType` cases (creation, linking, deletion, traversal, bypass, terminal print, in-place value update, BST root/child/traversals).
 4. **SnapshotManager History**: Validates non-destructive time-travel scrubbing.
-5. **StateExtractor Pointer Parsing**: Validates handling of C++ references, type casts, nulls, and user-defined functions.
-6. **Compilation of Real-World Examples**: Compiles `leetcode-206-reverse.cpp`, `gfg-push-delete.cpp`, and `oop-linked-list.cpp`.
+5. **StateExtractor Pointer Parsing**: Validates handling of C++ references, type casts, nulls, BST struct detection, and user-defined functions.
+6. **Compilation of Real-World Examples**: Compiles `leetcode-206-reverse.cpp`, `gfg-push-delete.cpp`, `oop-linked-list.cpp`, and `bst-traversals.cpp`.
 7. **Headless GDB Stepping**: Real line-by-line GDB stepping and state extraction on `linked-list.cpp`.
 8. **Headless GDB LeetCode Reversal**: Real GDB execution of LeetCode 206 `reverseList` validating in-place reversed chain (`3 -> 2 -> 1`).
+9. **Headless GDB BST Traversals**: Real GDB execution of `bst-traversals.cpp` verifying BFS node discovery, preorder/inorder/postorder stepping, and Case A deletions.
 
 ---
 
