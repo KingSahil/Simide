@@ -104,6 +104,8 @@ export class DebugSessionManager {
       cwd: cwd,
       environment: [],
       externalConsole: false,
+      avoidWindowsConsoleRedirection: true,
+      internalConsoleOptions: 'neverOpen',
       MIMode: debuggerInfo.miMode,
       miDebuggerPath: debuggerInfo.path,
       setupCommands: [

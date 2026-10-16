@@ -276,7 +276,10 @@ export class ExplanationGenerator {
       const detachedNodes = currentNodes.filter((n) => n.isDetached);
       if (detachedNodes.length === 0) {
         return {
-          explanation: 'head is initialized to nullptr. The linked list is currently empty.',
+          explanation:
+            structureType === 'tree'
+              ? 'root is initialized to nullptr. The binary tree is currently empty.'
+              : 'head is initialized to nullptr. The linked list is currently empty.',
           changeType: 'init',
         };
       } else {

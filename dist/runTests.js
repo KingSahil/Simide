@@ -295,7 +295,7 @@ var init_explanationGenerator = __esm({
           const detachedNodes = currentNodes.filter((n) => n.isDetached);
           if (detachedNodes.length === 0) {
             return {
-              explanation: "head is initialized to nullptr. The linked list is currently empty.",
+              explanation: structureType === "tree" ? "root is initialized to nullptr. The binary tree is currently empty." : "head is initialized to nullptr. The linked list is currently empty.",
               changeType: "init"
             };
           } else {
@@ -705,14 +705,30 @@ var init_stateExtractor = __esm({
       static isVariableInitialized(varName, rawLine, varDecls, funcRange) {
         const declLines = varDecls.get(varName);
         if (!declLines || declLines.length === 0) {
-          return true;
+          return false;
         }
         const relevantDecls = funcRange ? declLines.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine) : declLines;
         if (relevantDecls.length === 0) {
+          return false;
+        }
+        return relevantDecls.some((l) => rawLine > l);
+      }
+      static hasSteppedPastFirstPointerDecl(rawLine, varDecls, funcRange) {
+        if (!funcRange)
+          return true;
+        const declsInFunc = [];
+        for (const lines of varDecls.values()) {
+          for (const l of lines) {
+            if (l >= funcRange.startLine && l <= funcRange.endLine) {
+              declsInFunc.push(l);
+            }
+          }
+        }
+        if (declsInFunc.length === 0) {
           return true;
         }
-        const executedDecl = relevantDecls.filter((l) => l < rawLine);
-        return executedDecl.length > 0;
+        const minDeclLine = Math.min(...declsInFunc);
+        return rawLine > minDeclLine;
       }
       static getVariableInitLines(sourceFilePath) {
         const decls = this.getVariableDeclarations(sourceFilePath);
@@ -941,7 +957,21 @@ var init_stateExtractor = __esm({
           let hasHead = this.hasInitializedList;
           if (!hasHead) {
             if (isInsideMain) {
-              hasHead = this.isVariableInitialized("head", rawLine, varDecls, funcRange) || this.isVariableInitialized("root", rawLine, varDecls, funcRange) || this.isVariableInitialized("tree", rawLine, varDecls, funcRange);
+              const candidates = structureType === "tree" ? ["root", "tree", "bst", "head", "t", "r"] : ["head", "root", "first", "list", "start", "dummy", "headNode"];
+              let declaredCandidate = null;
+              for (const cand of candidates) {
+                const lines = varDecls.get(cand);
+                const inFunc = funcRange ? lines?.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine) : lines;
+                if (inFunc && inFunc.length > 0) {
+                  declaredCandidate = cand;
+                  break;
+                }
+              }
+              if (declaredCandidate) {
+                hasHead = this.isVariableInitialized(declaredCandidate, rawLine, varDecls, funcRange);
+              } else {
+                hasHead = this.hasSteppedPastFirstPointerDecl(rawLine, varDecls, funcRange);
+              }
             } else {
               hasHead = true;
             }
@@ -1076,6 +1106,9 @@ var init_stateExtractor = __esm({
           const isInMain = isInsideMain;
           if (isInMain) {
             for (const cand of headCandidates) {
+              if (varDecls.has(cand) && !this.isVariableInitialized(cand, rawLine, varDecls, funcRange)) {
+                continue;
+              }
               let valStr = localVars[cand]?.value;
               if (!valStr) {
                 valStr = await evalExpr(cand) || void 0;
@@ -1264,7 +1297,7 @@ var init_stateExtractor = __esm({
               continue;
             }
             if (!varInfo.isArgument) {
-              if (!this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
+              if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
                 continue;
               }
             }
@@ -1456,6 +1489,15 @@ var import_util = require("util");
 var execFileAsync = (0, import_util.promisify)(import_child_process.execFile);
 var CppCompiler = class {
   static cachedCompiler = null;
+  static lastActiveSourceFile = null;
+  static setLastActiveSourceFile(filePath) {
+    if (filePath && fs.existsSync(filePath)) {
+      this.lastActiveSourceFile = filePath;
+    }
+  }
+  static getLastActiveSourceFile() {
+    return this.lastActiveSourceFile;
+  }
   static async findCompiler() {
     if (this.cachedCompiler) {
       return this.cachedCompiler;
@@ -1475,9 +1517,20 @@ var CppCompiler = class {
     const activeEditor = window.activeTextEditor;
     if (activeEditor) {
       const doc = activeEditor.document;
-      if ((doc.languageId === "cpp" || doc.languageId === "c" || doc.fileName.endsWith(".cpp") || doc.fileName.endsWith(".cc")) && fs.existsSync(doc.fileName)) {
+      if ((doc.languageId === "cpp" || doc.languageId === "c" || doc.fileName.endsWith(".cpp") || doc.fileName.endsWith(".cc") || doc.fileName.endsWith(".cxx")) && fs.existsSync(doc.fileName)) {
+        this.lastActiveSourceFile = doc.fileName;
         return doc.fileName;
       }
+    }
+    for (const editor of window.visibleTextEditors) {
+      const doc = editor.document;
+      if ((doc.languageId === "cpp" || doc.languageId === "c" || doc.fileName.endsWith(".cpp") || doc.fileName.endsWith(".cc") || doc.fileName.endsWith(".cxx")) && fs.existsSync(doc.fileName)) {
+        this.lastActiveSourceFile = doc.fileName;
+        return doc.fileName;
+      }
+    }
+    if (this.lastActiveSourceFile && fs.existsSync(this.lastActiveSourceFile)) {
+      return this.lastActiveSourceFile;
     }
     const workspaceFolders = workspace.workspaceFolders;
     if (workspaceFolders && workspaceFolders.length > 0) {
@@ -1682,6 +1735,8 @@ var DebugSessionManager = class {
       cwd,
       environment: [],
       externalConsole: false,
+      avoidWindowsConsoleRedirection: true,
+      internalConsoleOptions: "neverOpen",
       MIMode: debuggerInfo.miMode,
       miDebuggerPath: debuggerInfo.path,
       setupCommands: [
@@ -2044,7 +2099,7 @@ async function runTests() {
   assert.strictEqual(structInfoGfg.nextField, "next");
   const structInfoBst = StateExtractor2.parseStructMembers(bstPath);
   assert.strictEqual(structInfoBst.structureType, "tree");
-  assert.strictEqual(structInfoBst.dataField, "val");
+  assert.strictEqual(structInfoBst.dataField, "data");
   assert.strictEqual(structInfoBst.leftField, "left");
   assert.strictEqual(structInfoBst.rightField, "right");
   console.log("  \u2713 Verified parseStructMembers discovers data/val, next, and BST left/right tree fields");
@@ -2058,10 +2113,10 @@ async function runTests() {
   assert.ok(oopFns.has("display"), "Must detect display");
   const bstFns = StateExtractor2.getUserDefinedFunctions(bstPath);
   assert.ok(bstFns.has("insert"), "Must detect insert");
-  assert.ok(bstFns.has("preorder"), "Must detect preorder");
   assert.ok(bstFns.has("inorder"), "Must detect inorder");
-  assert.ok(bstFns.has("postorder"), "Must detect postorder");
-  console.log("  \u2713 Verified getUserDefinedFunctions discovers helper functions (reverseList, insert, preorder, inorder, postorder)");
+  assert.ok(bstFns.has("findNodeAndParent"), "Must detect findNodeAndParent");
+  assert.ok(bstFns.has("caseA"), "Must detect caseA");
+  console.log("  \u2713 Verified getUserDefinedFunctions discovers helper functions (insert, inorder, findNodeAndParent, caseA)");
   console.log("\n[Test 6] Testing Compilation of All Internet Examples & BST...");
   for (const file of [leetcodePath, gfgPath, oopPath, bstPath]) {
     const res = await CppCompiler.compile(file);

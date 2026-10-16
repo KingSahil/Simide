@@ -25,10 +25,33 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   private registerDebugListeners(): void {
     // Re-apply highlight if student clicks back into editor
     this.disposables.push(
-      vscode.window.onDidChangeActiveTextEditor(() => {
+      vscode.window.onDidChangeActiveTextEditor((editor) => {
+        if (!editor) return;
+        const filePath = editor.document.fileName;
+        if (
+          filePath.endsWith('.cpp') ||
+          filePath.endsWith('.cc') ||
+          filePath.endsWith('.cxx') ||
+          filePath.endsWith('.h') ||
+          filePath.endsWith('.hpp')
+        ) {
+          CppCompiler.setLastActiveSourceFile(filePath);
+        }
+
         const curr = this.snapshotManager.getCurrentSnapshot();
-        if (curr) {
-          this.updateEditorActiveLineHighlight(curr);
+        if (curr && curr.source?.file && DebugSessionManager.getActiveSession()) {
+          const normDoc = editor.document.fileName.replace(/\\/g, '/').toLowerCase();
+          const normSource = curr.source.file.replace(/\\/g, '/').toLowerCase();
+          if (
+            normDoc.endsWith(normSource) ||
+            path.basename(normDoc) === path.basename(normSource)
+          ) {
+            this.updateEditorActiveLineHighlight(curr, false);
+          } else {
+            // Student switched to a different file (e.g. bst-traversals.cpp)
+            // Do NOT redirect or force open the previous file!
+            editor.setDecorations(this.activeLineDecorationType, []);
+          }
         }
       })
     );
@@ -39,6 +62,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         ExecutionController.setPaused(true);
         // Small delay to ensure DAP stack frames are completely populated
         await new Promise((r) => setTimeout(r, 60));
+        vscode.commands.executeCommand('workbench.action.closePanel');
 
         // Inspect call stack to see if we stepped into library or CRT internals
         try {
@@ -277,6 +301,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
 
   public async startVisualization(): Promise<void> {
     this.reveal();
+    await vscode.commands.executeCommand('workbench.action.closePanel');
     if (DebugSessionManager.getActiveSession()) {
       await DebugSessionManager.stopDebugging();
       await new Promise((r) => setTimeout(r, 150));
@@ -410,7 +435,10 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private updateEditorActiveLineHighlight(snapshot: LinkedListSnapshot): void {
+  private updateEditorActiveLineHighlight(
+    snapshot: LinkedListSnapshot,
+    openIfNotVisible: boolean = false
+  ): void {
     const line = snapshot.source?.line;
     const filePath = snapshot.source?.file;
 
@@ -441,7 +469,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    if (!foundEditor && filePath && fs.existsSync(filePath)) {
+    if (!foundEditor && openIfNotVisible && filePath && fs.existsSync(filePath)) {
       vscode.workspace.openTextDocument(filePath).then((doc) => {
         vscode.window.showTextDocument(doc, { preserveFocus: true }).then((editor) => {
           editor.setDecorations(this.activeLineDecorationType, [range]);
@@ -459,7 +487,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
 
   private broadcastState(snapshot: LinkedListSnapshot): void {
     this.reveal();
-    this.updateEditorActiveLineHighlight(snapshot);
+    this.updateEditorActiveLineHighlight(snapshot, true);
     const isHistorical = !!snapshot.isHistorical;
     const isFinal = snapshot.changeType === 'final';
     const isPaused = ExecutionController.status.isPaused;

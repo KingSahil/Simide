@@ -7,12 +7,15 @@
       "request": "launch",
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extension=google.antigravity",
+        "--disable-extension=google.antigravity-code-executor",
         "${workspaceFolder}/examples/linked-list.cpp"
       ],
       "outFiles": [
         "${workspaceFolder}/dist/**/*.js"
       ],
-      "preLaunchTask": "npm: compile"
+      "preLaunchTask": "npm: compile",
+      "internalConsoleOptions": "neverOpen"
     }
   ]
 }

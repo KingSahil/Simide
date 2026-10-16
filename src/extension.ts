@@ -2,9 +2,28 @@ import * as vscode from 'vscode';
 import { LinkedListViewProvider } from './sidebar/linkedListViewProvider';
 import { DebugTrackerFactory } from './debug/debugAdapterTracker';
 import { DebugSessionManager } from './debug/debugSessionManager';
+import { CppCompiler } from './debug/compiler';
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('[SimIDE] Activating SimIDE extension...');
+
+  if (vscode.window.activeTextEditor) {
+    const fn = vscode.window.activeTextEditor.document.fileName;
+    if (fn.endsWith('.cpp') || fn.endsWith('.cc') || fn.endsWith('.cxx')) {
+      CppCompiler.setLastActiveSourceFile(fn);
+    }
+  }
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor) {
+        const fn = editor.document.fileName;
+        if (fn.endsWith('.cpp') || fn.endsWith('.cc') || fn.endsWith('.cxx')) {
+          CppCompiler.setLastActiveSourceFile(fn);
+        }
+      }
+    })
+  );
 
   // Register Webview Provider for the sidebar view
   const provider = new LinkedListViewProvider(context.extensionUri);
@@ -28,7 +47,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Monitor active debug sessions
   context.subscriptions.push(
-    vscode.debug.onDidStartDebugSession((session) => {
+    vscode.debug.onDidStartDebugSession(async (session) => {
       if (
         session.name.includes('SimIDE') ||
         session.name.includes('Debug Mentor') ||
@@ -36,6 +55,25 @@ export function activate(context: vscode.ExtensionContext) {
       ) {
         DebugSessionManager.setActiveSession(session);
         provider.reveal();
+        await vscode.commands.executeCommand('workbench.action.closePanel');
+        setTimeout(() => {
+          vscode.commands.executeCommand('workbench.action.closePanel');
+        }, 200);
+        setTimeout(() => {
+          vscode.commands.executeCommand('workbench.action.closePanel');
+        }, 600);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.onDidOpenTerminal((terminal) => {
+      if (
+        DebugSessionManager.getActiveSession() ||
+        terminal.name.toLowerCase().includes('cppdbg') ||
+        terminal.name.toLowerCase().includes('simide')
+      ) {
+        vscode.commands.executeCommand('workbench.action.closePanel');
       }
     })
   );
@@ -51,6 +89,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Register Commands
   context.subscriptions.push(
     vscode.commands.registerCommand('debug-mentor.visualize', async () => {
+      await vscode.commands.executeCommand('workbench.action.closePanel');
       await vscode.commands.executeCommand('debug-mentor.sidebar.focus');
       await provider.startVisualization();
     })

@@ -122,23 +122,23 @@ async function testBstTraversalsGdb() {
   const gdbCmds = [
     'break main',
     'run',
-    // Line 48: TreeNode* root = nullptr;
+    // Node* root = nullptr;
     'next',
-    // Line 51: root = insert(root, 50);
+    // root = insert(root, 50);
     'next',
-    'print root->val',
-    // Line 52: insert(root, 30);
+    'print root->data',
+    // root = insert(root, 30);
     'next',
-    'print root->left->val',
-    // Line 53: insert(root, 70);
+    'print root->left->data',
+    // root = insert(root, 70);
     'next',
-    'print root->right->val',
+    'print root->right->data',
     // Break inside inorder traversal
     'break inorder',
     'continue',
-    'print root->val',
+    'print root->data',
     'continue',
-    'print root->val',
+    'print root->data',
     'quit',
   ];
 
@@ -152,20 +152,19 @@ async function testBstTraversalsGdb() {
     lines.forEach((l) => console.log('  ' + l.trim()));
 
     // Verify key extractions
-    assert.ok(stdout.includes('= 50'), 'BST Root val should be 50');
-    assert.ok(stdout.includes('= 30'), 'BST Left child val should be 30');
-    assert.ok(stdout.includes('= 70'), 'BST Right child val should be 70');
+    assert.ok(stdout.includes('= 50'), 'BST Root data should be 50');
+    assert.ok(stdout.includes('= 30'), 'BST Left child data should be 30');
+    assert.ok(stdout.includes('= 70'), 'BST Right child data should be 70');
 
     // Run executable directly to verify exact traversal sequence outputs
     const { stdout: progOutput } = await execFileAsync(exePath, []);
-    assert.ok(progOutput.includes('Preorder: 50 30 20 40 70 60 80'), 'Preorder traversal must match');
-    assert.ok(progOutput.includes('Inorder: 20 30 40 50 60 70 80'), 'Inorder sorted BST traversal must match');
-    assert.ok(progOutput.includes('Postorder: 20 40 30 60 80 70 50'), 'Postorder traversal must match');
+    assert.ok(progOutput.includes('Original tree (Inorder): 30 40 50 60 70'), 'Original tree inorder must match');
+    assert.ok(progOutput.includes('Tree after deleting 40: 30 50 60 70'), 'Tree after deleting 40 must match');
+    assert.ok(progOutput.includes('Tree after deleting 70: 30 50 60'), 'Tree after deleting 70 must match');
 
     console.log('\n✓ Verified real GDB runtime stops and tree pointer chasing (root=50, left=30, right=70)');
-    console.log('✓ Verified Preorder: 50 30 20 40 70 60 80');
-    console.log('✓ Verified Inorder (Sorted): 20 30 40 50 60 70 80');
-    console.log('✓ Verified Postorder: 20 40 30 60 80 70 50');
+    console.log('✓ Verified Inorder: 30 40 50 60 70');
+    console.log('✓ Verified Case A Deletion: 40 (leaf) & 70 (single child 60)');
     console.log('=== Real GDB BST Traversals Test PASSED ===\n');
   } finally {
     if (fs.existsSync(scriptPath)) {

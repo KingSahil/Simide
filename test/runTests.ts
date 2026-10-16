@@ -390,7 +390,7 @@ async function runTests() {
 
   const structInfoBst = StateExtractor.parseStructMembers(bstPath);
   assert.strictEqual(structInfoBst.structureType, 'tree');
-  assert.strictEqual(structInfoBst.dataField, 'val');
+  assert.strictEqual(structInfoBst.dataField, 'data');
   assert.strictEqual(structInfoBst.leftField, 'left');
   assert.strictEqual(structInfoBst.rightField, 'right');
   console.log('  ✓ Verified parseStructMembers discovers data/val, next, and BST left/right tree fields');
@@ -409,10 +409,10 @@ async function runTests() {
 
   const bstFns = StateExtractor.getUserDefinedFunctions(bstPath);
   assert.ok(bstFns.has('insert'), 'Must detect insert');
-  assert.ok(bstFns.has('preorder'), 'Must detect preorder');
   assert.ok(bstFns.has('inorder'), 'Must detect inorder');
-  assert.ok(bstFns.has('postorder'), 'Must detect postorder');
-  console.log('  ✓ Verified getUserDefinedFunctions discovers helper functions (reverseList, insert, preorder, inorder, postorder)');
+  assert.ok(bstFns.has('findNodeAndParent'), 'Must detect findNodeAndParent');
+  assert.ok(bstFns.has('caseA'), 'Must detect caseA');
+  console.log('  ✓ Verified getUserDefinedFunctions discovers helper functions (insert, inorder, findNodeAndParent, caseA)');
 
   // Test 6: Compiling all internet examples
   console.log('\n[Test 6] Testing Compilation of All Internet Examples & BST...');

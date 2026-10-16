@@ -465,7 +465,7 @@ export class StateExtractor {
   ): boolean {
     const declLines = varDecls.get(varName);
     if (!declLines || declLines.length === 0) {
-      return true;
+      return false;
     }
 
     // Filter declarations to only those within the current function
@@ -474,12 +474,32 @@ export class StateExtractor {
       : declLines;
 
     if (relevantDecls.length === 0) {
-      return true;
+      return false;
     }
 
     // A variable is only initialized once execution has stepped strictly PAST its declaration line
-    const executedDecl = relevantDecls.filter((l) => l < rawLine);
-    return executedDecl.length > 0;
+    return relevantDecls.some((l) => rawLine > l);
+  }
+
+  public static hasSteppedPastFirstPointerDecl(
+    rawLine: number,
+    varDecls: Map<string, number[]>,
+    funcRange: { name: string; startLine: number; endLine: number } | null
+  ): boolean {
+    if (!funcRange) return true;
+    const declsInFunc: number[] = [];
+    for (const lines of varDecls.values()) {
+      for (const l of lines) {
+        if (l >= funcRange.startLine && l <= funcRange.endLine) {
+          declsInFunc.push(l);
+        }
+      }
+    }
+    if (declsInFunc.length === 0) {
+      return true;
+    }
+    const minDeclLine = Math.min(...declsInFunc);
+    return rawLine > minDeclLine;
   }
 
   public static getVariableInitLines(sourceFilePath?: string): Map<string, number> {
@@ -838,10 +858,28 @@ export class StateExtractor {
       let hasHead = this.hasInitializedList;
       if (!hasHead) {
         if (isInsideMain) {
-          hasHead =
-            this.isVariableInitialized('head', rawLine, varDecls, funcRange) ||
-            this.isVariableInitialized('root', rawLine, varDecls, funcRange) ||
-            this.isVariableInitialized('tree', rawLine, varDecls, funcRange);
+          const candidates =
+            structureType === 'tree'
+              ? ['root', 'tree', 'bst', 'head', 't', 'r']
+              : ['head', 'root', 'first', 'list', 'start', 'dummy', 'headNode'];
+
+          let declaredCandidate: string | null = null;
+          for (const cand of candidates) {
+            const lines = varDecls.get(cand);
+            const inFunc = funcRange
+              ? lines?.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine)
+              : lines;
+            if (inFunc && inFunc.length > 0) {
+              declaredCandidate = cand;
+              break;
+            }
+          }
+
+          if (declaredCandidate) {
+            hasHead = this.isVariableInitialized(declaredCandidate, rawLine, varDecls, funcRange);
+          } else {
+            hasHead = this.hasSteppedPastFirstPointerDecl(rawLine, varDecls, funcRange);
+          }
         } else {
           hasHead = true;
         }
@@ -1005,6 +1043,9 @@ export class StateExtractor {
       const isInMain = isInsideMain;
       if (isInMain) {
         for (const cand of headCandidates) {
+          if (varDecls.has(cand) && !this.isVariableInitialized(cand, rawLine, varDecls, funcRange)) {
+            continue;
+          }
           let valStr = localVars[cand]?.value;
           if (!valStr) {
             valStr = (await evalExpr(cand)) || undefined;
@@ -1261,7 +1302,7 @@ export class StateExtractor {
 
         // Variable initialization check
         if (!varInfo.isArgument) {
-          if (!this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
+          if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
             continue;
           }
         }

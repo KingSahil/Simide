@@ -8,7 +8,15 @@
         "kind": "build",
         "isDefault": true
       },
-      "problemMatcher": "$esbuild"
+      "problemMatcher": "$esbuild",
+      "presentation": {
+        "reveal": "never",
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "focus": false,
+        "echo": false
+      }
     }
   ]
 }

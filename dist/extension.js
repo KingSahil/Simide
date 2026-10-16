@@ -50,6 +50,15 @@ var import_util = require("util");
 var execFileAsync = (0, import_util.promisify)(import_child_process.execFile);
 var CppCompiler = class {
   static cachedCompiler = null;
+  static lastActiveSourceFile = null;
+  static setLastActiveSourceFile(filePath) {
+    if (filePath && fs.existsSync(filePath)) {
+      this.lastActiveSourceFile = filePath;
+    }
+  }
+  static getLastActiveSourceFile() {
+    return this.lastActiveSourceFile;
+  }
   static async findCompiler() {
     if (this.cachedCompiler) {
       return this.cachedCompiler;
@@ -69,9 +78,20 @@ var CppCompiler = class {
     const activeEditor = vscode.window.activeTextEditor;
     if (activeEditor) {
       const doc = activeEditor.document;
-      if ((doc.languageId === "cpp" || doc.languageId === "c" || doc.fileName.endsWith(".cpp") || doc.fileName.endsWith(".cc")) && fs.existsSync(doc.fileName)) {
+      if ((doc.languageId === "cpp" || doc.languageId === "c" || doc.fileName.endsWith(".cpp") || doc.fileName.endsWith(".cc") || doc.fileName.endsWith(".cxx")) && fs.existsSync(doc.fileName)) {
+        this.lastActiveSourceFile = doc.fileName;
         return doc.fileName;
       }
+    }
+    for (const editor of vscode.window.visibleTextEditors) {
+      const doc = editor.document;
+      if ((doc.languageId === "cpp" || doc.languageId === "c" || doc.fileName.endsWith(".cpp") || doc.fileName.endsWith(".cc") || doc.fileName.endsWith(".cxx")) && fs.existsSync(doc.fileName)) {
+        this.lastActiveSourceFile = doc.fileName;
+        return doc.fileName;
+      }
+    }
+    if (this.lastActiveSourceFile && fs.existsSync(this.lastActiveSourceFile)) {
+      return this.lastActiveSourceFile;
     }
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (workspaceFolders && workspaceFolders.length > 0) {
@@ -217,6 +237,8 @@ var DebugSessionManager = class {
       cwd,
       environment: [],
       externalConsole: false,
+      avoidWindowsConsoleRedirection: true,
+      internalConsoleOptions: "neverOpen",
       MIMode: debuggerInfo.miMode,
       miDebuggerPath: debuggerInfo.path,
       setupCommands: [
@@ -742,7 +764,7 @@ var ExplanationGenerator = class {
       const detachedNodes = currentNodes.filter((n) => n.isDetached);
       if (detachedNodes.length === 0) {
         return {
-          explanation: "head is initialized to nullptr. The linked list is currently empty.",
+          explanation: structureType === "tree" ? "root is initialized to nullptr. The binary tree is currently empty." : "head is initialized to nullptr. The linked list is currently empty.",
           changeType: "init"
         };
       } else {
@@ -1138,14 +1160,30 @@ var StateExtractor = class {
   static isVariableInitialized(varName, rawLine, varDecls, funcRange) {
     const declLines = varDecls.get(varName);
     if (!declLines || declLines.length === 0) {
-      return true;
+      return false;
     }
     const relevantDecls = funcRange ? declLines.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine) : declLines;
     if (relevantDecls.length === 0) {
+      return false;
+    }
+    return relevantDecls.some((l) => rawLine > l);
+  }
+  static hasSteppedPastFirstPointerDecl(rawLine, varDecls, funcRange) {
+    if (!funcRange)
+      return true;
+    const declsInFunc = [];
+    for (const lines of varDecls.values()) {
+      for (const l of lines) {
+        if (l >= funcRange.startLine && l <= funcRange.endLine) {
+          declsInFunc.push(l);
+        }
+      }
+    }
+    if (declsInFunc.length === 0) {
       return true;
     }
-    const executedDecl = relevantDecls.filter((l) => l < rawLine);
-    return executedDecl.length > 0;
+    const minDeclLine = Math.min(...declsInFunc);
+    return rawLine > minDeclLine;
   }
   static getVariableInitLines(sourceFilePath) {
     const decls = this.getVariableDeclarations(sourceFilePath);
@@ -1374,7 +1412,21 @@ var StateExtractor = class {
       let hasHead = this.hasInitializedList;
       if (!hasHead) {
         if (isInsideMain) {
-          hasHead = this.isVariableInitialized("head", rawLine, varDecls, funcRange) || this.isVariableInitialized("root", rawLine, varDecls, funcRange) || this.isVariableInitialized("tree", rawLine, varDecls, funcRange);
+          const candidates = structureType === "tree" ? ["root", "tree", "bst", "head", "t", "r"] : ["head", "root", "first", "list", "start", "dummy", "headNode"];
+          let declaredCandidate = null;
+          for (const cand of candidates) {
+            const lines = varDecls.get(cand);
+            const inFunc = funcRange ? lines?.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine) : lines;
+            if (inFunc && inFunc.length > 0) {
+              declaredCandidate = cand;
+              break;
+            }
+          }
+          if (declaredCandidate) {
+            hasHead = this.isVariableInitialized(declaredCandidate, rawLine, varDecls, funcRange);
+          } else {
+            hasHead = this.hasSteppedPastFirstPointerDecl(rawLine, varDecls, funcRange);
+          }
         } else {
           hasHead = true;
         }
@@ -1509,6 +1561,9 @@ var StateExtractor = class {
       const isInMain = isInsideMain;
       if (isInMain) {
         for (const cand of headCandidates) {
+          if (varDecls.has(cand) && !this.isVariableInitialized(cand, rawLine, varDecls, funcRange)) {
+            continue;
+          }
           let valStr = localVars[cand]?.value;
           if (!valStr) {
             valStr = await evalExpr(cand) || void 0;
@@ -1697,7 +1752,7 @@ var StateExtractor = class {
           continue;
         }
         if (!varInfo.isArgument) {
-          if (!this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
+          if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
             continue;
           }
         }
@@ -1942,10 +1997,22 @@ var LinkedListViewProvider = class {
   disposables = [];
   registerDebugListeners() {
     this.disposables.push(
-      vscode5.window.onDidChangeActiveTextEditor(() => {
+      vscode5.window.onDidChangeActiveTextEditor((editor) => {
+        if (!editor)
+          return;
+        const filePath = editor.document.fileName;
+        if (filePath.endsWith(".cpp") || filePath.endsWith(".cc") || filePath.endsWith(".cxx") || filePath.endsWith(".h") || filePath.endsWith(".hpp")) {
+          CppCompiler.setLastActiveSourceFile(filePath);
+        }
         const curr = this.snapshotManager.getCurrentSnapshot();
-        if (curr) {
-          this.updateEditorActiveLineHighlight(curr);
+        if (curr && curr.source?.file && DebugSessionManager.getActiveSession()) {
+          const normDoc = editor.document.fileName.replace(/\\/g, "/").toLowerCase();
+          const normSource = curr.source.file.replace(/\\/g, "/").toLowerCase();
+          if (normDoc.endsWith(normSource) || path4.basename(normDoc) === path4.basename(normSource)) {
+            this.updateEditorActiveLineHighlight(curr, false);
+          } else {
+            editor.setDecorations(this.activeLineDecorationType, []);
+          }
         }
       })
     );
@@ -1953,6 +2020,7 @@ var LinkedListViewProvider = class {
       DebugTrackerFactory.onStopped(async (event) => {
         ExecutionController.setPaused(true);
         await new Promise((r) => setTimeout(r, 60));
+        vscode5.commands.executeCommand("workbench.action.closePanel");
         try {
           const stackRes = await event.session.customRequest("stackTrace", {
             threadId: event.threadId,
@@ -2141,6 +2209,7 @@ var LinkedListViewProvider = class {
   }
   async startVisualization() {
     this.reveal();
+    await vscode5.commands.executeCommand("workbench.action.closePanel");
     if (DebugSessionManager.getActiveSession()) {
       await DebugSessionManager.stopDebugging();
       await new Promise((r) => setTimeout(r, 150));
@@ -2246,7 +2315,7 @@ var LinkedListViewProvider = class {
     } catch {
     }
   }
-  updateEditorActiveLineHighlight(snapshot) {
+  updateEditorActiveLineHighlight(snapshot, openIfNotVisible = false) {
     const line = snapshot.source?.line;
     const filePath = snapshot.source?.file;
     if (!line || line <= 0) {
@@ -2268,7 +2337,7 @@ var LinkedListViewProvider = class {
         foundEditor = true;
       }
     }
-    if (!foundEditor && filePath && fs4.existsSync(filePath)) {
+    if (!foundEditor && openIfNotVisible && filePath && fs4.existsSync(filePath)) {
       vscode5.workspace.openTextDocument(filePath).then((doc) => {
         vscode5.window.showTextDocument(doc, { preserveFocus: true }).then((editor) => {
           editor.setDecorations(this.activeLineDecorationType, [range]);
@@ -2284,7 +2353,7 @@ var LinkedListViewProvider = class {
   }
   broadcastState(snapshot) {
     this.reveal();
-    this.updateEditorActiveLineHighlight(snapshot);
+    this.updateEditorActiveLineHighlight(snapshot, true);
     const isHistorical = !!snapshot.isHistorical;
     const isFinal = snapshot.changeType === "final";
     const isPaused = ExecutionController.status.isPaused;
@@ -2341,6 +2410,22 @@ var LinkedListViewProvider = class {
 // src/extension.ts
 function activate(context) {
   console.log("[SimIDE] Activating SimIDE extension...");
+  if (vscode6.window.activeTextEditor) {
+    const fn = vscode6.window.activeTextEditor.document.fileName;
+    if (fn.endsWith(".cpp") || fn.endsWith(".cc") || fn.endsWith(".cxx")) {
+      CppCompiler.setLastActiveSourceFile(fn);
+    }
+  }
+  context.subscriptions.push(
+    vscode6.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor) {
+        const fn = editor.document.fileName;
+        if (fn.endsWith(".cpp") || fn.endsWith(".cc") || fn.endsWith(".cxx")) {
+          CppCompiler.setLastActiveSourceFile(fn);
+        }
+      }
+    })
+  );
   const provider = new LinkedListViewProvider(context.extensionUri);
   context.subscriptions.push(
     vscode6.window.registerWebviewViewProvider(
@@ -2358,10 +2443,24 @@ function activate(context) {
     vscode6.debug.registerDebugAdapterTrackerFactory("*", trackerFactory)
   );
   context.subscriptions.push(
-    vscode6.debug.onDidStartDebugSession((session) => {
+    vscode6.debug.onDidStartDebugSession(async (session) => {
       if (session.name.includes("SimIDE") || session.name.includes("Debug Mentor") || session.type === "cppdbg") {
         DebugSessionManager.setActiveSession(session);
         provider.reveal();
+        await vscode6.commands.executeCommand("workbench.action.closePanel");
+        setTimeout(() => {
+          vscode6.commands.executeCommand("workbench.action.closePanel");
+        }, 200);
+        setTimeout(() => {
+          vscode6.commands.executeCommand("workbench.action.closePanel");
+        }, 600);
+      }
+    })
+  );
+  context.subscriptions.push(
+    vscode6.window.onDidOpenTerminal((terminal) => {
+      if (DebugSessionManager.getActiveSession() || terminal.name.toLowerCase().includes("cppdbg") || terminal.name.toLowerCase().includes("simide")) {
+        vscode6.commands.executeCommand("workbench.action.closePanel");
       }
     })
   );
@@ -2374,6 +2473,7 @@ function activate(context) {
   );
   context.subscriptions.push(
     vscode6.commands.registerCommand("debug-mentor.visualize", async () => {
+      await vscode6.commands.executeCommand("workbench.action.closePanel");
       await vscode6.commands.executeCommand("debug-mentor.sidebar.focus");
       await provider.startVisualization();
     })

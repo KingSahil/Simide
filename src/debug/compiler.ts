@@ -15,6 +15,17 @@ export interface CompilerResult {
 
 export class CppCompiler {
   private static cachedCompiler: string | null = null;
+  private static lastActiveSourceFile: string | null = null;
+
+  public static setLastActiveSourceFile(filePath: string): void {
+    if (filePath && fs.existsSync(filePath)) {
+      this.lastActiveSourceFile = filePath;
+    }
+  }
+
+  public static getLastActiveSourceFile(): string | null {
+    return this.lastActiveSourceFile;
+  }
 
   public static async findCompiler(): Promise<string | null> {
     if (this.cachedCompiler) {
@@ -35,6 +46,7 @@ export class CppCompiler {
   }
 
   public static resolveSourceFile(): string | null {
+    // 1. Check active text editor
     const activeEditor = vscode.window.activeTextEditor;
     if (activeEditor) {
       const doc = activeEditor.document;
@@ -42,14 +54,37 @@ export class CppCompiler {
         (doc.languageId === 'cpp' ||
           doc.languageId === 'c' ||
           doc.fileName.endsWith('.cpp') ||
-          doc.fileName.endsWith('.cc')) &&
+          doc.fileName.endsWith('.cc') ||
+          doc.fileName.endsWith('.cxx')) &&
         fs.existsSync(doc.fileName)
       ) {
+        this.lastActiveSourceFile = doc.fileName;
         return doc.fileName;
       }
     }
 
-    // Fallback to workspace example
+    // 2. Check visible text editors (in case focus shifted to webview/sidebar)
+    for (const editor of vscode.window.visibleTextEditors) {
+      const doc = editor.document;
+      if (
+        (doc.languageId === 'cpp' ||
+          doc.languageId === 'c' ||
+          doc.fileName.endsWith('.cpp') ||
+          doc.fileName.endsWith('.cc') ||
+          doc.fileName.endsWith('.cxx')) &&
+        fs.existsSync(doc.fileName)
+      ) {
+        this.lastActiveSourceFile = doc.fileName;
+        return doc.fileName;
+      }
+    }
+
+    // 3. Check tracked last active C++ source file
+    if (this.lastActiveSourceFile && fs.existsSync(this.lastActiveSourceFile)) {
+      return this.lastActiveSourceFile;
+    }
+
+    // 4. Fallback to workspace example
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (workspaceFolders && workspaceFolders.length > 0) {
       const examplePath = path.join(
