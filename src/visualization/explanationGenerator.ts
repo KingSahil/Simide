@@ -237,7 +237,7 @@ export class ExplanationGenerator {
       const found = currentNodes.find((n) => n.id === currId);
       if (found) {
         chain.push(found);
-        currId = found.nextId;
+        currId = found.nextId ?? null;
       } else {
         break;
       }
@@ -366,10 +366,7 @@ export class ExplanationGenerator {
         const prevPtr = previousSnapshot.pointers?.find((p) => p.name === currPtr.name);
         if (prevPtr && prevPtr.targetNodeId !== currPtr.targetNodeId) {
           if (currPtr.isNull || !currPtr.targetNodeId) {
-            const nullMsg =
-              currentSnapshot.structureType === 'tree'
-                ? `Pointer '${currPtr.name}' updated to nullptr.`
-                : `Pointer '${currPtr.name}' updated to nullptr (reached end of list).`;
+            const nullMsg = `Pointer '${currPtr.name}' updated to nullptr (reached end of list).`;
             return {
               explanation: nullMsg,
               changeType: 'pointer_moved',
@@ -396,10 +393,7 @@ export class ExplanationGenerator {
       const detachedNodes = currentNodes.filter((n) => n.isDetached);
       if (detachedNodes.length === 0) {
         return {
-          explanation:
-            structureType === 'tree'
-              ? 'root is initialized to nullptr. The binary tree is currently empty.'
-              : 'head is initialized to nullptr. The linked list is currently empty.',
+          explanation: 'head is initialized to nullptr. The linked list is currently empty.',
           changeType: 'init',
         };
       } else {

@@ -1737,9 +1737,9 @@ export class StateExtractor {
           if (varDecls.has(cand) && !this.isVariableInitialized(cand, rawLine, varDecls, funcRange)) {
             continue;
           }
-          let valStr = localVars[cand]?.value;
+          let valStr: string | null | undefined = localVars[cand]?.value;
           if (!valStr) {
-            valStr = (await evalExpr(cand)) || undefined;
+            valStr = await evalExpr(cand);
           }
           if (valStr) {
             if (cand === 'head_ref' || cand === 'root_ref' || valStr.includes('**')) {
@@ -1761,7 +1761,7 @@ export class StateExtractor {
       // Prioritize the 'main' frame where the true root/head pointer lives,
       // avoiding local recursive parameters (e.g. insert's 'root') shadowing the real root.
       if (!headAddr) {
-        const mainFrame = frames.find((f) => {
+        const mainFrame = frames.find((f: any) => {
           const name = (f.name || '').toLowerCase();
           const path = f.source?.path || f.source?.name || '';
           return this.isUserSource(path) && (name === 'main' || name.startsWith('main('));
@@ -1816,7 +1816,7 @@ export class StateExtractor {
       // C: Retain previous head address if still valid and not deleted
       if (!headAddr && previousSnapshot?.headId) {
         const prevHeadNode = previousSnapshot.nodes.find((n) => n.id === previousSnapshot.headId);
-        if (prevHeadNode && !this.deletedAddresses.has(prevHeadNode.address)) {
+        if (prevHeadNode && prevHeadNode.address && !this.deletedAddresses.has(prevHeadNode.address)) {
           headAddr = prevHeadNode.address;
         }
       }

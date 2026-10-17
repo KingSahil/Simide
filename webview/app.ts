@@ -380,8 +380,10 @@ function makeDraggable(el: HTMLElement, id: string) {
       d3Node.fy = null;
 
       // Lower alphaTarget and give a lively alpha bump so it bounces back into spring equilibrium
-      simulation.alphaTarget(0);
-      simulation.alpha(0.6).restart();
+      if (simulation) {
+        simulation.alphaTarget(0);
+        simulation.alpha(0.6).restart();
+      }
 
       el.removeEventListener('pointermove', onPointerMove);
       el.removeEventListener('pointerup', onPointerUp);
@@ -1220,7 +1222,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
       const node = nodes.find((n) => n.id === currId);
       if (node) {
         reachableNodes.push(node);
-        currId = node.nextId;
+        currId = node.nextId ?? null;
       } else {
         break;
       }

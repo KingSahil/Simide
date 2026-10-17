@@ -1289,8 +1289,10 @@
         }
         d3Node.fx = null;
         d3Node.fy = null;
-        simulation.alphaTarget(0);
-        simulation.alpha(0.6).restart();
+        if (simulation) {
+          simulation.alphaTarget(0);
+          simulation.alpha(0.6).restart();
+        }
         el.removeEventListener("pointermove", onPointerMove);
         el.removeEventListener("pointerup", onPointerUp);
         el.removeEventListener("pointercancel", onPointerUp);
@@ -1938,7 +1940,7 @@
         const node = nodes.find((n) => n.id === currId);
         if (node) {
           reachableNodes.push(node);
-          currId = node.nextId;
+          currId = node.nextId ?? null;
         } else {
           break;
         }

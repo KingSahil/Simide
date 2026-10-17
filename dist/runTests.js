@@ -248,7 +248,7 @@ var init_explanationGenerator = __esm({
           const found = currentNodes.find((n) => n.id === currId);
           if (found) {
             chain.push(found);
-            currId = found.nextId;
+            currId = found.nextId ?? null;
           } else {
             break;
           }
@@ -354,7 +354,7 @@ var init_explanationGenerator = __esm({
             const prevPtr = previousSnapshot.pointers?.find((p) => p.name === currPtr.name);
             if (prevPtr && prevPtr.targetNodeId !== currPtr.targetNodeId) {
               if (currPtr.isNull || !currPtr.targetNodeId) {
-                const nullMsg = currentSnapshot.structureType === "tree" ? `Pointer '${currPtr.name}' updated to nullptr.` : `Pointer '${currPtr.name}' updated to nullptr (reached end of list).`;
+                const nullMsg = `Pointer '${currPtr.name}' updated to nullptr (reached end of list).`;
                 return {
                   explanation: nullMsg,
                   changeType: "pointer_moved"
@@ -379,7 +379,7 @@ var init_explanationGenerator = __esm({
           const detachedNodes = currentNodes.filter((n) => n.isDetached);
           if (detachedNodes.length === 0) {
             return {
-              explanation: structureType === "tree" ? "root is initialized to nullptr. The binary tree is currently empty." : "head is initialized to nullptr. The linked list is currently empty.",
+              explanation: "head is initialized to nullptr. The linked list is currently empty.",
               changeType: "init"
             };
           } else {
@@ -1737,7 +1737,7 @@ var init_stateExtractor = __esm({
                 }
                 let valStr = localVars[cand]?.value;
                 if (!valStr) {
-                  valStr = await evalExpr(cand) || void 0;
+                  valStr = await evalExpr(cand);
                 }
                 if (valStr) {
                   if (cand === "head_ref" || cand === "root_ref" || valStr.includes("**")) {
@@ -1807,7 +1807,7 @@ var init_stateExtractor = __esm({
             }
             if (!headAddr && previousSnapshot?.headId) {
               const prevHeadNode = previousSnapshot.nodes.find((n) => n.id === previousSnapshot.headId);
-              if (prevHeadNode && !this.deletedAddresses.has(prevHeadNode.address)) {
+              if (prevHeadNode && prevHeadNode.address && !this.deletedAddresses.has(prevHeadNode.address)) {
                 headAddr = prevHeadNode.address;
               }
             }
