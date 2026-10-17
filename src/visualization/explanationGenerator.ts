@@ -41,32 +41,45 @@ export class ExplanationGenerator {
       }
 
       const mainArr = arrays[0];
-      const prevArr = previousSnapshot?.arrays?.find((a) => a.name === mainArr.name);
+      const prevArr = previousSnapshot?.arrays?.find(
+        (a) => a.name === mainArr.name || a.name.endsWith('.' + mainArr.name) || mainArr.name.endsWith('.' + a.name)
+      );
 
       // Case 1: Initial array creation
       if (!prevArr || !previousSnapshot || !previousSnapshot.arrays || previousSnapshot.arrays.length === 0) {
+        const valPreview =
+          mainArr.elements.length > 8
+            ? `[${mainArr.elements.slice(0, 6).map((e) => e.value).join(', ')}, ...] (${mainArr.size} elements)`
+            : `[${mainArr.elements.map((e) => e.value).join(', ')}]`;
         return {
-          explanation: `Initialized array '${mainArr.name}' of size ${mainArr.size}: [${mainArr.elements.map((e) => e.value).join(', ')}].`,
+          explanation: `Initialized array '${mainArr.name}' of size ${mainArr.size}: ${valPreview}.`,
           changeType: 'array_initialized',
         };
       }
 
-      // Case 2: Element swap detection
-      if (prevArr) {
+      // Check all arrays for changes
+      for (const arr of arrays) {
+        const pArr = previousSnapshot?.arrays?.find(
+          (a) => a.name === arr.name || a.name.endsWith('.' + arr.name) || arr.name.endsWith('.' + a.name)
+        );
+        if (!pArr) continue;
+
         const changedIndices: number[] = [];
-        for (let idx = 0; idx < mainArr.elements.length; idx++) {
-          if (prevArr.elements[idx] && prevArr.elements[idx].value !== mainArr.elements[idx].value) {
+        for (let idx = 0; idx < arr.elements.length; idx++) {
+          if (pArr.elements[idx] && pArr.elements[idx].value !== arr.elements[idx].value) {
             changedIndices.push(idx);
           }
         }
+
+        // Case 2: Element swap detection
         if (changedIndices.length === 2) {
           const [i, j] = changedIndices;
           if (
-            prevArr.elements[i].value === mainArr.elements[j].value &&
-            prevArr.elements[j].value === mainArr.elements[i].value
+            pArr.elements[i].value === arr.elements[j].value &&
+            pArr.elements[j].value === arr.elements[i].value
           ) {
             return {
-              explanation: `Swapped elements ${mainArr.name}[${i}] (${mainArr.elements[i].value}) and ${mainArr.name}[${j}] (${mainArr.elements[j].value}).`,
+              explanation: `Swapped elements ${arr.name}[${i}] (${arr.elements[i].value}) and ${arr.name}[${j}] (${arr.elements[j].value}).`,
               changeType: 'array_element_swapped',
             };
           }
@@ -75,15 +88,15 @@ export class ExplanationGenerator {
         // Case 3: Single element update
         if (changedIndices.length === 1) {
           const idx = changedIndices[0];
-          const oldVal = prevArr.elements[idx]?.value;
-          const newVal = mainArr.elements[idx].value;
+          const oldVal = pArr.elements[idx]?.value;
+          const newVal = arr.elements[idx].value;
           return {
-            explanation: `Updated ${mainArr.name}[${idx}] from ${oldVal} to ${newVal} (${mainArr.name}[${idx}] = ${newVal}).`,
+            explanation: `Updated ${arr.name}[${idx}] from ${oldVal} to ${newVal} (${arr.name}[${idx}] = ${newVal}).`,
             changeType: 'array_element_updated',
           };
         } else if (changedIndices.length > 2) {
           return {
-            explanation: `Updated ${changedIndices.length} elements in array '${mainArr.name}'.`,
+            explanation: `Updated ${changedIndices.length} elements in array '${arr.name}'.`,
             changeType: 'array_element_updated',
           };
         }
@@ -94,7 +107,8 @@ export class ExplanationGenerator {
         for (const currPtr of indexPointers) {
           const prevPtr = previousSnapshot.indexPointers.find((p) => p.name === currPtr.name);
           if (prevPtr && prevPtr.targetIndex !== currPtr.targetIndex) {
-            const elemVal = mainArr.elements[currPtr.targetIndex]?.value;
+            const targetArr = arrays.find((a) => a.name === currPtr.targetArrayName) || mainArr;
+            const elemVal = targetArr.elements[currPtr.targetIndex]?.value;
             const valInfo = elemVal !== undefined ? ` (value: ${elemVal})` : '';
             return {
               explanation: `Index pointer '${currPtr.name}' moved to index ${currPtr.targetIndex}${valInfo}.`,
@@ -104,8 +118,13 @@ export class ExplanationGenerator {
         }
       }
 
+      const defaultPreview =
+        mainArr.elements.length > 8
+          ? `[${mainArr.elements.slice(0, 6).map((e) => e.value).join(', ')}, ...] (${mainArr.size} elements)`
+          : `[${mainArr.elements.map((e) => e.value).join(', ')}]`;
+
       return {
-        explanation: `Array '${mainArr.name}' state: [${mainArr.elements.map((e) => e.value).join(', ')}].`,
+        explanation: `Array '${mainArr.name}' state: ${defaultPreview}.`,
         changeType: 'step',
       };
     }

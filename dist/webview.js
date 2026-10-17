@@ -1031,6 +1031,8 @@
   var errorDetails = document.getElementById("errorDetails");
   var badgeDot = document.getElementById("badgeDot");
   var badgeText = document.getElementById("badgeText");
+  var cardTitle = document.getElementById("cardTitle");
+  var canvasHint = document.getElementById("canvasHint");
   var stepChip = document.getElementById("stepChip");
   var graphViewport = document.getElementById("graphViewport");
   var graphCanvas = document.getElementById("graphCanvas");
@@ -1595,10 +1597,26 @@
     }
     const paths = arrowsSvg.querySelectorAll("path");
     paths.forEach((p) => p.remove());
-    const container = document.createElement("div");
-    container.className = "array-board-container";
     const arrays = snapshot.arrays || [];
     const indexPointers = snapshot.indexPointers || [];
+    if (arrays.length === 0) {
+      const emptyMsg = document.createElement("div");
+      emptyMsg.className = "empty-canvas-message";
+      emptyMsg.innerHTML = `
+      <div class="empty-icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#737D8C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+        </svg>
+      </div>
+      <div class="empty-title">Array Initializing</div>
+      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to allocate and initialize the array.</div>
+    `;
+      nodesLayer.appendChild(emptyMsg);
+      return;
+    }
+    const container = document.createElement("div");
+    container.className = "array-board-container";
     for (const arrVar of arrays) {
       const board = document.createElement("div");
       board.className = "array-board";
@@ -1715,6 +1733,22 @@
     nodesLayer.innerHTML = "";
     d3Links = [];
     const activeIds = /* @__PURE__ */ new Set();
+    if (cardTitle) {
+      if (snapshot.structureType === "array") {
+        cardTitle.textContent = "ARRAY";
+      } else if (snapshot.structureType === "tree") {
+        cardTitle.textContent = "BINARY TREE";
+      } else {
+        cardTitle.textContent = "LINKED LIST";
+      }
+    }
+    if (canvasHint) {
+      if (snapshot.structureType === "array") {
+        canvasHint.textContent = "Contiguous memory slots \u2022 Floating index pointers \u2022 Scroll horizontally to explore";
+      } else {
+        canvasHint.textContent = "Drag nodes to move \u2022 Right-click drag to pan \u2022 Scroll to zoom";
+      }
+    }
     if (resetPositions) {
       nodePositions.clear();
       d3NodesMap.clear();

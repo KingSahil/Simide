@@ -32,6 +32,8 @@ const errorDetails = document.getElementById('errorDetails') as HTMLDivElement;
 
 const badgeDot = document.getElementById('badgeDot') as HTMLSpanElement;
 const badgeText = document.getElementById('badgeText') as HTMLSpanElement;
+const cardTitle = document.getElementById('cardTitle') as HTMLSpanElement | null;
+const canvasHint = document.getElementById('canvasHint') as HTMLDivElement | null;
 const stepChip = document.getElementById('stepChip') as HTMLSpanElement;
 const graphViewport = document.getElementById('graphViewport') as HTMLDivElement;
 const graphCanvas = document.getElementById('graphCanvas') as HTMLDivElement;
@@ -780,11 +782,28 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot) {
   const paths = arrowsSvg.querySelectorAll('path');
   paths.forEach((p) => p.remove());
 
-  const container = document.createElement('div');
-  container.className = 'array-board-container';
-
   const arrays = snapshot.arrays || [];
   const indexPointers = snapshot.indexPointers || [];
+
+  if (arrays.length === 0) {
+    const emptyMsg = document.createElement('div');
+    emptyMsg.className = 'empty-canvas-message';
+    emptyMsg.innerHTML = `
+      <div class="empty-icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#737D8C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+        </svg>
+      </div>
+      <div class="empty-title">Array Initializing</div>
+      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to allocate and initialize the array.</div>
+    `;
+    nodesLayer.appendChild(emptyMsg);
+    return;
+  }
+
+  const container = document.createElement('div');
+  container.className = 'array-board-container';
 
   for (const arrVar of arrays) {
     const board = document.createElement('div');
@@ -953,6 +972,24 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
   nodesLayer.innerHTML = '';
   d3Links = [];
   const activeIds = new Set<string>();
+
+  if (cardTitle) {
+    if (snapshot.structureType === 'array') {
+      cardTitle.textContent = 'ARRAY';
+    } else if (snapshot.structureType === 'tree') {
+      cardTitle.textContent = 'BINARY TREE';
+    } else {
+      cardTitle.textContent = 'LINKED LIST';
+    }
+  }
+
+  if (canvasHint) {
+    if (snapshot.structureType === 'array') {
+      canvasHint.textContent = 'Contiguous memory slots • Floating index pointers • Scroll horizontally to explore';
+    } else {
+      canvasHint.textContent = 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
+    }
+  }
 
   if (resetPositions) {
     nodePositions.clear();
