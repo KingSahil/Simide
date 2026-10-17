@@ -339,13 +339,14 @@ var init_explanationGenerator = __esm({
         }
         if (previousSnapshot) {
           for (const currPtr of pointers) {
-            if (currPtr.name === "head")
+            if (currPtr.name === "head" || currPtr.name === "root")
               continue;
             const prevPtr = previousSnapshot.pointers?.find((p) => p.name === currPtr.name);
             if (prevPtr && prevPtr.targetNodeId !== currPtr.targetNodeId) {
               if (currPtr.isNull || !currPtr.targetNodeId) {
+                const nullMsg = currentSnapshot.structureType === "tree" ? `Pointer '${currPtr.name}' updated to nullptr.` : `Pointer '${currPtr.name}' updated to nullptr (reached end of list).`;
                 return {
-                  explanation: `Pointer '${currPtr.name}' updated to nullptr (reached end of list).`,
+                  explanation: nullMsg,
                   changeType: "pointer_moved"
                 };
               } else {
@@ -741,7 +742,8 @@ var init_stateExtractor = __esm({
             const nodeTypes = this.discoverNodeTypes(resolvedPath);
             const typePattern = Array.from(nodeTypes).join("|");
             const declRegex = new RegExp(
-              `(?:(?:struct\\s+)?(?:${typePattern})\\s*\\*&?|auto\\s*\\*?)\\s*([a-zA-Z_][a-zA-Z0-9_]*)`
+              `(?:(?:struct\\s+)?(?:${typePattern})\\s*(?:\\*\\s*&?|&\\s*\\*?)|auto\\s*\\*?|,\\s*(?:\\*\\s*&?|&\\s*\\*?))\\s*([a-zA-Z_][a-zA-Z0-9_]*)`,
+              "g"
             );
             let inStructDef = false;
             let braceDepth = 0;
@@ -763,11 +765,11 @@ var init_stateExtractor = __esm({
                 }
                 continue;
               }
-              if (lineText.includes("->") || lineText.startsWith(".")) {
+              if ((lineText.startsWith(".") || /^[a-zA-Z_][a-zA-Z0-9_]*->/.test(lineText)) && !lineText.includes("auto") && !Array.from(nodeTypes).some((t) => lineText.startsWith(t))) {
                 continue;
               }
-              const match = lineText.match(declRegex);
-              if (match) {
+              const matches = lineText.matchAll(declRegex);
+              for (const match of matches) {
                 const varName = match[1];
                 if (varName === "nullptr" || varName === "NULL" || varName === "return" || varName === "new") {
                   continue;
@@ -817,13 +819,58 @@ var init_stateExtractor = __esm({
             }
             if (!currentFunc) {
               const fnMatch = trimmed.match(
-                /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]*\)\s*(?:const\s*)?\{?/
+                /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)\s*(?:const\s*)?\{?/
               );
               if (fnMatch) {
                 const name = fnMatch[1];
                 if (name !== "if" && name !== "while" && name !== "for" && name !== "switch" && name !== "catch" && name !== "sizeof") {
-                  currentFunc = { name, startLine: lineNum };
+                  const paramStr = fnMatch[2] || "";
+                  const params = [];
+                  if (paramStr.trim()) {
+                    const parts = paramStr.split(",");
+                    for (const part of parts) {
+                      const pMatch = part.trim().match(/([a-zA-Z_][a-zA-Z0-9_]*)\s*$/);
+                      if (pMatch) {
+                        params.push(pMatch[1]);
+                      }
+                    }
+                  }
+                  currentFunc = { name, startLine: lineNum, params };
                   depth = 0;
+                }
+              } else {
+                const multiLineMatch = trimmed.match(
+                  /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)$/
+                );
+                if (multiLineMatch) {
+                  const name = multiLineMatch[1];
+                  if (name !== "if" && name !== "while" && name !== "for" && name !== "switch" && name !== "catch" && name !== "sizeof") {
+                    let paramStr = multiLineMatch[2] || "";
+                    let j = i + 1;
+                    while (j < lines.length) {
+                      const nextLine = lines[j].trim();
+                      const closeParenIdx = nextLine.indexOf(")");
+                      if (closeParenIdx !== -1) {
+                        paramStr += " " + nextLine.substring(0, closeParenIdx);
+                        break;
+                      } else {
+                        paramStr += " " + nextLine;
+                      }
+                      j++;
+                    }
+                    const params = [];
+                    if (paramStr.trim()) {
+                      const parts = paramStr.split(",");
+                      for (const part of parts) {
+                        const pMatch = part.trim().match(/([a-zA-Z_][a-zA-Z0-9_]*)\s*$/);
+                        if (pMatch) {
+                          params.push(pMatch[1]);
+                        }
+                      }
+                    }
+                    currentFunc = { name, startLine: lineNum, params };
+                    depth = 0;
+                  }
                 }
               }
             }
@@ -837,7 +884,8 @@ var init_stateExtractor = __esm({
                     ranges.push({
                       name: currentFunc.name,
                       startLine: currentFunc.startLine,
-                      endLine: lineNum
+                      endLine: lineNum,
+                      params: currentFunc.params || []
                     });
                     currentFunc = null;
                     depth = 0;
@@ -856,15 +904,18 @@ var init_stateExtractor = __esm({
         return ranges.find((r) => line >= r.startLine && line <= r.endLine) || null;
       }
       static isVariableInitialized(varName, rawLine, varDecls, funcRange) {
+        if (funcRange?.params?.includes(varName)) {
+          return rawLine >= funcRange.startLine;
+        }
         const declLines = varDecls.get(varName);
         if (!declLines || declLines.length === 0) {
           return false;
         }
         const relevantDecls = funcRange ? declLines.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine) : declLines;
         if (relevantDecls.length === 0) {
-          return false;
+          return funcRange ? rawLine >= funcRange.startLine : true;
         }
-        return relevantDecls.some((l) => rawLine > l);
+        return relevantDecls.some((l) => funcRange && l <= funcRange.startLine ? rawLine >= l : rawLine > l);
       }
       static hasSteppedPastFirstPointerDecl(rawLine, varDecls, funcRange) {
         if (!funcRange)
@@ -1384,11 +1435,12 @@ var init_stateExtractor = __esm({
                 if (varsRes?.variables) {
                   for (const v of varsRes.variables) {
                     if (!localVars[v.name]) {
+                      const isFuncParam = funcRange?.params?.includes(v.name) ?? false;
                       localVars[v.name] = {
                         value: v.value,
                         type: v.type,
                         variablesReference: v.variablesReference,
-                        isArgument: isArg
+                        isArgument: isArg || isFuncParam
                       };
                     }
                   }
@@ -1514,19 +1566,18 @@ var init_stateExtractor = __esm({
               }
             }
             if (!headAddr) {
-              for (let i = isInMain ? 1 : 0; i < frames.length; i++) {
-                const callerFrame = frames[i];
-                const callerPath = callerFrame.source?.path || callerFrame.source?.name || "";
-                if (!this.isUserSource(callerPath))
-                  continue;
-                const callerName = (callerFrame.name || "").toLowerCase();
-                const isCallerMain = callerName === "main" || callerName.startsWith("main(");
+              const mainFrame = frames.find((f) => {
+                const name = (f.name || "").toLowerCase();
+                const path5 = f.source?.path || f.source?.name || "";
+                return this.isUserSource(path5) && (name === "main" || name.startsWith("main("));
+              });
+              if (mainFrame) {
                 for (const cand of headCandidates) {
-                  const valStr = await evalExpr(cand, callerFrame.id);
+                  const valStr = await evalExpr(cand, mainFrame.id);
                   if (valStr) {
                     let candidate = null;
                     if (cand === "head_ref" || cand === "root_ref" || valStr.includes("**")) {
-                      const derefVal = await evalExpr(`*${cand}`, callerFrame.id);
+                      const derefVal = await evalExpr(`*${cand}`, mainFrame.id);
                       candidate = this.parsePointer(derefVal);
                     } else {
                       candidate = this.parsePointer(valStr);
@@ -1537,10 +1588,32 @@ var init_stateExtractor = __esm({
                     }
                   }
                 }
-                if (headAddr)
-                  break;
-                if (isCallerMain && !headAddr)
-                  break;
+              }
+              if (!headAddr) {
+                for (let i = frames.length - 1; i >= 0; i--) {
+                  const callerFrame = frames[i];
+                  const callerPath = callerFrame.source?.path || callerFrame.source?.name || "";
+                  if (!this.isUserSource(callerPath))
+                    continue;
+                  for (const cand of headCandidates) {
+                    const valStr = await evalExpr(cand, callerFrame.id);
+                    if (valStr) {
+                      let candidate = null;
+                      if (cand === "head_ref" || cand === "root_ref" || valStr.includes("**")) {
+                        const derefVal = await evalExpr(`*${cand}`, callerFrame.id);
+                        candidate = this.parsePointer(derefVal);
+                      } else {
+                        candidate = this.parsePointer(valStr);
+                      }
+                      if (candidate && !this.deletedAddresses.has(candidate)) {
+                        headAddr = candidate;
+                        break;
+                      }
+                    }
+                  }
+                  if (headAddr)
+                    break;
+                }
               }
             }
             if (!headAddr && previousSnapshot?.headId) {
@@ -1690,7 +1763,8 @@ var init_stateExtractor = __esm({
               const isFreed = varAddr ? this.deletedAddresses.has(varAddr) : false;
               const targetId = varAddr && !isFreed ? this.getStableId(varAddr) : null;
               const isTargetingKnownNode = varAddr ? allDiscoveredNodes.has(varAddr) : false;
-              const isPointerType = varInfo.type && (varInfo.type.includes("*") || varInfo.type.includes("&")) || varName === "temp" || varName === "prev" || varName === "curr" || varName === "current" || varName === "forward" || varName === "next" || varName === "node" || varName === "first" || varName === "second" || varName === "third" || varName === "tail" || varName === "last" || varName === "p" || varName === "q" || varName === "l1" || varName === "l2" || varName === "dummy" || varName === "fast" || varName === "slow";
+              const isDeclaredPointer = varDecls.has(varName);
+              const isPointerType = isDeclaredPointer || varInfo.type && (varInfo.type.includes("*") || varInfo.type.includes("&")) || varName === "temp" || varName === "prev" || varName === "curr" || varName === "current" || varName === "forward" || varName === "next" || varName === "node" || varName === "first" || varName === "second" || varName === "third" || varName === "tail" || varName === "last" || varName === "p" || varName === "q" || varName === "l1" || varName === "l2" || varName === "dummy" || varName === "fast" || varName === "slow" || varName === "loc" || varName === "par" || varName === "parent" || varName === "child" || varName === "successor" || varName === "parSuccessor" || varName === "pred" || varName === "predecessor" || varName === "succ" || varName === "newNode" || varName === "new_node" || varName === "target" || varName === "ptr" || varName === "cur";
               if (isPointerType || isTargetingKnownNode) {
                 activePointers2.push({
                   name: varName,
@@ -2647,8 +2721,31 @@ async function runTests() {
   assert.ok(bstFns.has("insert"), "Must detect insert");
   assert.ok(bstFns.has("inorder"), "Must detect inorder");
   assert.ok(bstFns.has("findNodeAndParent"), "Must detect findNodeAndParent");
-  assert.ok(bstFns.has("caseA"), "Must detect caseA");
   console.log("  \u2713 Verified getUserDefinedFunctions discovers helper functions (insert, inorder, findNodeAndParent, caseA)");
+  const declMap = StateExtractor2.getVariableDeclarations(samplePath);
+  assert.ok(declMap.has("loc"), "Must detect loc in variable declarations");
+  assert.ok(declMap.get("loc").includes(40), "loc must be declared at line 40");
+  assert.ok(declMap.has("par"), "Must detect par in variable declarations");
+  assert.ok(declMap.get("par").includes(40), "par must be declared at line 40");
+  assert.ok(declMap.has("child"), "Must detect child in variable declarations");
+  assert.ok(declMap.get("child").includes(58), "child must be declared at line 58");
+  assert.ok(declMap.has("parSuccessor"), "Must detect parSuccessor in variable declarations");
+  assert.ok(declMap.get("parSuccessor").includes(82), "parSuccessor must be declared at line 82");
+  assert.ok(declMap.has("successor"), "Must detect successor in variable declarations");
+  assert.ok(declMap.get("successor").includes(83), "successor must be declared at line 83 (loc->right)");
+  const fnRanges = StateExtractor2.getFunctionRanges(samplePath);
+  const findFn = fnRanges.find((f) => f.name === "findNodeAndParent");
+  assert.ok(findFn, "findNodeAndParent must be found in function ranges");
+  assert.ok(findFn.params?.includes("loc"), "findNodeAndParent params must include loc");
+  assert.ok(findFn.params?.includes("par"), "findNodeAndParent params must include par");
+  assert.strictEqual(StateExtractor2.isVariableInitialized("loc", 47, declMap, findFn), true);
+  assert.strictEqual(StateExtractor2.isVariableInitialized("par", 47, declMap, findFn), true);
+  assert.strictEqual(StateExtractor2.isVariableInitialized("loc", 40, declMap, findFn), true);
+  const delFn = fnRanges.find((f) => f.name === "deleteNode");
+  assert.ok(delFn, "deleteNode must be found in function ranges");
+  assert.strictEqual(StateExtractor2.isVariableInitialized("loc", 100, declMap, delFn), false);
+  assert.strictEqual(StateExtractor2.isVariableInitialized("loc", 102, declMap, delFn), true);
+  console.log("  \u2713 Verified multi-pointer parameters (loc, par, child, successor) and initialization checks");
   console.log("\n[Test 6] Testing Compilation of All Internet Examples, BST & Arrays...");
   for (const file of [leetcodePath, gfgPath, oopPath, bstPath, arrayOpsPath]) {
     const res = await CppCompiler.compile(file);

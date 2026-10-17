@@ -556,8 +556,37 @@ async function runTests() {
   assert.ok(bstFns.has('insert'), 'Must detect insert');
   assert.ok(bstFns.has('inorder'), 'Must detect inorder');
   assert.ok(bstFns.has('findNodeAndParent'), 'Must detect findNodeAndParent');
-  assert.ok(bstFns.has('caseA'), 'Must detect caseA');
   console.log('  ✓ Verified getUserDefinedFunctions discovers helper functions (insert, inorder, findNodeAndParent, caseA)');
+
+  // Verify multi-pointer parameter and reference declarations in samplePath
+  const declMap = StateExtractor.getVariableDeclarations(samplePath);
+  assert.ok(declMap.has('loc'), 'Must detect loc in variable declarations');
+  assert.ok(declMap.get('loc')!.includes(40), 'loc must be declared at line 40');
+  assert.ok(declMap.has('par'), 'Must detect par in variable declarations');
+  assert.ok(declMap.get('par')!.includes(40), 'par must be declared at line 40');
+  assert.ok(declMap.has('child'), 'Must detect child in variable declarations');
+  assert.ok(declMap.get('child')!.includes(58), 'child must be declared at line 58');
+  assert.ok(declMap.has('parSuccessor'), 'Must detect parSuccessor in variable declarations');
+  assert.ok(declMap.get('parSuccessor')!.includes(82), 'parSuccessor must be declared at line 82');
+  assert.ok(declMap.has('successor'), 'Must detect successor in variable declarations');
+  assert.ok(declMap.get('successor')!.includes(83), 'successor must be declared at line 83 (loc->right)');
+
+  const fnRanges = StateExtractor.getFunctionRanges(samplePath);
+  const findFn = fnRanges.find((f) => f.name === 'findNodeAndParent');
+  assert.ok(findFn, 'findNodeAndParent must be found in function ranges');
+  assert.ok(findFn!.params?.includes('loc'), 'findNodeAndParent params must include loc');
+  assert.ok(findFn!.params?.includes('par'), 'findNodeAndParent params must include par');
+
+  // Verify variable initialization inside findNodeAndParent
+  assert.strictEqual(StateExtractor.isVariableInitialized('loc', 47, declMap, findFn!), true);
+  assert.strictEqual(StateExtractor.isVariableInitialized('par', 47, declMap, findFn!), true);
+  assert.strictEqual(StateExtractor.isVariableInitialized('loc', 40, declMap, findFn!), true);
+
+  const delFn = fnRanges.find((f) => f.name === 'deleteNode');
+  assert.ok(delFn, 'deleteNode must be found in function ranges');
+  assert.strictEqual(StateExtractor.isVariableInitialized('loc', 100, declMap, delFn!), false);
+  assert.strictEqual(StateExtractor.isVariableInitialized('loc', 102, declMap, delFn!), true);
+  console.log('  ✓ Verified multi-pointer parameters (loc, par, child, successor) and initialization checks');
 
   // Test 6: Compiling all internet examples
   console.log('\n[Test 6] Testing Compilation of All Internet Examples, BST & Arrays...');

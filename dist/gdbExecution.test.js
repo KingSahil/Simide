@@ -207,22 +207,17 @@ async function testGdbExecution() {
   const gdbCmds = [
     "break main",
     "run",
-    // Line 10: Node* head = new Node();
+    // Node* root = nullptr;
     "next",
-    // Line 11: Node* second = new Node();
+    // root = insert(root, 50);
     "next",
-    // Line 14: head->data = 10;
+    "print root->data",
+    // root = insert(root, 30);
     "next",
-    "print head->data",
-    // Line 15: second->data = 20;
+    "print root->left->data",
+    // root = insert(root, 70);
     "next",
-    "print second->data",
-    // Line 18: head->next = second;
-    "next",
-    "print head->next->data",
-    // Line 19: second->next = nullptr;
-    "next",
-    "print second->next",
+    "print root->right->data",
     "quit"
   ];
   const scriptFile = "test_gdb.txt";
@@ -233,11 +228,10 @@ async function testGdbExecution() {
     console.log("[GDB Output Sample]");
     const lines = stdout.split("\n").filter((l) => l.includes("$") || l.includes("Breakpoint") || l.includes("Thread"));
     lines.forEach((l) => console.log("  " + l.trim()));
-    assert.ok(stdout.includes("= 10"), "Head node data should be 10");
-    assert.ok(stdout.includes("= 20"), "Second node data should be 20");
-    assert.ok(stdout.includes("$3 = 20"), "head->next->data should be 20");
-    console.log("\n\u2713 Verified real GDB runtime stops and variable values (head=10, second=20)");
-    console.log("\u2713 Verified dynamic linking (head->next = second)");
+    assert.ok(stdout.includes("= 50"), "Root node data should be 50");
+    assert.ok(stdout.includes("= 30"), "Left child data should be 30");
+    assert.ok(stdout.includes("= 70"), "Right child data should be 70");
+    console.log("\n\u2713 Verified real GDB runtime stops and tree node values (root=50, left=30, right=70)");
     console.log("=== Real GDB Execution Test PASSED ===\n");
   } finally {
     if (fs2.existsSync(scriptPath)) {
