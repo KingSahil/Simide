@@ -2,7 +2,7 @@
 node_modules/
 
 # Compiled C++ binaries and temporary debug artifacts
-examples/.debug-mentor/*.exe
+examples/.debug-mentor/
 *.exe
 
 # Log files

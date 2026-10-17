@@ -310,7 +310,8 @@ export class StateExtractor {
         const nodeTypes = this.discoverNodeTypes(resolvedPath);
         const typePattern = Array.from(nodeTypes).join('|');
         const declRegex = new RegExp(
-          `(?:(?:struct\\s+)?(?:${typePattern})\\s*\\*&?|auto\\s*\\*?)\\s*([a-zA-Z_][a-zA-Z0-9_]*)`
+          `(?:(?:struct\\s+)?(?:${typePattern})\\s*(?:\\*\\s*&?|&\\s*\\*?)|auto\\s*\\*?|,\\s*(?:\\*\\s*&?|&\\s*\\*?))\\s*([a-zA-Z_][a-zA-Z0-9_]*)`,
+          'g'
         );
 
         let inStructDef = false;
@@ -336,13 +337,17 @@ export class StateExtractor {
             continue;
           }
 
-          // Skip member pointer assignments like first->next = second;
-          if (lineText.includes('->') || lineText.startsWith('.')) {
+          // Skip pure member assignments without declarations (e.g. first->next = second;)
+          if (
+            (lineText.startsWith('.') || /^[a-zA-Z_][a-zA-Z0-9_]*->/.test(lineText)) &&
+            !lineText.includes('auto') &&
+            !Array.from(nodeTypes).some((t) => lineText.startsWith(t))
+          ) {
             continue;
           }
 
-          const match = lineText.match(declRegex);
-          if (match) {
+          const matches = lineText.matchAll(declRegex);
+          for (const match of matches) {
             const varName = match[1];
             if (
               varName === 'nullptr' ||
@@ -367,15 +372,15 @@ export class StateExtractor {
 
   public static getFunctionRanges(
     resolvedPath?: string
-  ): Array<{ name: string; startLine: number; endLine: number }> {
-    const ranges: Array<{ name: string; startLine: number; endLine: number }> = [];
+  ): Array<{ name: string; startLine: number; endLine: number; params?: string[] }> {
+    const ranges: Array<{ name: string; startLine: number; endLine: number; params?: string[] }> = [];
     if (!resolvedPath || !fs.existsSync(resolvedPath)) return ranges;
 
     try {
       const content = fs.readFileSync(resolvedPath, 'utf8');
       const lines = content.split('\n');
 
-      let currentFunc: { name: string; startLine: number } | null = null;
+      let currentFunc: { name: string; startLine: number; params?: string[] } | null = null;
       let depth = 0;
       let inStruct = false;
 
@@ -405,7 +410,7 @@ export class StateExtractor {
 
         if (!currentFunc) {
           const fnMatch = trimmed.match(
-            /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]*\)\s*(?:const\s*)?\{?/
+            /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)\s*(?:const\s*)?\{?/
           );
           if (fnMatch) {
             const name = fnMatch[1];
@@ -417,8 +422,61 @@ export class StateExtractor {
               name !== 'catch' &&
               name !== 'sizeof'
             ) {
-              currentFunc = { name, startLine: lineNum };
+              const paramStr = fnMatch[2] || '';
+              const params: string[] = [];
+              if (paramStr.trim()) {
+                const parts = paramStr.split(',');
+                for (const part of parts) {
+                  const pMatch = part.trim().match(/([a-zA-Z_][a-zA-Z0-9_]*)\s*$/);
+                  if (pMatch) {
+                    params.push(pMatch[1]);
+                  }
+                }
+              }
+              currentFunc = { name, startLine: lineNum, params };
               depth = 0;
+            }
+          } else {
+            // Check for multi-line function declaration header starting on this line
+            const multiLineMatch = trimmed.match(
+              /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)$/
+            );
+            if (multiLineMatch) {
+              const name = multiLineMatch[1];
+              if (
+                name !== 'if' &&
+                name !== 'while' &&
+                name !== 'for' &&
+                name !== 'switch' &&
+                name !== 'catch' &&
+                name !== 'sizeof'
+              ) {
+                let paramStr = multiLineMatch[2] || '';
+                let j = i + 1;
+                while (j < lines.length) {
+                  const nextLine = lines[j].trim();
+                  const closeParenIdx = nextLine.indexOf(')');
+                  if (closeParenIdx !== -1) {
+                    paramStr += ' ' + nextLine.substring(0, closeParenIdx);
+                    break;
+                  } else {
+                    paramStr += ' ' + nextLine;
+                  }
+                  j++;
+                }
+                const params: string[] = [];
+                if (paramStr.trim()) {
+                  const parts = paramStr.split(',');
+                  for (const part of parts) {
+                    const pMatch = part.trim().match(/([a-zA-Z_][a-zA-Z0-9_]*)\s*$/);
+                    if (pMatch) {
+                      params.push(pMatch[1]);
+                    }
+                  }
+                }
+                currentFunc = { name, startLine: lineNum, params };
+                depth = 0;
+              }
             }
           }
         }
@@ -433,6 +491,7 @@ export class StateExtractor {
                   name: currentFunc.name,
                   startLine: currentFunc.startLine,
                   endLine: lineNum,
+                  params: currentFunc.params || [],
                 });
                 currentFunc = null;
                 depth = 0;
@@ -452,7 +511,7 @@ export class StateExtractor {
   public static getEnclosingFunction(
     resolvedPath: string | undefined,
     line: number
-  ): { name: string; startLine: number; endLine: number } | null {
+  ): { name: string; startLine: number; endLine: number; params?: string[] } | null {
     const ranges = this.getFunctionRanges(resolvedPath);
     return ranges.find((r) => line >= r.startLine && line <= r.endLine) || null;
   }
@@ -461,8 +520,12 @@ export class StateExtractor {
     varName: string,
     rawLine: number,
     varDecls: Map<string, number[]>,
-    funcRange: { name: string; startLine: number; endLine: number } | null
+    funcRange: { name: string; startLine: number; endLine: number; params?: string[] } | null
   ): boolean {
+    if (funcRange?.params?.includes(varName)) {
+      return rawLine >= funcRange.startLine;
+    }
+
     const declLines = varDecls.get(varName);
     if (!declLines || declLines.length === 0) {
       return false;
@@ -474,17 +537,20 @@ export class StateExtractor {
       : declLines;
 
     if (relevantDecls.length === 0) {
-      return false;
+      // If the variable belongs to this frame's scope but has no local declaration inside the function body,
+      // it is a function parameter/argument passed by caller and is initialized upon function entry.
+      return funcRange ? rawLine >= funcRange.startLine : true;
     }
 
-    // A variable is only initialized once execution has stepped strictly PAST its declaration line
-    return relevantDecls.some((l) => rawLine > l);
+    // For function parameter declarations (on or before function header), they are initialized on entry.
+    // For local variable declarations in the function body, execution must have stepped past the line.
+    return relevantDecls.some((l) => (funcRange && l <= funcRange.startLine ? rawLine >= l : rawLine > l));
   }
 
   public static hasSteppedPastFirstPointerDecl(
     rawLine: number,
     varDecls: Map<string, number[]>,
-    funcRange: { name: string; startLine: number; endLine: number } | null
+    funcRange: { name: string; startLine: number; endLine: number; params?: string[] } | null
   ): boolean {
     if (!funcRange) return true;
     const declsInFunc: number[] = [];
@@ -946,11 +1012,12 @@ export class StateExtractor {
             if (varsRes?.variables) {
               for (const v of varsRes.variables) {
                 if (!localVars[v.name]) {
+                  const isFuncParam = funcRange?.params?.includes(v.name) ?? false;
                   localVars[v.name] = {
                     value: v.value,
                     type: v.type,
                     variablesReference: v.variablesReference,
-                    isArgument: isArg,
+                    isArgument: isArg || isFuncParam,
                   };
                 }
               }
@@ -1067,21 +1134,22 @@ export class StateExtractor {
       }
 
       // B: Check caller frames — required when inside helper functions (insert, traverse, etc.)
-      // Also used when A didn't find a valid non-null address
+      // Prioritize the 'main' frame where the true root/head pointer lives,
+      // avoiding local recursive parameters (e.g. insert's 'root') shadowing the real root.
       if (!headAddr) {
-        for (let i = isInMain ? 1 : 0; i < frames.length; i++) {
-          const callerFrame = frames[i];
-          const callerPath = callerFrame.source?.path || callerFrame.source?.name || '';
-          if (!this.isUserSource(callerPath)) continue;
-          const callerName = (callerFrame.name || '').toLowerCase();
-          // Prefer frames that look like 'main' for root/head lookup
-          const isCallerMain = callerName === 'main' || callerName.startsWith('main(');
+        const mainFrame = frames.find((f) => {
+          const name = (f.name || '').toLowerCase();
+          const path = f.source?.path || f.source?.name || '';
+          return this.isUserSource(path) && (name === 'main' || name.startsWith('main('));
+        });
+
+        if (mainFrame) {
           for (const cand of headCandidates) {
-            const valStr = await evalExpr(cand, callerFrame.id);
+            const valStr = await evalExpr(cand, mainFrame.id);
             if (valStr) {
               let candidate: string | null = null;
               if (cand === 'head_ref' || cand === 'root_ref' || valStr.includes('**')) {
-                const derefVal = await evalExpr(`*${cand}`, callerFrame.id);
+                const derefVal = await evalExpr(`*${cand}`, mainFrame.id);
                 candidate = this.parsePointer(derefVal);
               } else {
                 candidate = this.parsePointer(valStr);
@@ -1092,9 +1160,32 @@ export class StateExtractor {
               }
             }
           }
-          if (headAddr) break;
-          // If this was main's frame and we still have no addr, stop — don't keep searching deeper
-          if (isCallerMain && !headAddr) break;
+        }
+
+        // Priority 2: Check caller frames from outermost to innermost
+        if (!headAddr) {
+          for (let i = frames.length - 1; i >= 0; i--) {
+            const callerFrame = frames[i];
+            const callerPath = callerFrame.source?.path || callerFrame.source?.name || '';
+            if (!this.isUserSource(callerPath)) continue;
+            for (const cand of headCandidates) {
+              const valStr = await evalExpr(cand, callerFrame.id);
+              if (valStr) {
+                let candidate: string | null = null;
+                if (cand === 'head_ref' || cand === 'root_ref' || valStr.includes('**')) {
+                  const derefVal = await evalExpr(`*${cand}`, callerFrame.id);
+                  candidate = this.parsePointer(derefVal);
+                } else {
+                  candidate = this.parsePointer(valStr);
+                }
+                if (candidate && !this.deletedAddresses.has(candidate)) {
+                  headAddr = candidate;
+                  break;
+                }
+              }
+            }
+            if (headAddr) break;
+          }
         }
       }
 
@@ -1312,7 +1403,9 @@ export class StateExtractor {
         const targetId = varAddr && !isFreed ? this.getStableId(varAddr) : null;
 
         const isTargetingKnownNode = varAddr ? allDiscoveredNodes.has(varAddr) : false;
+        const isDeclaredPointer = varDecls.has(varName);
         const isPointerType =
+          isDeclaredPointer ||
           (varInfo.type && (varInfo.type.includes('*') || varInfo.type.includes('&'))) ||
           varName === 'temp' ||
           varName === 'prev' ||
@@ -1332,7 +1425,21 @@ export class StateExtractor {
           varName === 'l2' ||
           varName === 'dummy' ||
           varName === 'fast' ||
-          varName === 'slow';
+          varName === 'slow' ||
+          varName === 'loc' ||
+          varName === 'par' ||
+          varName === 'parent' ||
+          varName === 'child' ||
+          varName === 'successor' ||
+          varName === 'parSuccessor' ||
+          varName === 'pred' ||
+          varName === 'predecessor' ||
+          varName === 'succ' ||
+          varName === 'newNode' ||
+          varName === 'new_node' ||
+          varName === 'target' ||
+          varName === 'ptr' ||
+          varName === 'cur';
 
         if (isPointerType || isTargetingKnownNode) {
           activePointers.push({

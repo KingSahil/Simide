@@ -246,12 +246,16 @@ export class ExplanationGenerator {
     // 5. Check for Pointer Traversal / Movement (e.g. temp = temp->next in loops)
     if (previousSnapshot) {
       for (const currPtr of pointers) {
-        if (currPtr.name === 'head') continue;
+        if (currPtr.name === 'head' || currPtr.name === 'root') continue;
         const prevPtr = previousSnapshot.pointers?.find((p) => p.name === currPtr.name);
         if (prevPtr && prevPtr.targetNodeId !== currPtr.targetNodeId) {
           if (currPtr.isNull || !currPtr.targetNodeId) {
+            const nullMsg =
+              currentSnapshot.structureType === 'tree'
+                ? `Pointer '${currPtr.name}' updated to nullptr.`
+                : `Pointer '${currPtr.name}' updated to nullptr (reached end of list).`;
             return {
-              explanation: `Pointer '${currPtr.name}' updated to nullptr (reached end of list).`,
+              explanation: nullMsg,
               changeType: 'pointer_moved',
             };
           } else {

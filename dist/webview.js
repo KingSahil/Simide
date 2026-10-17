@@ -1035,6 +1035,7 @@
   var graphViewport = document.getElementById("graphViewport");
   var graphCanvas = document.getElementById("graphCanvas");
   var arrowsSvg = document.getElementById("arrowsSvg");
+  var arrowsGroup = document.getElementById("arrowsGroup");
   var nodesLayer = document.getElementById("nodesLayer");
   var explanationText = document.getElementById("explanationText");
   var terminalPlaceholder = document.getElementById("terminalPlaceholder");
@@ -1079,15 +1080,20 @@
   function onSimulationTick() {
     for (const node of d3NodesMap.values()) {
       if (node.x !== void 0 && node.y !== void 0) {
-        const left = Math.max(8, node.x - node.width / 2);
-        const top = Math.max(8, node.y - node.height / 2);
+        const actualWidth = node.el.offsetWidth > 0 ? node.el.offsetWidth : node.width;
+        const actualHeight = node.el.offsetHeight > 0 ? node.el.offsetHeight : node.height;
+        node.width = actualWidth;
+        node.height = actualHeight;
+        node.radius = Math.min(actualWidth, actualHeight) / 2 + 6;
+        const left = Math.max(8, node.x - actualWidth / 2);
+        const top = Math.max(8, node.y - actualHeight / 2);
         node.el.style.left = `${left}px`;
         node.el.style.top = `${top}px`;
         nodePositions.set(node.id, {
           x: left,
           y: top,
-          width: node.width,
-          height: node.height
+          width: actualWidth,
+          height: actualHeight
         });
       }
     }
@@ -1125,8 +1131,10 @@
       simulation.alpha(0.6).restart();
     }
   }
-  function registerD3Node(id, el, targetCenterX, targetCenterY, width, height, nodeType, reset = false) {
+  function registerD3Node(id, el, targetCenterX, targetCenterY, fallbackWidth, fallbackHeight, nodeType, reset = false) {
     let node = d3NodesMap.get(id);
+    const width = el.offsetWidth > 0 ? el.offsetWidth : fallbackWidth;
+    const height = el.offsetHeight > 0 ? el.offsetHeight : fallbackHeight;
     const radius = Math.min(width, height) / 2 + 6;
     if (!node || reset) {
       const initialY = reset ? targetCenterY : targetCenterY - 14;
@@ -1320,6 +1328,71 @@
       };
     }
   }
+  function getCapsulePerimeter(rect, target) {
+    const cx = rect.x + rect.width / 2;
+    const cy = rect.y + rect.height / 2;
+    const dx = target.x - cx;
+    const dy = target.y - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 1e-3) {
+      return { x: cx + rect.width / 2, y: cy, nx: 1, ny: 0 };
+    }
+    if (rect.width >= rect.height) {
+      const R = rect.height / 2;
+      const straightHalfW = Math.max(0, rect.width / 2 - R);
+      if (Math.abs(dy) > 1e-3 && Math.abs(dx) * R <= straightHalfW * Math.abs(dy)) {
+        const signY = dy > 0 ? 1 : -1;
+        const t = R / Math.abs(dy);
+        return {
+          x: cx + dx * t,
+          y: cy + signY * R,
+          nx: 0,
+          ny: signY
+        };
+      }
+      const signX = dx >= 0 ? 1 : -1;
+      const capCenterX = cx + signX * straightHalfW;
+      const capCenterY = cy;
+      const capDx = target.x - capCenterX;
+      const capDy = target.y - capCenterY;
+      const capDist = Math.hypot(capDx, capDy) || 1;
+      const nx = capDx / capDist;
+      const ny = capDy / capDist;
+      return {
+        x: capCenterX + nx * R,
+        y: capCenterY + ny * R,
+        nx,
+        ny
+      };
+    } else {
+      const R = rect.width / 2;
+      const straightHalfH = Math.max(0, rect.height / 2 - R);
+      if (Math.abs(dx) > 1e-3 && Math.abs(dy) * R <= straightHalfH * Math.abs(dx)) {
+        const signX = dx > 0 ? 1 : -1;
+        const t = R / Math.abs(dx);
+        return {
+          x: cx + signX * R,
+          y: cy + dy * t,
+          nx: signX,
+          ny: 0
+        };
+      }
+      const signY = dy >= 0 ? 1 : -1;
+      const capCenterX = cx;
+      const capCenterY = cy + signY * straightHalfH;
+      const capDx = target.x - capCenterX;
+      const capDy = target.y - capCenterY;
+      const capDist = Math.hypot(capDx, capDy) || 1;
+      const nx = capDx / capDist;
+      const ny = capDy / capDist;
+      return {
+        x: capCenterX + nx * R,
+        y: capCenterY + ny * R,
+        nx,
+        ny
+      };
+    }
+  }
   function getCirclePerimeterIntersection(circleCenter, radius, targetPoint) {
     const dx = targetPoint.x - circleCenter.x;
     const dy = targetPoint.y - circleCenter.y;
@@ -1345,7 +1418,7 @@
     pathEl.setAttribute("d", d);
     pathEl.setAttribute("stroke", isMuted ? "#737D8C" : color);
     pathEl.setAttribute("stroke-width", "1.8");
-    pathEl.setAttribute("stroke-linecap", "round");
+    pathEl.setAttribute("stroke-linecap", "butt");
     pathEl.setAttribute("fill", "none");
     let marker = "url(#arrowHead)";
     if (isMuted) {
@@ -1354,11 +1427,19 @@
       marker = "url(#arrowHeadGreen)";
     }
     pathEl.setAttribute("marker-end", marker);
-    arrowsSvg.appendChild(pathEl);
+    if (arrowsGroup) {
+      arrowsGroup.appendChild(pathEl);
+    } else {
+      arrowsSvg.appendChild(pathEl);
+    }
   }
   function renderArrows() {
-    const paths = arrowsSvg.querySelectorAll("path");
-    paths.forEach((p) => p.remove());
+    if (arrowsGroup) {
+      arrowsGroup.innerHTML = "";
+    } else {
+      const paths = arrowsSvg.querySelectorAll(":scope > path");
+      paths.forEach((p) => p.remove());
+    }
     if (!currentSnapshot || !currentSnapshot.hasHead)
       return;
     for (const ptr of currentSnapshot.pointers || []) {
@@ -1370,7 +1451,7 @@
         const targetPos = nodePositions.get(ptr.targetNodeId);
         const centerA = { x: badgePos.x + badgePos.width / 2, y: badgePos.y + badgePos.height / 2 };
         const centerB = { x: targetPos.x + targetPos.width / 2, y: targetPos.y + targetPos.height / 2 };
-        const start = getPerimeterIntersection(badgePos, centerB);
+        const start = getCapsulePerimeter(badgePos, centerB);
         const end = currentSnapshot.structureType === "tree" ? getCirclePerimeterIntersection(centerB, targetPos.width / 2, centerA) : getPerimeterIntersection(targetPos, centerA);
         const isHead = ptr.name === "head" || ptr.name === "root";
         drawBezierArrow(
@@ -1391,7 +1472,7 @@
           const nullPos = nodePositions.get(nullId);
           const centerA = { x: badgePos.x + badgePos.width / 2, y: badgePos.y + badgePos.height / 2 };
           const centerB = { x: nullPos.x + nullPos.width / 2, y: nullPos.y + nullPos.height / 2 };
-          const start = getPerimeterIntersection(badgePos, centerB);
+          const start = getCapsulePerimeter(badgePos, centerB);
           const end = getPerimeterIntersection(nullPos, centerA);
           drawBezierArrow(
             start.x,
@@ -1521,8 +1602,12 @@
       nodePositions.clear();
       d3NodesMap.clear();
       d3Links = [];
-      const paths = arrowsSvg.querySelectorAll("path");
-      paths.forEach((p) => p.remove());
+      if (arrowsGroup) {
+        arrowsGroup.innerHTML = "";
+      } else {
+        const paths = arrowsSvg.querySelectorAll(":scope > path");
+        paths.forEach((p) => p.remove());
+      }
       const dsName = snapshot.structureType === "tree" ? "tree" : "linked list";
       const emptyMsg = document.createElement("div");
       emptyMsg.className = "empty-canvas-message";
@@ -1562,7 +1647,11 @@
           if (targetNode) {
             const col = targetNode.treeColumn !== void 0 ? targetNode.treeColumn : 0;
             const depth = targetNode.treeDepth !== void 0 ? targetNode.treeDepth : 0;
-            targetCenterX = 140 + col * 75 + (pIdx % 2 === 0 ? -16 : 16);
+            const sameTargetPtrs = pointers.filter((p) => p.targetNodeId === ptr.targetNodeId);
+            const sameIdx = sameTargetPtrs.indexOf(ptr);
+            const sameCount = sameTargetPtrs.length;
+            const offset = sameCount > 1 ? (sameIdx - (sameCount - 1) / 2) * 55 : 0;
+            targetCenterX = 140 + col * 75 + offset;
             targetCenterY = 75 + depth * 85 - 42;
           }
         } else {
