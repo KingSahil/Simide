@@ -813,3 +813,284 @@ body.is-canvas-panning * {
   white-space: pre-wrap;
   font-family: monospace;
 }
+
+/* ==========================================
+   Array Visualization Styles
+   ========================================== */
+.array-board-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  pointer-events: auto;
+}
+
+.array-board {
+  background: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
+  border: 1.5px solid #30363d;
+  border-radius: 10px;
+  padding: 16px 20px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  display: inline-flex;
+  flex-direction: column;
+}
+
+.array-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.array-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.array-name-badge {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 2px 8px;
+  background: rgba(0, 102, 255, 0.15);
+  color: #388bfd;
+  border: 1px solid rgba(0, 102, 255, 0.4);
+  border-radius: 6px;
+}
+
+.array-meta-chip {
+  font-size: 11px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  color: var(--secondary-text);
+  background: var(--elevated-surface);
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid var(--border-color);
+}
+
+.array-strip-wrapper {
+  display: flex;
+  position: relative;
+  overflow-x: visible;
+  padding-top: 16px;
+}
+
+.array-strip {
+  display: inline-flex;
+  border: 2px solid #30363d;
+  border-radius: 8px;
+  overflow: visible;
+  background: #0d1117;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+.array-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+}
+
+.array-pointer-container {
+  position: absolute;
+  top: -30px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 25;
+}
+
+.array-pointer-pill {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #238636;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(35, 134, 54, 0.4);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  animation: bounceDown 1.2s ease-in-out infinite alternate;
+}
+
+.array-pointer-pill.ptr-i {
+  background: #238636;
+  box-shadow: 0 2px 8px rgba(35, 134, 54, 0.5);
+}
+
+.array-pointer-pill.ptr-j {
+  background: #8957e5;
+  box-shadow: 0 2px 8px rgba(137, 87, 229, 0.5);
+}
+
+.array-pointer-pill.ptr-left {
+  background: #1f6feb;
+  box-shadow: 0 2px 8px rgba(31, 111, 235, 0.5);
+}
+
+.array-pointer-pill.ptr-right {
+  background: #da3633;
+  box-shadow: 0 2px 8px rgba(218, 54, 51, 0.5);
+}
+
+.array-pointer-pill.ptr-mid {
+  background: #d29922;
+  box-shadow: 0 2px 8px rgba(210, 153, 34, 0.5);
+}
+
+.array-pointer-pill.ptr-low {
+  background: #1f6feb;
+  box-shadow: 0 2px 8px rgba(31, 111, 235, 0.5);
+}
+
+.array-pointer-pill.ptr-high {
+  background: #da3633;
+  box-shadow: 0 2px 8px rgba(218, 54, 51, 0.5);
+}
+
+.array-pointer-pill.ptr-start {
+  background: #1f6feb;
+  box-shadow: 0 2px 8px rgba(31, 111, 235, 0.5);
+}
+
+.array-pointer-pill.ptr-end {
+  background: #da3633;
+  box-shadow: 0 2px 8px rgba(218, 54, 51, 0.5);
+}
+
+.ptr-arrow {
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.array-cell {
+  position: relative;
+  width: 66px;
+  height: 68px;
+  border-right: 1px solid #21262d;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 4px;
+  background: #161b22;
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* VisuAlgo Value Magnitude Fill Bar */
+.array-cell-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: linear-gradient(0deg, rgba(0, 102, 255, 0.26) 0%, rgba(0, 102, 255, 0.08) 100%);
+  border-top: 1.5px solid rgba(56, 139, 253, 0.5);
+  pointer-events: none;
+  z-index: 1;
+  transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.array-column:first-child .array-cell {
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+
+.array-column:last-child .array-cell {
+  border-right: none;
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+.array-cell-index {
+  position: relative;
+  z-index: 2;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-weight: 600;
+  color: #737d8c;
+}
+
+.array-cell-val {
+  position: relative;
+  z-index: 2;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  color: #f5f7fa;
+}
+
+.array-cell-addr {
+  position: relative;
+  z-index: 2;
+  font-size: 8.5px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  color: #57606a;
+}
+
+.array-cell.modified {
+  background: linear-gradient(180deg, rgba(210, 153, 34, 0.22) 0%, rgba(210, 153, 34, 0.1) 100%) !important;
+  box-shadow: inset 0 0 10px rgba(210, 153, 34, 0.4);
+  border-top: 2px solid #d29922;
+  border-bottom: 2px solid #d29922;
+}
+
+.array-cell.modified .array-cell-val {
+  color: #f1e05a;
+  text-shadow: 0 0 8px rgba(241, 224, 90, 0.6);
+}
+
+.array-cell.active {
+  border-color: #388bfd;
+  box-shadow: inset 0 0 8px rgba(56, 139, 253, 0.3);
+}
+
+/* VisuAlgo Compact Array: Unallocated Capacity Buffer Slots */
+.array-cell.capacity-slot {
+  background: rgba(255, 255, 255, 0.012) !important;
+  border: 1px dashed #30363d !important;
+  opacity: 0.55;
+}
+
+.array-cell.capacity-slot .array-cell-val {
+  color: #484f58;
+  font-size: 14px;
+}
+
+.array-cell.capacity-slot .array-cell-addr {
+  color: #3b434e;
+  font-style: italic;
+}
+
+/* VisuAlgo Two-Pointer / Binary Search Search Window Highlighting */
+.array-cell.in-range {
+  border-top: 2px solid #388bfd;
+  border-bottom: 2px solid #388bfd;
+  background: linear-gradient(180deg, rgba(56, 139, 253, 0.12) 0%, rgba(56, 139, 253, 0.04) 100%);
+}
+
+.array-cell.out-of-range {
+  opacity: 0.35;
+  filter: grayscale(80%);
+}
+
+@keyframes bounceDown {
+  0% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-4px);
+  }
+}
+
+

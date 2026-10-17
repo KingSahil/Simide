@@ -2,10 +2,14 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  ArrayElement,
+  ArrayVariable,
+  IndexPointer,
   LinkedListSnapshot,
   ListNode,
   PointerVariable,
   SourceLocation,
+  StructureType,
 } from '../visualization/linkedListModel';
 import { ExplanationGenerator } from '../visualization/explanationGenerator';
 
@@ -19,7 +23,7 @@ export class StateExtractor {
   private static cachedNextField: string | null = null;
   private static cachedLeftField: string | null = null;
   private static cachedRightField: string | null = null;
-  private static cachedStructureType: 'linked_list' | 'tree' | null = null;
+  private static cachedStructureType: StructureType | null = null;
   private static accumulatedTerminalOutput: string = '';
   private static hasInitializedList: boolean = false;
 
@@ -161,6 +165,98 @@ export class StateExtractor {
     return types;
   }
 
+  public static discoverArrayDeclarations(resolvedPath?: string): Array<{
+    name: string;
+    line: number;
+    size?: number;
+    type: string;
+    isDynamic: boolean;
+  }> {
+    const arrays: Array<{
+      name: string;
+      line: number;
+      size?: number;
+      type: string;
+      isDynamic: boolean;
+    }> = [];
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+      return arrays;
+    }
+    try {
+      const content = fs.readFileSync(resolvedPath, 'utf8');
+      const lines = content.split('\n');
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        const lineNum = i + 1;
+        if (line.startsWith('//') || line.startsWith('/*') || line.startsWith('#')) {
+          continue;
+        }
+
+        // 1. Stack array: int arr[5] or int arr[] = {1, 2, 3};
+        const stackMatch = line.match(
+          /(?:(?:const\s+)?(?:int|long|short|char|double|float|string|bool|uint\d+_t|int\d+_t))\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\[\s*([^\]]*)\s*\]/
+        );
+        if (stackMatch) {
+          const name = stackMatch[1];
+          const sizeStr = stackMatch[2]?.trim();
+          let parsedSize = sizeStr ? parseInt(sizeStr, 10) : undefined;
+          if (parsedSize === undefined || isNaN(parsedSize)) {
+            const initMatch = line.match(/=\s*\{([^}]+)\}/);
+            if (initMatch) {
+              const elements = initMatch[1].split(',').filter((s) => s.trim().length > 0);
+              parsedSize = elements.length;
+            }
+          }
+          arrays.push({
+            name,
+            line: lineNum,
+            size: parsedSize && !isNaN(parsedSize) ? parsedSize : undefined,
+            type: 'stack_array',
+            isDynamic: false,
+          });
+          continue;
+        }
+
+        // 2. Dynamic array: int* arr = new int[5];
+        const dynMatch = line.match(
+          /(?:int|long|short|char|double|float|string|bool)\s*\*\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*new\s+(?:int|long|short|char|double|float|string|bool)\s*\[\s*([^\]]+)\s*\]/
+        );
+        if (dynMatch) {
+          const name = dynMatch[1];
+          const sizeExpr = dynMatch[2].trim();
+          const parsedSize = parseInt(sizeExpr, 10);
+          arrays.push({
+            name,
+            line: lineNum,
+            size: !isNaN(parsedSize) ? parsedSize : undefined,
+            type: 'dynamic_array',
+            isDynamic: true,
+          });
+          continue;
+        }
+
+        // 3. Vector: vector<int> arr; or std::vector<int> arr = {...};
+        const vecMatch = line.match(
+          /(?:std::)?vector\s*<\s*[^>]+\s*>\s*([a-zA-Z_][a-zA-Z0-9_]*)/
+        );
+        if (vecMatch) {
+          const name = vecMatch[1];
+          arrays.push({
+            name,
+            line: lineNum,
+            type: 'vector',
+            isDynamic: true,
+          });
+          continue;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return arrays;
+  }
+
   public static getUserDefinedFunctions(sourceFilePath?: string): Set<string> {
     const resolvedPath = this.resolveFilePath(sourceFilePath) || sourceFilePath || '';
     const funcNames = new Set<string>();
@@ -212,13 +308,14 @@ export class StateExtractor {
     nextField: string;
     leftField: string;
     rightField: string;
-    structureType: 'linked_list' | 'tree';
+    structureType: StructureType;
   } {
     let dataField = 'data';
     let nextField = 'next';
     let leftField = 'left';
     let rightField = 'right';
-    let structureType: 'linked_list' | 'tree' = 'linked_list';
+    let structureType: StructureType = 'linked_list';
+    let hasNodePointer = false;
 
     if (!resolvedPath || !fs.existsSync(resolvedPath)) {
       return { dataField, nextField, leftField, rightField, structureType };
@@ -266,10 +363,12 @@ export class StateExtractor {
 
         if (hasLeft || hasRight || isTreeNamed) {
           structureType = 'tree';
+          hasNodePointer = true;
           if (hasLeft) leftField = hasLeft;
           if (hasRight) rightField = hasRight;
         } else if (hasNext) {
           structureType = 'linked_list';
+          hasNodePointer = true;
           nextField = hasNext;
         }
 
@@ -292,6 +391,14 @@ export class StateExtractor {
 
         if (dataField && (hasLeft || hasRight || hasNext)) {
           break;
+        }
+      }
+
+      // If no linked list or tree struct was found, check if this is an array file
+      if (!hasNodePointer) {
+        const arrayDecls = this.discoverArrayDeclarations(resolvedPath);
+        if (arrayDecls.length > 0) {
+          structureType = 'array';
         }
       }
     } catch {
@@ -851,6 +958,268 @@ export class StateExtractor {
     return null;
   }
 
+  public static async extractArrays(
+    session: vscode.DebugSession,
+    frameId: number,
+    localVars: Record<
+      string,
+      { value: string; type?: string; variablesReference: number; isArgument: boolean }
+    >,
+    evalExpr: (expr: string, targetFrameId?: number) => Promise<string | null>,
+    rawLine: number,
+    varDecls: Map<string, number[]>,
+    funcRange: { name: string; startLine: number; endLine: number } | null,
+    resolvedFile?: string,
+    previousSnapshot?: LinkedListSnapshot
+  ): Promise<{ arrays: ArrayVariable[]; indexPointers: IndexPointer[] }> {
+    const discoveredArrays: ArrayVariable[] = [];
+    const indexPointers: IndexPointer[] = [];
+    const arrayDeclList = this.discoverArrayDeclarations(resolvedFile);
+    const arrayDeclMap = new Map<string, { line: number; size?: number; type: string; isDynamic: boolean }>();
+    for (const ad of arrayDeclList) {
+      arrayDeclMap.set(ad.name, ad);
+    }
+
+    // 1. Identify all active array variables
+    for (const [varName, varInfo] of Object.entries(localVars)) {
+      if (
+        varName.startsWith('__') ||
+        varName === 'this' ||
+        varName === 'argc' ||
+        varName === 'argv'
+      ) {
+        continue;
+      }
+
+      // Check if variable is declared as an array in source or has array type in GDB
+      const decl = arrayDeclMap.get(varName);
+      const typeStr = (varInfo.type || '').toLowerCase();
+      const valStr = (varInfo.value || '').trim();
+
+      const isStackArray =
+        typeStr.includes('[') ||
+        (decl && decl.type === 'stack_array') ||
+        (valStr.startsWith('{') && valStr.endsWith('}') && valStr.includes(','));
+      const isVector = typeStr.includes('vector') || (decl && decl.type === 'vector');
+      const isDynamicArray =
+        (decl && decl.type === 'dynamic_array') ||
+        (typeStr.includes('*') && (valStr.includes('0x') || valStr.includes('new')));
+
+      if (!isStackArray && !isVector && !isDynamicArray) {
+        continue;
+      }
+
+      // Check if variable is initialized
+      if (!varInfo.isArgument) {
+        if (decl && rawLine <= decl.line) {
+          continue;
+        }
+        if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
+          continue;
+        }
+      }
+
+      // Determine array size
+      let size = 0;
+      if (decl && decl.size && decl.size > 0) {
+        size = decl.size;
+      }
+
+      if (isStackArray && size === 0) {
+        const sizeEval = await evalExpr(`sizeof(${varName}) / sizeof(${varName}[0])`);
+        if (sizeEval) {
+          const parsed = parseInt(sizeEval.match(/\d+/)?.[0] || '0', 10);
+          if (parsed > 0 && parsed <= 256) {
+            size = parsed;
+          }
+        }
+      } else if (isVector) {
+        const sizeEval = await evalExpr(`${varName}.size()`);
+        if (sizeEval) {
+          const parsed = parseInt(sizeEval.match(/\d+/)?.[0] || '0', 10);
+          if (parsed >= 0 && parsed <= 256) {
+            size = parsed;
+          }
+        }
+      } else if (isDynamicArray && size === 0) {
+        for (const [otherName, otherInfo] of Object.entries(localVars)) {
+          if (['n', 'size', 'len', 'length', 'count', 'capacity'].includes(otherName.toLowerCase())) {
+            const parsed = parseInt(otherInfo.value.match(/\d+/)?.[0] || '0', 10);
+            if (parsed > 0 && parsed <= 256) {
+              size = parsed;
+              break;
+            }
+          }
+        }
+      }
+
+      // If DAP variablesReference has children, use child count if size still 0
+      let childVars: any[] = [];
+      if (varInfo.variablesReference > 0) {
+        try {
+          const childRes = await session.customRequest('variables', {
+            variablesReference: varInfo.variablesReference,
+          });
+          if (childRes?.variables && Array.isArray(childRes.variables)) {
+            childVars = childRes.variables;
+            if (size === 0 && childVars.length > 0) {
+              size = Math.min(childVars.length, 64);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (size === 0) {
+        size = 5;
+      }
+
+      const effectiveSize = Math.min(size, 64);
+
+      // Base address of the array
+      let baseAddress: string | undefined;
+      const addrEval = await evalExpr(`&${varName}`);
+      if (addrEval) {
+        baseAddress = this.parsePointer(addrEval) || undefined;
+      }
+
+      // Fetch elements
+      const elements: ArrayElement[] = [];
+      const prevArray = previousSnapshot?.arrays?.find((a) => a.name === varName);
+
+      for (let idx = 0; idx < effectiveSize; idx++) {
+        let elemVal: number | string = 0;
+        let elemAddr: string | undefined;
+
+        const child = childVars.find(
+          (c) => c.name === `[${idx}]` || c.name === `${idx}`
+        );
+        if (child) {
+          elemVal = this.parseData(child.value);
+        } else {
+          const elemEval = await evalExpr(`${varName}[${idx}]`);
+          if (elemEval !== null) {
+            elemVal = this.parseData(elemEval);
+          }
+        }
+
+        const elemAddrEval = await evalExpr(`&${varName}[${idx}]`);
+        if (elemAddrEval) {
+          elemAddr = this.parsePointer(elemAddrEval) || undefined;
+        }
+
+        const prevElem = prevArray?.elements[idx];
+        const isModified = prevElem !== undefined && prevElem.value !== elemVal;
+
+        elements.push({
+          index: idx,
+          value: elemVal,
+          address: elemAddr,
+          isModified,
+          isActive: false,
+        });
+      }
+
+      let capacity: number | undefined;
+      if (isVector) {
+        const capEval = await evalExpr(`${varName}.capacity()`);
+        if (capEval) {
+          const parsedCap = parseInt(capEval.match(/\d+/)?.[0] || '0', 10);
+          if (parsedCap >= size && parsedCap <= 64) {
+            capacity = parsedCap;
+          }
+        }
+      }
+
+      // If capacity exceeds effectiveSize, add unallocated capacity buffer slots (VisuAlgo style)
+      if (capacity && capacity > effectiveSize) {
+        for (let idx = effectiveSize; idx < capacity; idx++) {
+          elements.push({
+            index: idx,
+            value: '∅',
+            isCapacitySlot: true,
+            isModified: false,
+            isActive: false,
+          });
+        }
+      }
+
+      discoveredArrays.push({
+        name: varName,
+        type: varInfo.type || (isVector ? 'std::vector' : 'array'),
+        size: effectiveSize,
+        capacity,
+        elements,
+        address: baseAddress,
+        isDynamic: isDynamicArray || isVector,
+      });
+    }
+
+    // 2. Discover Index Pointers (i, j, left, right, mid, etc.)
+    const indexVarNames = new Set([
+      'i',
+      'j',
+      'k',
+      'idx',
+      'index',
+      'left',
+      'right',
+      'low',
+      'high',
+      'mid',
+      'start',
+      'end',
+      'p',
+      'ptr',
+      'curr',
+    ]);
+
+    for (const [varName, varInfo] of Object.entries(localVars)) {
+      if (discoveredArrays.some((a) => a.name === varName)) {
+        continue;
+      }
+      if (varName.startsWith('__') || varName === 'argc' || varName === 'argv') {
+        continue;
+      }
+
+      if (!varInfo.isArgument) {
+        if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
+          continue;
+        }
+      }
+
+      const typeStr = (varInfo.type || '').toLowerCase();
+      const isInteger =
+        typeStr.includes('int') ||
+        typeStr.includes('size_t') ||
+        typeStr.includes('short') ||
+        typeStr.includes('long') ||
+        indexVarNames.has(varName.toLowerCase());
+
+      if (isInteger) {
+        const parsed = parseInt(varInfo.value.match(/-?\d+/)?.[0] || '', 10);
+        if (!isNaN(parsed)) {
+          for (const arr of discoveredArrays) {
+            if (parsed >= 0 && parsed < arr.size) {
+              indexPointers.push({
+                name: varName,
+                targetIndex: parsed,
+                targetArrayName: arr.name,
+                value: parsed,
+              });
+              if (arr.elements[parsed]) {
+                arr.elements[parsed].isActive = true;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return { arrays: discoveredArrays, indexPointers };
+  }
+
   public static async extractState(
     session: vscode.DebugSession,
     threadId: number,
@@ -924,27 +1293,37 @@ export class StateExtractor {
       let hasHead = this.hasInitializedList;
       if (!hasHead) {
         if (isInsideMain) {
-          const candidates =
-            structureType === 'tree'
-              ? ['root', 'tree', 'bst', 'head', 't', 'r']
-              : ['head', 'root', 'first', 'list', 'start', 'dummy', 'headNode'];
-
-          let declaredCandidate: string | null = null;
-          for (const cand of candidates) {
-            const lines = varDecls.get(cand);
-            const inFunc = funcRange
-              ? lines?.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine)
-              : lines;
-            if (inFunc && inFunc.length > 0) {
-              declaredCandidate = cand;
-              break;
+          if (structureType === 'array') {
+            const arrayDecls = this.discoverArrayDeclarations(resolvedFile);
+            if (arrayDecls.length > 0) {
+              const firstArr = arrayDecls[0];
+              hasHead = rawLine > firstArr.line;
+            } else {
+              hasHead = true;
             }
-          }
-
-          if (declaredCandidate) {
-            hasHead = this.isVariableInitialized(declaredCandidate, rawLine, varDecls, funcRange);
           } else {
-            hasHead = this.hasSteppedPastFirstPointerDecl(rawLine, varDecls, funcRange);
+            const candidates =
+              structureType === 'tree'
+                ? ['root', 'tree', 'bst', 'head', 't', 'r']
+                : ['head', 'root', 'first', 'list', 'start', 'dummy', 'headNode'];
+
+            let declaredCandidate: string | null = null;
+            for (const cand of candidates) {
+              const lines = varDecls.get(cand);
+              const inFunc = funcRange
+                ? lines?.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine)
+                : lines;
+              if (inFunc && inFunc.length > 0) {
+                declaredCandidate = cand;
+                break;
+              }
+            }
+
+            if (declaredCandidate) {
+              hasHead = this.isVariableInitialized(declaredCandidate, rawLine, varDecls, funcRange);
+            } else {
+              hasHead = this.hasSteppedPastFirstPointerDecl(rawLine, varDecls, funcRange);
+            }
           }
         } else {
           hasHead = true;
@@ -957,6 +1336,8 @@ export class StateExtractor {
         const initExplanation =
           structureType === 'tree'
             ? 'Program paused at start. Click Next to allocate and initialize tree: TreeNode* root = ...'
+            : structureType === 'array'
+            ? 'Program paused at start. Click Next to allocate and initialize array.'
             : 'Program paused at start. Click Next to execute: Node* head = ...';
         return {
           stepNumber,
@@ -970,6 +1351,8 @@ export class StateExtractor {
           headId: null,
           nodes: [],
           pointers: [],
+          arrays: [],
+          indexPointers: [],
           explanation: initExplanation,
           changeType: 'init',
           terminalOutput: '',
@@ -1068,9 +1451,33 @@ export class StateExtractor {
         }
       }
 
-      // 3. Inspect 'head' / 'root' across current frame and caller frames
-      let headAddr: string | null = null;
+      let arrays: ArrayVariable[] = [];
+      let indexPointers: IndexPointer[] = [];
+      let allNodes: ListNode[] = [];
+      let activePointers: PointerVariable[] = [];
       let headId: string | null = null;
+      let activeVisitingNodeId: string | null = null;
+
+      if (structureType === 'array') {
+        const arrData = await this.extractArrays(
+          session,
+          frameId,
+          localVars,
+          evalExpr,
+          rawLine,
+          varDecls,
+          funcRange,
+          resolvedFile,
+          previousSnapshot
+        );
+        arrays = arrData.arrays;
+        indexPointers = arrData.indexPointers;
+        if (arrays.length > 0) {
+          this.hasInitializedList = true;
+        }
+      } else {
+        // 3. Inspect 'head' / 'root' across current frame and caller frames
+        let headAddr: string | null = null;
       const headCandidates = [
         'root',
         'this->root',
@@ -1554,16 +1961,17 @@ export class StateExtractor {
         }
       }
 
-      const allNodes: ListNode[] = Array.from(allDiscoveredNodes.values());
+        allNodes = Array.from(allDiscoveredNodes.values());
 
-      // Mark newly connected node
-      if (previousSnapshot) {
-        const prevReachableIds = new Set(
-          previousSnapshot.nodes.filter((n) => !n.isDetached).map((n) => n.id)
-        );
-        for (const node of allNodes) {
-          if (!node.isDetached && !prevReachableIds.has(node.id)) {
-            node.isNewlyConnected = true;
+        // Mark newly connected node
+        if (previousSnapshot) {
+          const prevReachableIds = new Set(
+            previousSnapshot.nodes.filter((n) => !n.isDetached).map((n) => n.id)
+          );
+          for (const node of allNodes) {
+            if (!node.isDetached && !prevReachableIds.has(node.id)) {
+              node.isNewlyConnected = true;
+            }
           }
         }
       }
@@ -1589,7 +1997,9 @@ export class StateExtractor {
         this.accumulatedTerminalOutput,
         structureType,
         activeVisitingNodeId,
-        funcName
+        funcName,
+        arrays,
+        indexPointers
       );
 
       // If execution reached the return statement or end of main, mark as final
@@ -1597,6 +2007,13 @@ export class StateExtractor {
         changeType = 'final';
         if (structureType === 'tree') {
           explanation = `Binary tree execution complete (${allNodes.length} nodes). Program execution finished.`;
+        } else if (structureType === 'array') {
+          const mainArr = arrays[0];
+          if (mainArr) {
+            explanation = `Array execution complete: [${mainArr.elements.map((e) => e.value).join(', ')}]. Program execution finished.`;
+          } else {
+            explanation = 'Program execution finished.';
+          }
         } else {
           const chainNodes = allNodes.filter((n) => !n.isDetached);
           if (chainNodes.length > 0) {
@@ -1616,6 +2033,8 @@ export class StateExtractor {
         activeVisitingNodeId,
         nodes: allNodes,
         pointers: activePointers,
+        arrays,
+        indexPointers,
         explanation,
         changeType,
         terminalOutput: this.accumulatedTerminalOutput,

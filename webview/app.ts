@@ -1,4 +1,4 @@
-import { LinkedListSnapshot, ListNode } from '../src/visualization/linkedListModel';
+import { LinkedListSnapshot, ListNode, ArrayVariable, IndexPointer } from '../src/visualization/linkedListModel';
 import { ExtensionMessage, WebviewMessage } from '../src/sidebar/messages';
 import {
   forceSimulation,
@@ -599,7 +599,7 @@ function renderArrows() {
     paths.forEach((p) => p.remove());
   }
 
-  if (!currentSnapshot || !currentSnapshot.hasHead) return;
+  if (!currentSnapshot || !currentSnapshot.hasHead || currentSnapshot.structureType === 'array') return;
 
   // 1. Arrows from Pointer Badges (head, first, second, third, etc.)
   for (const ptr of currentSnapshot.pointers || []) {
@@ -771,6 +771,182 @@ function renderArrows() {
   }
 }
 
+// Render Array Structure (deterministic row layout with floating pointer badges)
+function renderArrayDiagram(snapshot: LinkedListSnapshot) {
+  if (simulation) {
+    simulation.stop();
+    simulation.nodes([]);
+  }
+  const paths = arrowsSvg.querySelectorAll('path');
+  paths.forEach((p) => p.remove());
+
+  const container = document.createElement('div');
+  container.className = 'array-board-container';
+
+  const arrays = snapshot.arrays || [];
+  const indexPointers = snapshot.indexPointers || [];
+
+  for (const arrVar of arrays) {
+    const board = document.createElement('div');
+    board.className = 'array-board';
+
+    // Header: Name, Type[Size], Base Address
+    const header = document.createElement('div');
+    header.className = 'array-header';
+
+    const headerLeft = document.createElement('div');
+    headerLeft.className = 'array-header-left';
+
+    const nameBadge = document.createElement('span');
+    nameBadge.className = 'array-name-badge';
+    nameBadge.textContent = arrVar.name;
+
+    const typeChip = document.createElement('span');
+    typeChip.className = 'array-meta-chip';
+    if (arrVar.capacity !== undefined) {
+      typeChip.textContent = `${arrVar.name} (size: ${arrVar.size}, cap: ${arrVar.capacity})`;
+    } else {
+      typeChip.textContent = `${arrVar.type}[${arrVar.size}]`;
+    }
+
+    headerLeft.appendChild(nameBadge);
+    headerLeft.appendChild(typeChip);
+
+    const headerRight = document.createElement('div');
+    headerRight.className = 'array-header-right';
+
+    if (arrVar.address) {
+      const addrChip = document.createElement('span');
+      addrChip.className = 'array-meta-chip';
+      addrChip.textContent = `Base: ${arrVar.address}`;
+      headerRight.appendChild(addrChip);
+    }
+
+    header.appendChild(headerLeft);
+    header.appendChild(headerRight);
+    board.appendChild(header);
+
+    // VisuAlgo Two-Pointer Range (e.g. left and right, low and high, start and end)
+    const leftPtr = indexPointers.find(
+      (p) =>
+        ['left', 'low', 'start'].includes(p.name.toLowerCase()) &&
+        (!p.targetArrayName || p.targetArrayName === arrVar.name)
+    );
+    const rightPtr = indexPointers.find(
+      (p) =>
+        ['right', 'high', 'end'].includes(p.name.toLowerCase()) &&
+        (!p.targetArrayName || p.targetArrayName === arrVar.name)
+    );
+    const hasSearchWindow =
+      leftPtr !== undefined &&
+      rightPtr !== undefined &&
+      leftPtr.targetIndex <= rightPtr.targetIndex;
+
+    // Calculate max numeric value for magnitude bar (VisuAlgo visual encoding)
+    const numericVals = arrVar.elements
+      .filter((e) => !e.isCapacitySlot && typeof e.value === 'number')
+      .map((e) => Math.abs(e.value as number));
+    const maxVal = numericVals.length > 0 ? Math.max(...numericVals, 1) : 1;
+
+    // Strip Wrapper
+    const stripWrapper = document.createElement('div');
+    stripWrapper.className = 'array-strip-wrapper';
+
+    const strip = document.createElement('div');
+    strip.className = 'array-strip';
+
+    // Elements
+    for (const elem of arrVar.elements) {
+      const col = document.createElement('div');
+      col.className = 'array-column';
+
+      // Index Pointer Badges pointing to this cell
+      const matchingPointers = indexPointers.filter(
+        (ptr) =>
+          ptr.targetIndex === elem.index &&
+          (!ptr.targetArrayName || ptr.targetArrayName === arrVar.name)
+      );
+
+      if (matchingPointers.length > 0) {
+        const ptrContainer = document.createElement('div');
+        ptrContainer.className = 'array-pointer-container';
+
+        for (const ptr of matchingPointers) {
+          const ptrPill = document.createElement('div');
+          const cleanName = ptr.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+          ptrPill.className = `array-pointer-pill ptr-${cleanName}`;
+          ptrPill.innerHTML = `<span>${ptr.name}</span><span class="ptr-arrow">↓</span>`;
+          ptrContainer.appendChild(ptrPill);
+        }
+        col.appendChild(ptrContainer);
+      }
+
+      // Cell
+      const cell = document.createElement('div');
+      cell.className = 'array-cell';
+      if (elem.isCapacitySlot) {
+        cell.classList.add('capacity-slot');
+      }
+      if (elem.isModified) {
+        cell.classList.add('modified');
+      }
+      if (elem.isActive) {
+        cell.classList.add('active');
+      }
+
+      // VisuAlgo Search Window Range Highlighting
+      if (hasSearchWindow && !elem.isCapacitySlot) {
+        if (elem.index >= leftPtr!.targetIndex && elem.index <= rightPtr!.targetIndex) {
+          cell.classList.add('in-range');
+        } else {
+          cell.classList.add('out-of-range');
+        }
+      }
+
+      // Magnitude fill bar (VisuAlgo style)
+      if (!elem.isCapacitySlot && typeof elem.value === 'number' && elem.value > 0) {
+        const barHeight = Math.min(100, Math.max(12, Math.round((elem.value / maxVal) * 100)));
+        const bar = document.createElement('div');
+        bar.className = 'array-cell-bar';
+        bar.style.height = `${barHeight}%`;
+        cell.appendChild(bar);
+      }
+
+      // Index label
+      const indexSpan = document.createElement('span');
+      indexSpan.className = 'array-cell-index';
+      indexSpan.textContent = `[${elem.index}]`;
+
+      // Value
+      const valSpan = document.createElement('span');
+      valSpan.className = 'array-cell-val';
+      valSpan.textContent = String(elem.value);
+
+      // Address / offset
+      const addrSpan = document.createElement('span');
+      addrSpan.className = 'array-cell-addr';
+      if (elem.isCapacitySlot) {
+        addrSpan.textContent = 'buffer';
+      } else {
+        addrSpan.textContent = elem.address ? elem.address.slice(-4) : `+${elem.index * 4}`;
+      }
+
+      cell.appendChild(indexSpan);
+      cell.appendChild(valSpan);
+      cell.appendChild(addrSpan);
+
+      col.appendChild(cell);
+      strip.appendChild(col);
+    }
+
+    stripWrapper.appendChild(strip);
+    board.appendChild(stripWrapper);
+    container.appendChild(board);
+  }
+
+  nodesLayer.appendChild(container);
+}
+
 // Render the interactive graph with physics and dynamic arrows
 function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = false) {
   currentSnapshot = snapshot;
@@ -785,7 +961,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
 
   const { headId, nodes } = snapshot;
 
-  // 0. If head has not been declared/initialized yet (before line 10 executes)
+  // 0. If head has not been declared/initialized yet (before line executes)
   if (!snapshot.hasHead) {
     nodePositions.clear();
     d3NodesMap.clear();
@@ -797,7 +973,12 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
       paths.forEach((p) => p.remove());
     }
 
-    const dsName = snapshot.structureType === 'tree' ? 'tree' : 'linked list';
+    const dsName =
+      snapshot.structureType === 'tree'
+        ? 'tree'
+        : snapshot.structureType === 'array'
+        ? 'array'
+        : 'linked list';
     const emptyMsg = document.createElement('div');
     emptyMsg.className = 'empty-canvas-message';
     emptyMsg.innerHTML = `
@@ -815,6 +996,12 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
       simulation.stop();
       simulation.nodes([]);
     }
+    return;
+  }
+
+  // Handle Array Rendering
+  if (snapshot.structureType === 'array') {
+    renderArrayDiagram(snapshot);
     return;
   }
 

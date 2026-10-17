@@ -19,9 +19,7 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onLanguage:cpp",
-    "onView:debug-mentor.sidebar",
-    "onCommand:debug-mentor.visualize"
+    "onLanguage:cpp"
   ],
   "contributes": {
     "viewsContainers": {
@@ -38,7 +36,8 @@
         {
           "type": "webview",
           "id": "debug-mentor.sidebar",
-          "name": "SimIDE"
+          "name": "SimIDE",
+          "icon": "resources/icon.svg"
         }
       ]
     },

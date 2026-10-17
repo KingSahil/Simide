@@ -4,7 +4,12 @@ import * as fs from 'fs';
 import { CppCompiler } from '../src/debug/compiler';
 import { ExplanationGenerator } from '../src/visualization/explanationGenerator';
 import { SnapshotManager } from '../src/visualization/snapshotManager';
-import { LinkedListSnapshot, ListNode } from '../src/visualization/linkedListModel';
+import {
+  ArrayVariable,
+  IndexPointer,
+  LinkedListSnapshot,
+  ListNode,
+} from '../src/visualization/linkedListModel';
 import { DebugSessionManager } from '../src/debug/debugSessionManager';
 
 async function runTests() {
@@ -314,6 +319,137 @@ async function runTests() {
   assert.ok(treeVisitRes.explanation.includes('Visiting tree node containing 30 in inorder()'));
   console.log(`  ✓ BST Traversal Visit state: "${treeVisitRes.explanation}"`);
 
+  // State 13 (Array): Array Initialization
+  const arr1: ArrayVariable = {
+    name: 'arr',
+    type: 'int [5]',
+    size: 5,
+    elements: [
+      { index: 0, value: 10 },
+      { index: 1, value: 20 },
+      { index: 2, value: 30 },
+      { index: 3, value: 40 },
+      { index: 4, value: 50 },
+    ],
+  };
+  const arrayInitRes = ExplanationGenerator.generate(
+    [],
+    null,
+    undefined,
+    true,
+    [],
+    null,
+    '',
+    'array',
+    null,
+    undefined,
+    [arr1],
+    [{ name: 'i', targetIndex: 0, targetArrayName: 'arr', value: 0 }]
+  );
+  assert.strictEqual(arrayInitRes.changeType, 'array_initialized');
+  assert.ok(arrayInitRes.explanation.includes("Initialized array 'arr' of size 5: [10, 20, 30, 40, 50]"));
+  console.log(`  ✓ Array Initialized state: "${arrayInitRes.explanation}"`);
+
+  // State 14 (Array): Element update (arr[2] = 99)
+  const arrSnap1: LinkedListSnapshot = {
+    stepNumber: 1,
+    structureType: 'array',
+    hasHead: true,
+    headId: null,
+    nodes: [],
+    arrays: [arr1],
+    indexPointers: [{ name: 'i', targetIndex: 0, targetArrayName: 'arr', value: 0 }],
+    explanation: arrayInitRes.explanation,
+    changeType: 'array_initialized',
+  };
+  const arr2: ArrayVariable = {
+    ...arr1,
+    elements: arr1.elements.map((e) => (e.index === 2 ? { ...e, value: 99, isModified: true } : e)),
+  };
+  const arrayUpdateRes = ExplanationGenerator.generate(
+    [],
+    null,
+    arrSnap1,
+    true,
+    [],
+    null,
+    '',
+    'array',
+    null,
+    undefined,
+    [arr2],
+    [{ name: 'i', targetIndex: 2, targetArrayName: 'arr', value: 2 }]
+  );
+  assert.strictEqual(arrayUpdateRes.changeType, 'array_element_updated');
+  assert.ok(arrayUpdateRes.explanation.includes('Updated arr[2] from 30 to 99'));
+  console.log(`  ✓ Array Element Update state: "${arrayUpdateRes.explanation}"`);
+
+  // State 15 (Array): Element swap (swap arr[0] and arr[1])
+  const arrSnap2: LinkedListSnapshot = {
+    stepNumber: 2,
+    structureType: 'array',
+    hasHead: true,
+    headId: null,
+    nodes: [],
+    arrays: [arr2],
+    explanation: arrayUpdateRes.explanation,
+    changeType: 'array_element_updated',
+  };
+  const arr3: ArrayVariable = {
+    ...arr2,
+    elements: arr2.elements.map((e) => {
+      if (e.index === 0) return { ...e, value: 20 };
+      if (e.index === 1) return { ...e, value: 10 };
+      return e;
+    }),
+  };
+  const arraySwapRes = ExplanationGenerator.generate(
+    [],
+    null,
+    arrSnap2,
+    true,
+    [],
+    null,
+    '',
+    'array',
+    null,
+    undefined,
+    [arr3]
+  );
+  assert.strictEqual(arraySwapRes.changeType, 'array_element_swapped');
+  assert.ok(arraySwapRes.explanation.includes('Swapped elements arr[0] (20) and arr[1] (10)'));
+  console.log(`  ✓ Array Element Swap state: "${arraySwapRes.explanation}"`);
+
+  // State 16 (Array): Index Pointer Movement (i moved to index 3)
+  const arrSnap3: LinkedListSnapshot = {
+    stepNumber: 3,
+    structureType: 'array',
+    hasHead: true,
+    headId: null,
+    nodes: [],
+    arrays: [arr3],
+    indexPointers: [{ name: 'i', targetIndex: 2, targetArrayName: 'arr', value: 2 }],
+    explanation: arraySwapRes.explanation,
+    changeType: 'array_element_swapped',
+  };
+  const arrayPtrRes = ExplanationGenerator.generate(
+    [],
+    null,
+    arrSnap3,
+    true,
+    [],
+    null,
+    '',
+    'array',
+    null,
+    undefined,
+    [arr3],
+    [{ name: 'i', targetIndex: 3, targetArrayName: 'arr', value: 3 }]
+  );
+  assert.strictEqual(arrayPtrRes.changeType, 'array_pointer_moved');
+  assert.ok(arrayPtrRes.explanation.includes("Index pointer 'i' moved to index 3"));
+  console.log(`  ✓ Array Pointer Moved state: "${arrayPtrRes.explanation}"`);
+
   // Test 4: SnapshotManager historical navigation
   console.log('\n[Test 4] Testing SnapshotManager Non-Destructive History...');
   const manager = new SnapshotManager();
@@ -395,6 +531,15 @@ async function runTests() {
   assert.strictEqual(structInfoBst.rightField, 'right');
   console.log('  ✓ Verified parseStructMembers discovers data/val, next, and BST left/right tree fields');
 
+  const arrayOpsPath = path.resolve(process.cwd(), 'examples', 'array-operations.cpp');
+  const structInfoArray = StateExtractor.parseStructMembers(arrayOpsPath);
+  assert.strictEqual(structInfoArray.structureType, 'array');
+  const arrDecls = StateExtractor.discoverArrayDeclarations(arrayOpsPath);
+  assert.strictEqual(arrDecls.length, 1);
+  assert.strictEqual(arrDecls[0].name, 'arr');
+  assert.strictEqual(arrDecls[0].size, 5);
+  console.log('  ✓ Verified array structure discovery & declaration parsing for array-operations.cpp');
+
   // User defined functions discovery (including free functions and class member methods)
   const leetcodeFns = StateExtractor.getUserDefinedFunctions(leetcodePath);
   assert.ok(leetcodeFns.has('reverseList'), 'Must detect reverseList');
@@ -444,8 +589,8 @@ async function runTests() {
   console.log('  ✓ Verified multi-pointer parameters (loc, par, child, successor) and initialization checks');
 
   // Test 6: Compiling all internet examples
-  console.log('\n[Test 6] Testing Compilation of All Internet Examples & BST...');
-  for (const file of [leetcodePath, gfgPath, oopPath, bstPath]) {
+  console.log('\n[Test 6] Testing Compilation of All Internet Examples, BST & Arrays...');
+  for (const file of [leetcodePath, gfgPath, oopPath, bstPath, arrayOpsPath]) {
     const res = await CppCompiler.compile(file);
     assert.strictEqual(res.success, true, `Should compile ${path.basename(file)}: ${res.errorMessage}`);
     console.log(`  ✓ Successfully compiled ${path.basename(file)}`);
