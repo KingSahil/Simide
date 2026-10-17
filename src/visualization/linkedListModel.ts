@@ -1,4 +1,31 @@
-export type StructureType = 'linked_list' | 'tree';
+export type StructureType = 'linked_list' | 'tree' | 'array';
+
+export interface ArrayElement {
+  index: number;
+  value: number | string;
+  address?: string;
+  isModified?: boolean;
+  isActive?: boolean;
+  isCapacitySlot?: boolean;
+  isCompared?: boolean;
+}
+
+export interface ArrayVariable {
+  name: string;
+  type: string;
+  size: number;
+  capacity?: number;
+  elements: ArrayElement[];
+  address?: string;
+  isDynamic?: boolean;
+}
+
+export interface IndexPointer {
+  name: string;
+  targetIndex: number;
+  targetArrayName: string;
+  value?: number | string;
+}
 
 export interface ListNode {
   id: string;
@@ -51,17 +78,23 @@ export type ChangeType =
   | 'tree_node_created'
   | 'tree_child_linked'
   | 'tree_traversal_visit'
+  | 'array_initialized'
+  | 'array_element_updated'
+  | 'array_element_swapped'
+  | 'array_pointer_moved'
   | 'final';
 
 export interface LinkedListSnapshot {
   stepNumber: number;
   structureType?: StructureType;
   source?: SourceLocation;
-  hasHead: boolean; // Also represents hasRoot when structureType === 'tree'
+  hasHead: boolean; // Also represents hasRoot when structureType === 'tree', or hasArray when structureType === 'array'
   headId: string | null; // Also represents rootId when structureType === 'tree'
   activeVisitingNodeId?: string | null;
   nodes: ListNode[];
   pointers?: PointerVariable[];
+  arrays?: ArrayVariable[];
+  indexPointers?: IndexPointer[];
   explanation: string;
   changeType: ChangeType;
   terminalOutput?: string;

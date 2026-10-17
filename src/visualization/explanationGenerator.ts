@@ -1,4 +1,11 @@
-import { LinkedListSnapshot, ListNode, PointerVariable } from './linkedListModel';
+import {
+  ArrayVariable,
+  IndexPointer,
+  LinkedListSnapshot,
+  ListNode,
+  PointerVariable,
+  StructureType,
+} from './linkedListModel';
 
 export class ExplanationGenerator {
   public static generate(
@@ -9,10 +16,100 @@ export class ExplanationGenerator {
     pointers: PointerVariable[] = [],
     printedInStep?: string | null,
     accumulatedOutput?: string,
-    structureType: 'linked_list' | 'tree' = 'linked_list',
+    structureType: StructureType = 'linked_list',
     activeVisitingNodeId?: string | null,
-    currentFuncName?: string
+    currentFuncName?: string,
+    arrays: ArrayVariable[] = [],
+    indexPointers: IndexPointer[] = []
   ): { explanation: string; changeType: LinkedListSnapshot['changeType'] } {
+    if (structureType === 'array') {
+      if (!hasHead || arrays.length === 0) {
+        return {
+          explanation: 'Program paused at main(). Click Next to initialize the array.',
+          changeType: 'init',
+        };
+      }
+
+      if (printedInStep) {
+        const cleanPrint = printedInStep.replace(/\n$/, '');
+        const totalClean = (accumulatedOutput || '').trim();
+        const summaryText = totalClean.length > 0 ? ` Program output: ${totalClean}` : '';
+        return {
+          explanation: `Printed to terminal: "${cleanPrint}".${summaryText}`,
+          changeType: 'print',
+        };
+      }
+
+      const mainArr = arrays[0];
+      const prevArr = previousSnapshot?.arrays?.find((a) => a.name === mainArr.name);
+
+      // Case 1: Initial array creation
+      if (!prevArr || !previousSnapshot || !previousSnapshot.arrays || previousSnapshot.arrays.length === 0) {
+        return {
+          explanation: `Initialized array '${mainArr.name}' of size ${mainArr.size}: [${mainArr.elements.map((e) => e.value).join(', ')}].`,
+          changeType: 'array_initialized',
+        };
+      }
+
+      // Case 2: Element swap detection
+      if (prevArr) {
+        const changedIndices: number[] = [];
+        for (let idx = 0; idx < mainArr.elements.length; idx++) {
+          if (prevArr.elements[idx] && prevArr.elements[idx].value !== mainArr.elements[idx].value) {
+            changedIndices.push(idx);
+          }
+        }
+        if (changedIndices.length === 2) {
+          const [i, j] = changedIndices;
+          if (
+            prevArr.elements[i].value === mainArr.elements[j].value &&
+            prevArr.elements[j].value === mainArr.elements[i].value
+          ) {
+            return {
+              explanation: `Swapped elements ${mainArr.name}[${i}] (${mainArr.elements[i].value}) and ${mainArr.name}[${j}] (${mainArr.elements[j].value}).`,
+              changeType: 'array_element_swapped',
+            };
+          }
+        }
+
+        // Case 3: Single element update
+        if (changedIndices.length === 1) {
+          const idx = changedIndices[0];
+          const oldVal = prevArr.elements[idx]?.value;
+          const newVal = mainArr.elements[idx].value;
+          return {
+            explanation: `Updated ${mainArr.name}[${idx}] from ${oldVal} to ${newVal} (${mainArr.name}[${idx}] = ${newVal}).`,
+            changeType: 'array_element_updated',
+          };
+        } else if (changedIndices.length > 2) {
+          return {
+            explanation: `Updated ${changedIndices.length} elements in array '${mainArr.name}'.`,
+            changeType: 'array_element_updated',
+          };
+        }
+      }
+
+      // Case 4: Index pointer movement (e.g. i moved from 1 to 2)
+      if (previousSnapshot?.indexPointers) {
+        for (const currPtr of indexPointers) {
+          const prevPtr = previousSnapshot.indexPointers.find((p) => p.name === currPtr.name);
+          if (prevPtr && prevPtr.targetIndex !== currPtr.targetIndex) {
+            const elemVal = mainArr.elements[currPtr.targetIndex]?.value;
+            const valInfo = elemVal !== undefined ? ` (value: ${elemVal})` : '';
+            return {
+              explanation: `Index pointer '${currPtr.name}' moved to index ${currPtr.targetIndex}${valInfo}.`,
+              changeType: 'array_pointer_moved',
+            };
+          }
+        }
+      }
+
+      return {
+        explanation: `Array '${mainArr.name}' state: [${mainArr.elements.map((e) => e.value).join(', ')}].`,
+        changeType: 'step',
+      };
+    }
+
     if (structureType === 'tree') {
       if (!hasHead) {
         return {

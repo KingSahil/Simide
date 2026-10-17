@@ -2,7 +2,23 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Extension",
+      "name": "Run Extension (Array Demo)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extension=google.antigravity",
+        "--disable-extension=google.antigravity-code-executor",
+        "${workspaceFolder}/examples/array-operations.cpp"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile",
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Run Extension (Linked List Demo)",
       "type": "extensionHost",
       "request": "launch",
       "args": [

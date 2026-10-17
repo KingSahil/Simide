@@ -134,10 +134,13 @@ export class CppCompiler {
     }
 
     // Arguments: -g (debug symbols), -O0 (no optimization so variables are not eliminated), -std=c++17
-    const args = ['-g', '-O0', '-std=c++17', sourcePath, '-o', executablePath];
+    // Use relative paths with cwd to safely support non-ASCII characters in directory paths on Windows
+    const relSource = path.basename(sourcePath);
+    const relOut = path.join('.debug-mentor', path.basename(executablePath));
+    const args = ['-g', '-O0', '-std=c++17', relSource, '-o', relOut];
 
     try {
-      await execFileAsync(compiler, args);
+      await execFileAsync(compiler, args, { cwd: dir });
       return {
         success: true,
         executablePath,

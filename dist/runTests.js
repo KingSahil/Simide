@@ -72,7 +72,80 @@ var init_explanationGenerator = __esm({
   "src/visualization/explanationGenerator.ts"() {
     "use strict";
     ExplanationGenerator = class {
-      static generate(currentNodes, headId, previousSnapshot, hasHead = true, pointers = [], printedInStep, accumulatedOutput, structureType = "linked_list", activeVisitingNodeId, currentFuncName) {
+      static generate(currentNodes, headId, previousSnapshot, hasHead = true, pointers = [], printedInStep, accumulatedOutput, structureType = "linked_list", activeVisitingNodeId, currentFuncName, arrays = [], indexPointers = []) {
+        if (structureType === "array") {
+          if (!hasHead || arrays.length === 0) {
+            return {
+              explanation: "Program paused at main(). Click Next to initialize the array.",
+              changeType: "init"
+            };
+          }
+          if (printedInStep) {
+            const cleanPrint = printedInStep.replace(/\n$/, "");
+            const totalClean = (accumulatedOutput || "").trim();
+            const summaryText = totalClean.length > 0 ? ` Program output: ${totalClean}` : "";
+            return {
+              explanation: `Printed to terminal: "${cleanPrint}".${summaryText}`,
+              changeType: "print"
+            };
+          }
+          const mainArr = arrays[0];
+          const prevArr = previousSnapshot?.arrays?.find((a) => a.name === mainArr.name);
+          if (!prevArr || !previousSnapshot || !previousSnapshot.arrays || previousSnapshot.arrays.length === 0) {
+            return {
+              explanation: `Initialized array '${mainArr.name}' of size ${mainArr.size}: [${mainArr.elements.map((e) => e.value).join(", ")}].`,
+              changeType: "array_initialized"
+            };
+          }
+          if (prevArr) {
+            const changedIndices = [];
+            for (let idx = 0; idx < mainArr.elements.length; idx++) {
+              if (prevArr.elements[idx] && prevArr.elements[idx].value !== mainArr.elements[idx].value) {
+                changedIndices.push(idx);
+              }
+            }
+            if (changedIndices.length === 2) {
+              const [i, j] = changedIndices;
+              if (prevArr.elements[i].value === mainArr.elements[j].value && prevArr.elements[j].value === mainArr.elements[i].value) {
+                return {
+                  explanation: `Swapped elements ${mainArr.name}[${i}] (${mainArr.elements[i].value}) and ${mainArr.name}[${j}] (${mainArr.elements[j].value}).`,
+                  changeType: "array_element_swapped"
+                };
+              }
+            }
+            if (changedIndices.length === 1) {
+              const idx = changedIndices[0];
+              const oldVal = prevArr.elements[idx]?.value;
+              const newVal = mainArr.elements[idx].value;
+              return {
+                explanation: `Updated ${mainArr.name}[${idx}] from ${oldVal} to ${newVal} (${mainArr.name}[${idx}] = ${newVal}).`,
+                changeType: "array_element_updated"
+              };
+            } else if (changedIndices.length > 2) {
+              return {
+                explanation: `Updated ${changedIndices.length} elements in array '${mainArr.name}'.`,
+                changeType: "array_element_updated"
+              };
+            }
+          }
+          if (previousSnapshot?.indexPointers) {
+            for (const currPtr of indexPointers) {
+              const prevPtr = previousSnapshot.indexPointers.find((p) => p.name === currPtr.name);
+              if (prevPtr && prevPtr.targetIndex !== currPtr.targetIndex) {
+                const elemVal = mainArr.elements[currPtr.targetIndex]?.value;
+                const valInfo = elemVal !== void 0 ? ` (value: ${elemVal})` : "";
+                return {
+                  explanation: `Index pointer '${currPtr.name}' moved to index ${currPtr.targetIndex}${valInfo}.`,
+                  changeType: "array_pointer_moved"
+                };
+              }
+            }
+          }
+          return {
+            explanation: `Array '${mainArr.name}' state: [${mainArr.elements.map((e) => e.value).join(", ")}].`,
+            changeType: "step"
+          };
+        }
         if (structureType === "tree") {
           if (!hasHead) {
             return {
@@ -474,6 +547,77 @@ var init_stateExtractor = __esm({
         }
         return types;
       }
+      static discoverArrayDeclarations(resolvedPath) {
+        const arrays = [];
+        if (!resolvedPath || !fs3.existsSync(resolvedPath)) {
+          return arrays;
+        }
+        try {
+          const content = fs3.readFileSync(resolvedPath, "utf8");
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            const lineNum = i + 1;
+            if (line.startsWith("//") || line.startsWith("/*") || line.startsWith("#")) {
+              continue;
+            }
+            const stackMatch = line.match(
+              /(?:(?:const\s+)?(?:int|long|short|char|double|float|string|bool|uint\d+_t|int\d+_t))\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\[\s*([^\]]*)\s*\]/
+            );
+            if (stackMatch) {
+              const name = stackMatch[1];
+              const sizeStr = stackMatch[2]?.trim();
+              let parsedSize = sizeStr ? parseInt(sizeStr, 10) : void 0;
+              if (parsedSize === void 0 || isNaN(parsedSize)) {
+                const initMatch = line.match(/=\s*\{([^}]+)\}/);
+                if (initMatch) {
+                  const elements = initMatch[1].split(",").filter((s) => s.trim().length > 0);
+                  parsedSize = elements.length;
+                }
+              }
+              arrays.push({
+                name,
+                line: lineNum,
+                size: parsedSize && !isNaN(parsedSize) ? parsedSize : void 0,
+                type: "stack_array",
+                isDynamic: false
+              });
+              continue;
+            }
+            const dynMatch = line.match(
+              /(?:int|long|short|char|double|float|string|bool)\s*\*\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*new\s+(?:int|long|short|char|double|float|string|bool)\s*\[\s*([^\]]+)\s*\]/
+            );
+            if (dynMatch) {
+              const name = dynMatch[1];
+              const sizeExpr = dynMatch[2].trim();
+              const parsedSize = parseInt(sizeExpr, 10);
+              arrays.push({
+                name,
+                line: lineNum,
+                size: !isNaN(parsedSize) ? parsedSize : void 0,
+                type: "dynamic_array",
+                isDynamic: true
+              });
+              continue;
+            }
+            const vecMatch = line.match(
+              /(?:std::)?vector\s*<\s*[^>]+\s*>\s*([a-zA-Z_][a-zA-Z0-9_]*)/
+            );
+            if (vecMatch) {
+              const name = vecMatch[1];
+              arrays.push({
+                name,
+                line: lineNum,
+                type: "vector",
+                isDynamic: true
+              });
+              continue;
+            }
+          }
+        } catch {
+        }
+        return arrays;
+      }
       static getUserDefinedFunctions(sourceFilePath) {
         const resolvedPath = this.resolveFilePath(sourceFilePath) || sourceFilePath || "";
         const funcNames = /* @__PURE__ */ new Set();
@@ -509,6 +653,7 @@ var init_stateExtractor = __esm({
         let leftField = "left";
         let rightField = "right";
         let structureType = "linked_list";
+        let hasNodePointer = false;
         if (!resolvedPath || !fs3.existsSync(resolvedPath)) {
           return { dataField, nextField, leftField, rightField, structureType };
         }
@@ -552,12 +697,14 @@ var init_stateExtractor = __esm({
             );
             if (hasLeft || hasRight || isTreeNamed) {
               structureType = "tree";
+              hasNodePointer = true;
               if (hasLeft)
                 leftField = hasLeft;
               if (hasRight)
                 rightField = hasRight;
             } else if (hasNext) {
               structureType = "linked_list";
+              hasNodePointer = true;
               nextField = hasNext;
             }
             const dataMatches = body.matchAll(
@@ -572,6 +719,12 @@ var init_stateExtractor = __esm({
             }
             if (dataField && (hasLeft || hasRight || hasNext)) {
               break;
+            }
+          }
+          if (!hasNodePointer) {
+            const arrayDecls = this.discoverArrayDeclarations(resolvedPath);
+            if (arrayDecls.length > 0) {
+              structureType = "array";
             }
           }
         } catch {
@@ -899,6 +1052,203 @@ var init_stateExtractor = __esm({
         }
         return null;
       }
+      static async extractArrays(session, frameId, localVars, evalExpr, rawLine, varDecls, funcRange, resolvedFile, previousSnapshot) {
+        const discoveredArrays = [];
+        const indexPointers = [];
+        const arrayDeclList = this.discoverArrayDeclarations(resolvedFile);
+        const arrayDeclMap = /* @__PURE__ */ new Map();
+        for (const ad of arrayDeclList) {
+          arrayDeclMap.set(ad.name, ad);
+        }
+        for (const [varName, varInfo] of Object.entries(localVars)) {
+          if (varName.startsWith("__") || varName === "this" || varName === "argc" || varName === "argv") {
+            continue;
+          }
+          const decl = arrayDeclMap.get(varName);
+          const typeStr = (varInfo.type || "").toLowerCase();
+          const valStr = (varInfo.value || "").trim();
+          const isStackArray = typeStr.includes("[") || decl && decl.type === "stack_array" || valStr.startsWith("{") && valStr.endsWith("}") && valStr.includes(",");
+          const isVector = typeStr.includes("vector") || decl && decl.type === "vector";
+          const isDynamicArray = decl && decl.type === "dynamic_array" || typeStr.includes("*") && (valStr.includes("0x") || valStr.includes("new"));
+          if (!isStackArray && !isVector && !isDynamicArray) {
+            continue;
+          }
+          if (!varInfo.isArgument) {
+            if (decl && rawLine <= decl.line) {
+              continue;
+            }
+            if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
+              continue;
+            }
+          }
+          let size = 0;
+          if (decl && decl.size && decl.size > 0) {
+            size = decl.size;
+          }
+          if (isStackArray && size === 0) {
+            const sizeEval = await evalExpr(`sizeof(${varName}) / sizeof(${varName}[0])`);
+            if (sizeEval) {
+              const parsed = parseInt(sizeEval.match(/\d+/)?.[0] || "0", 10);
+              if (parsed > 0 && parsed <= 256) {
+                size = parsed;
+              }
+            }
+          } else if (isVector) {
+            const sizeEval = await evalExpr(`${varName}.size()`);
+            if (sizeEval) {
+              const parsed = parseInt(sizeEval.match(/\d+/)?.[0] || "0", 10);
+              if (parsed >= 0 && parsed <= 256) {
+                size = parsed;
+              }
+            }
+          } else if (isDynamicArray && size === 0) {
+            for (const [otherName, otherInfo] of Object.entries(localVars)) {
+              if (["n", "size", "len", "length", "count", "capacity"].includes(otherName.toLowerCase())) {
+                const parsed = parseInt(otherInfo.value.match(/\d+/)?.[0] || "0", 10);
+                if (parsed > 0 && parsed <= 256) {
+                  size = parsed;
+                  break;
+                }
+              }
+            }
+          }
+          let childVars = [];
+          if (varInfo.variablesReference > 0) {
+            try {
+              const childRes = await session.customRequest("variables", {
+                variablesReference: varInfo.variablesReference
+              });
+              if (childRes?.variables && Array.isArray(childRes.variables)) {
+                childVars = childRes.variables;
+                if (size === 0 && childVars.length > 0) {
+                  size = Math.min(childVars.length, 64);
+                }
+              }
+            } catch {
+            }
+          }
+          if (size === 0) {
+            size = 5;
+          }
+          const effectiveSize = Math.min(size, 64);
+          let baseAddress;
+          const addrEval = await evalExpr(`&${varName}`);
+          if (addrEval) {
+            baseAddress = this.parsePointer(addrEval) || void 0;
+          }
+          const elements = [];
+          const prevArray = previousSnapshot?.arrays?.find((a) => a.name === varName);
+          for (let idx = 0; idx < effectiveSize; idx++) {
+            let elemVal = 0;
+            let elemAddr;
+            const child = childVars.find(
+              (c) => c.name === `[${idx}]` || c.name === `${idx}`
+            );
+            if (child) {
+              elemVal = this.parseData(child.value);
+            } else {
+              const elemEval = await evalExpr(`${varName}[${idx}]`);
+              if (elemEval !== null) {
+                elemVal = this.parseData(elemEval);
+              }
+            }
+            const elemAddrEval = await evalExpr(`&${varName}[${idx}]`);
+            if (elemAddrEval) {
+              elemAddr = this.parsePointer(elemAddrEval) || void 0;
+            }
+            const prevElem = prevArray?.elements[idx];
+            const isModified = prevElem !== void 0 && prevElem.value !== elemVal;
+            elements.push({
+              index: idx,
+              value: elemVal,
+              address: elemAddr,
+              isModified,
+              isActive: false
+            });
+          }
+          let capacity;
+          if (isVector) {
+            const capEval = await evalExpr(`${varName}.capacity()`);
+            if (capEval) {
+              const parsedCap = parseInt(capEval.match(/\d+/)?.[0] || "0", 10);
+              if (parsedCap >= size && parsedCap <= 64) {
+                capacity = parsedCap;
+              }
+            }
+          }
+          if (capacity && capacity > effectiveSize) {
+            for (let idx = effectiveSize; idx < capacity; idx++) {
+              elements.push({
+                index: idx,
+                value: "\u2205",
+                isCapacitySlot: true,
+                isModified: false,
+                isActive: false
+              });
+            }
+          }
+          discoveredArrays.push({
+            name: varName,
+            type: varInfo.type || (isVector ? "std::vector" : "array"),
+            size: effectiveSize,
+            capacity,
+            elements,
+            address: baseAddress,
+            isDynamic: isDynamicArray || isVector
+          });
+        }
+        const indexVarNames = /* @__PURE__ */ new Set([
+          "i",
+          "j",
+          "k",
+          "idx",
+          "index",
+          "left",
+          "right",
+          "low",
+          "high",
+          "mid",
+          "start",
+          "end",
+          "p",
+          "ptr",
+          "curr"
+        ]);
+        for (const [varName, varInfo] of Object.entries(localVars)) {
+          if (discoveredArrays.some((a) => a.name === varName)) {
+            continue;
+          }
+          if (varName.startsWith("__") || varName === "argc" || varName === "argv") {
+            continue;
+          }
+          if (!varInfo.isArgument) {
+            if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
+              continue;
+            }
+          }
+          const typeStr = (varInfo.type || "").toLowerCase();
+          const isInteger = typeStr.includes("int") || typeStr.includes("size_t") || typeStr.includes("short") || typeStr.includes("long") || indexVarNames.has(varName.toLowerCase());
+          if (isInteger) {
+            const parsed = parseInt(varInfo.value.match(/-?\d+/)?.[0] || "", 10);
+            if (!isNaN(parsed)) {
+              for (const arr of discoveredArrays) {
+                if (parsed >= 0 && parsed < arr.size) {
+                  indexPointers.push({
+                    name: varName,
+                    targetIndex: parsed,
+                    targetArrayName: arr.name,
+                    value: parsed
+                  });
+                  if (arr.elements[parsed]) {
+                    arr.elements[parsed].isActive = true;
+                  }
+                }
+              }
+            }
+          }
+        }
+        return { arrays: discoveredArrays, indexPointers };
+      }
       static async extractState(session, threadId, stepNumber, previousSnapshot) {
         try {
           const stackResponse = await session.customRequest("stackTrace", {
@@ -957,20 +1307,30 @@ var init_stateExtractor = __esm({
           let hasHead = this.hasInitializedList;
           if (!hasHead) {
             if (isInsideMain) {
-              const candidates = structureType === "tree" ? ["root", "tree", "bst", "head", "t", "r"] : ["head", "root", "first", "list", "start", "dummy", "headNode"];
-              let declaredCandidate = null;
-              for (const cand of candidates) {
-                const lines = varDecls.get(cand);
-                const inFunc = funcRange ? lines?.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine) : lines;
-                if (inFunc && inFunc.length > 0) {
-                  declaredCandidate = cand;
-                  break;
+              if (structureType === "array") {
+                const arrayDecls = this.discoverArrayDeclarations(resolvedFile);
+                if (arrayDecls.length > 0) {
+                  const firstArr = arrayDecls[0];
+                  hasHead = rawLine > firstArr.line;
+                } else {
+                  hasHead = true;
                 }
-              }
-              if (declaredCandidate) {
-                hasHead = this.isVariableInitialized(declaredCandidate, rawLine, varDecls, funcRange);
               } else {
-                hasHead = this.hasSteppedPastFirstPointerDecl(rawLine, varDecls, funcRange);
+                const candidates = structureType === "tree" ? ["root", "tree", "bst", "head", "t", "r"] : ["head", "root", "first", "list", "start", "dummy", "headNode"];
+                let declaredCandidate = null;
+                for (const cand of candidates) {
+                  const lines = varDecls.get(cand);
+                  const inFunc = funcRange ? lines?.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine) : lines;
+                  if (inFunc && inFunc.length > 0) {
+                    declaredCandidate = cand;
+                    break;
+                  }
+                }
+                if (declaredCandidate) {
+                  hasHead = this.isVariableInitialized(declaredCandidate, rawLine, varDecls, funcRange);
+                } else {
+                  hasHead = this.hasSteppedPastFirstPointerDecl(rawLine, varDecls, funcRange);
+                }
               }
             } else {
               hasHead = true;
@@ -978,7 +1338,7 @@ var init_stateExtractor = __esm({
           }
           if (!hasHead) {
             this.lastPausedLine = rawLine;
-            const initExplanation = structureType === "tree" ? "Program paused at start. Click Next to allocate and initialize tree: TreeNode* root = ..." : "Program paused at start. Click Next to execute: Node* head = ...";
+            const initExplanation = structureType === "tree" ? "Program paused at start. Click Next to allocate and initialize tree: TreeNode* root = ..." : structureType === "array" ? "Program paused at start. Click Next to allocate and initialize array." : "Program paused at start. Click Next to execute: Node* head = ...";
             return {
               stepNumber,
               structureType,
@@ -991,6 +1351,8 @@ var init_stateExtractor = __esm({
               headId: null,
               nodes: [],
               pointers: [],
+              arrays: [],
+              indexPointers: [],
               explanation: initExplanation,
               changeType: "init",
               terminalOutput: "",
@@ -1068,355 +1430,379 @@ var init_stateExtractor = __esm({
               this.deletedAddresses.add(delAddr.toLowerCase());
             }
           }
-          let headAddr = null;
+          let arrays = [];
+          let indexPointers = [];
+          let allNodes = [];
+          let activePointers = [];
           let headId = null;
-          const headCandidates = [
-            "root",
-            "this->root",
-            "pRoot",
-            "this->pRoot",
-            "tree",
-            "this->tree",
-            "t",
-            "head",
-            "this->head",
-            "pHead",
-            "this->pHead",
-            "headNode",
-            "this->headNode",
-            "first",
-            "this->first",
-            "start",
-            "list",
-            "dummy",
-            "dummyHead",
-            "h",
-            "l1",
-            "l2",
-            "head_ref",
-            "root_ref",
-            "top",
-            "front",
-            "listHead",
-            "_head",
-            "_root",
-            "m_head",
-            "m_root"
-          ];
-          const isInMain = isInsideMain;
-          if (isInMain) {
-            for (const cand of headCandidates) {
-              if (varDecls.has(cand) && !this.isVariableInitialized(cand, rawLine, varDecls, funcRange)) {
-                continue;
-              }
-              let valStr = localVars[cand]?.value;
-              if (!valStr) {
-                valStr = await evalExpr(cand) || void 0;
-              }
-              if (valStr) {
-                if (cand === "head_ref" || cand === "root_ref" || valStr.includes("**")) {
-                  const derefVal = await evalExpr(`*${cand}`);
-                  headAddr = this.parsePointer(derefVal);
-                } else {
-                  headAddr = this.parsePointer(valStr);
+          let activeVisitingNodeId = null;
+          if (structureType === "array") {
+            const arrData = await this.extractArrays(
+              session,
+              frameId,
+              localVars,
+              evalExpr,
+              rawLine,
+              varDecls,
+              funcRange,
+              resolvedFile,
+              previousSnapshot
+            );
+            arrays = arrData.arrays;
+            indexPointers = arrData.indexPointers;
+            if (arrays.length > 0) {
+              this.hasInitializedList = true;
+            }
+          } else {
+            let headAddr = null;
+            const headCandidates = [
+              "root",
+              "this->root",
+              "pRoot",
+              "this->pRoot",
+              "tree",
+              "this->tree",
+              "t",
+              "head",
+              "this->head",
+              "pHead",
+              "this->pHead",
+              "headNode",
+              "this->headNode",
+              "first",
+              "this->first",
+              "start",
+              "list",
+              "dummy",
+              "dummyHead",
+              "h",
+              "l1",
+              "l2",
+              "head_ref",
+              "root_ref",
+              "top",
+              "front",
+              "listHead",
+              "_head",
+              "_root",
+              "m_head",
+              "m_root"
+            ];
+            const isInMain = isInsideMain;
+            if (isInMain) {
+              for (const cand of headCandidates) {
+                if (varDecls.has(cand) && !this.isVariableInitialized(cand, rawLine, varDecls, funcRange)) {
+                  continue;
                 }
-                if (headAddr && !this.deletedAddresses.has(headAddr)) {
-                  break;
-                } else {
-                  headAddr = null;
+                let valStr = localVars[cand]?.value;
+                if (!valStr) {
+                  valStr = await evalExpr(cand) || void 0;
+                }
+                if (valStr) {
+                  if (cand === "head_ref" || cand === "root_ref" || valStr.includes("**")) {
+                    const derefVal = await evalExpr(`*${cand}`);
+                    headAddr = this.parsePointer(derefVal);
+                  } else {
+                    headAddr = this.parsePointer(valStr);
+                  }
+                  if (headAddr && !this.deletedAddresses.has(headAddr)) {
+                    break;
+                  } else {
+                    headAddr = null;
+                  }
                 }
               }
             }
-          }
-          if (!headAddr) {
-            for (let i = isInMain ? 1 : 0; i < frames.length; i++) {
-              const callerFrame = frames[i];
-              const callerPath = callerFrame.source?.path || callerFrame.source?.name || "";
-              if (!this.isUserSource(callerPath))
-                continue;
-              const callerName = (callerFrame.name || "").toLowerCase();
-              const isCallerMain = callerName === "main" || callerName.startsWith("main(");
-              for (const cand of headCandidates) {
-                const valStr = await evalExpr(cand, callerFrame.id);
-                if (valStr) {
-                  let candidate = null;
-                  if (cand === "head_ref" || cand === "root_ref" || valStr.includes("**")) {
-                    const derefVal = await evalExpr(`*${cand}`, callerFrame.id);
-                    candidate = this.parsePointer(derefVal);
-                  } else {
-                    candidate = this.parsePointer(valStr);
+            if (!headAddr) {
+              for (let i = isInMain ? 1 : 0; i < frames.length; i++) {
+                const callerFrame = frames[i];
+                const callerPath = callerFrame.source?.path || callerFrame.source?.name || "";
+                if (!this.isUserSource(callerPath))
+                  continue;
+                const callerName = (callerFrame.name || "").toLowerCase();
+                const isCallerMain = callerName === "main" || callerName.startsWith("main(");
+                for (const cand of headCandidates) {
+                  const valStr = await evalExpr(cand, callerFrame.id);
+                  if (valStr) {
+                    let candidate = null;
+                    if (cand === "head_ref" || cand === "root_ref" || valStr.includes("**")) {
+                      const derefVal = await evalExpr(`*${cand}`, callerFrame.id);
+                      candidate = this.parsePointer(derefVal);
+                    } else {
+                      candidate = this.parsePointer(valStr);
+                    }
+                    if (candidate && !this.deletedAddresses.has(candidate)) {
+                      headAddr = candidate;
+                      break;
+                    }
                   }
-                  if (candidate && !this.deletedAddresses.has(candidate)) {
-                    headAddr = candidate;
+                }
+                if (headAddr)
+                  break;
+                if (isCallerMain && !headAddr)
+                  break;
+              }
+            }
+            if (!headAddr && previousSnapshot?.headId) {
+              const prevHeadNode = previousSnapshot.nodes.find((n) => n.id === previousSnapshot.headId);
+              if (prevHeadNode && !this.deletedAddresses.has(prevHeadNode.address)) {
+                headAddr = prevHeadNode.address;
+              }
+            }
+            if (headAddr && !this.deletedAddresses.has(headAddr)) {
+              headId = this.getStableId(headAddr);
+              this.hasInitializedList = true;
+            } else {
+              headAddr = null;
+            }
+            let nodeType;
+            {
+              let sourceDefinedType = null;
+              try {
+                if (fs3.existsSync(resolvedFile)) {
+                  const content = fs3.readFileSync(resolvedFile, "utf8");
+                  const structMatches = Array.from(content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\{([^}]*?)\}/gs));
+                  for (const sm of structMatches) {
+                    const body = sm[2] || "";
+                    if (body.includes("*")) {
+                      sourceDefinedType = sm[1];
+                    }
+                  }
+                }
+              } catch {
+              }
+              nodeType = sourceDefinedType || (structureType === "tree" ? "TreeNode" : "Node");
+            }
+            const allDiscoveredNodes = /* @__PURE__ */ new Map();
+            const visitedAddrs = /* @__PURE__ */ new Set();
+            const traverseChain = async (startAddr, isHeadChain, associatedVar) => {
+              let currAddr = startAddr;
+              let depth = 0;
+              const MAX_DEPTH = 50;
+              while (currAddr && !visitedAddrs.has(currAddr) && depth < MAX_DEPTH) {
+                if (this.deletedAddresses.has(currAddr)) {
+                  break;
+                }
+                visitedAddrs.add(currAddr);
+                depth++;
+                const id = this.getStableId(currAddr);
+                const ptrCast = `((${nodeType}*)${currAddr})`;
+                const dataField = await this.resolveDataField(evalExpr, ptrCast);
+                const nextField = await this.resolveNextField(evalExpr, ptrCast);
+                const dataStr = await evalExpr(`${ptrCast}->${dataField}`);
+                const nextValStr = await evalExpr(`${ptrCast}->${nextField}`);
+                const nextAddr = this.parsePointer(nextValStr);
+                const nextId = nextAddr && !this.deletedAddresses.has(nextAddr) ? this.getStableId(nextAddr) : null;
+                const isNodeHead = currAddr === headAddr;
+                allDiscoveredNodes.set(currAddr, {
+                  id,
+                  address: currAddr,
+                  data: this.parseData(dataStr || "0"),
+                  nextId,
+                  nextAddress: nextAddr,
+                  isHead: isNodeHead,
+                  isDetached: !isHeadChain && !isNodeHead,
+                  variableName: isNodeHead ? "head" : depth === 1 ? associatedVar : void 0
+                });
+                if (nextAddr && !this.deletedAddresses.has(nextAddr)) {
+                  currAddr = nextAddr;
+                } else {
+                  break;
+                }
+              }
+            };
+            const traverseTree = async (startAddr, isRootTree, associatedVar) => {
+              const queue = [{ addr: startAddr, depth: 0 }];
+              const MAX_NODES = 100;
+              let count = 0;
+              while (queue.length > 0 && count < MAX_NODES) {
+                const item = queue.shift();
+                const currAddr = item.addr;
+                const depth = item.depth;
+                if (!currAddr || visitedAddrs.has(currAddr) || this.deletedAddresses.has(currAddr)) {
+                  continue;
+                }
+                visitedAddrs.add(currAddr);
+                count++;
+                const id = this.getStableId(currAddr);
+                const ptrCast = `((${nodeType}*)${currAddr})`;
+                const dataField = await this.resolveDataField(evalExpr, ptrCast);
+                const leftField = await this.resolveLeftField(evalExpr, ptrCast);
+                const rightField = await this.resolveRightField(evalExpr, ptrCast);
+                const dataStr = await evalExpr(`${ptrCast}->${dataField}`);
+                const leftValStr = await evalExpr(`${ptrCast}->${leftField}`);
+                const rightValStr = await evalExpr(`${ptrCast}->${rightField}`);
+                const leftAddr = this.parsePointer(leftValStr);
+                const rightAddr = this.parsePointer(rightValStr);
+                const leftId = leftAddr && !this.deletedAddresses.has(leftAddr) ? this.getStableId(leftAddr) : null;
+                const rightId = rightAddr && !this.deletedAddresses.has(rightAddr) ? this.getStableId(rightAddr) : null;
+                const isNodeRoot = currAddr === headAddr;
+                allDiscoveredNodes.set(currAddr, {
+                  id,
+                  address: currAddr,
+                  data: this.parseData(dataStr || "0"),
+                  leftId,
+                  leftAddress: leftAddr,
+                  rightId,
+                  rightAddress: rightAddr,
+                  isHead: isNodeRoot,
+                  isRoot: isNodeRoot,
+                  isDetached: !isRootTree && !isNodeRoot,
+                  treeDepth: depth,
+                  variableName: isNodeRoot ? structureType === "tree" ? "root" : "head" : depth === 0 ? associatedVar : void 0
+                });
+                if (leftAddr && !this.deletedAddresses.has(leftAddr) && !visitedAddrs.has(leftAddr)) {
+                  queue.push({ addr: leftAddr, depth: depth + 1 });
+                }
+                if (rightAddr && !this.deletedAddresses.has(rightAddr) && !visitedAddrs.has(rightAddr)) {
+                  queue.push({ addr: rightAddr, depth: depth + 1 });
+                }
+              }
+            };
+            if (headAddr) {
+              if (structureType === "tree") {
+                await traverseTree(headAddr, true, "root");
+              } else {
+                await traverseChain(headAddr, true, "head");
+              }
+            }
+            const activePointers2 = [];
+            if (hasHead) {
+              activePointers2.push({
+                name: structureType === "tree" ? "root" : "head",
+                targetNodeId: headId,
+                targetAddress: headAddr,
+                isNull: headAddr === null
+              });
+            }
+            for (const [varName, varInfo] of Object.entries(localVars)) {
+              if (varName === "head" || varName === "root" || varName === "this")
+                continue;
+              if (varName === "data" || varName === "val" || varName === "key" || varName === "argc" || varName === "argv" || varName === "count" || varName === "i" || varName === "j" || varName === "k" || varName.startsWith("__")) {
+                continue;
+              }
+              if (!varInfo.isArgument) {
+                if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
+                  continue;
+                }
+              }
+              const varAddr = this.parsePointer(varInfo.value);
+              const isFreed = varAddr ? this.deletedAddresses.has(varAddr) : false;
+              const targetId = varAddr && !isFreed ? this.getStableId(varAddr) : null;
+              const isTargetingKnownNode = varAddr ? allDiscoveredNodes.has(varAddr) : false;
+              const isPointerType = varInfo.type && (varInfo.type.includes("*") || varInfo.type.includes("&")) || varName === "temp" || varName === "prev" || varName === "curr" || varName === "current" || varName === "forward" || varName === "next" || varName === "node" || varName === "first" || varName === "second" || varName === "third" || varName === "tail" || varName === "last" || varName === "p" || varName === "q" || varName === "l1" || varName === "l2" || varName === "dummy" || varName === "fast" || varName === "slow";
+              if (isPointerType || isTargetingKnownNode) {
+                activePointers2.push({
+                  name: varName,
+                  targetNodeId: targetId,
+                  targetAddress: isFreed ? null : varAddr,
+                  isNull: varAddr === null || isFreed
+                });
+                if (varAddr && !isFreed && !visitedAddrs.has(varAddr)) {
+                  if (structureType === "tree") {
+                    await traverseTree(varAddr, false, varName);
+                  } else {
+                    await traverseChain(varAddr, false, varName);
+                  }
+                }
+              }
+            }
+            if (previousSnapshot?.nodes && previousSnapshot.hasHead && stepNumber > 1) {
+              for (const prevNode of previousSnapshot.nodes) {
+                if (prevNode.address && !this.deletedAddresses.has(prevNode.address) && !visitedAddrs.has(prevNode.address)) {
+                  if (structureType === "tree") {
+                    await traverseTree(prevNode.address, false);
+                  } else {
+                    await traverseChain(prevNode.address, false);
+                  }
+                }
+              }
+            }
+            if (structureType === "tree") {
+              const reachableFromRoot = /* @__PURE__ */ new Set();
+              if (headId) {
+                const queue = [headId];
+                const visitedTree = /* @__PURE__ */ new Set();
+                while (queue.length > 0) {
+                  const currId = queue.shift();
+                  if (visitedTree.has(currId))
+                    continue;
+                  visitedTree.add(currId);
+                  reachableFromRoot.add(currId);
+                  const foundNode = Array.from(allDiscoveredNodes.values()).find((n) => n.id === currId);
+                  if (foundNode) {
+                    if (foundNode.leftId)
+                      queue.push(foundNode.leftId);
+                    if (foundNode.rightId)
+                      queue.push(foundNode.rightId);
+                  }
+                }
+              }
+              for (const node of allDiscoveredNodes.values()) {
+                node.isDetached = !reachableFromRoot.has(node.id);
+              }
+              if (headId) {
+                let inOrderCol = 0;
+                const nodeMap = /* @__PURE__ */ new Map();
+                for (const n of allDiscoveredNodes.values()) {
+                  nodeMap.set(n.id, n);
+                }
+                const assignInOrder = (nodeId, depth) => {
+                  if (!nodeId)
+                    return;
+                  const n = nodeMap.get(nodeId);
+                  if (!n)
+                    return;
+                  n.treeDepth = depth;
+                  if (n.leftId)
+                    assignInOrder(n.leftId, depth + 1);
+                  n.treeColumn = inOrderCol++;
+                  if (n.rightId)
+                    assignInOrder(n.rightId, depth + 1);
+                };
+                assignInOrder(headId, 0);
+              }
+            } else {
+              const reachableFromHead = /* @__PURE__ */ new Set();
+              if (headId) {
+                let currId = headId;
+                const headVisited = /* @__PURE__ */ new Set();
+                while (currId && !headVisited.has(currId)) {
+                  headVisited.add(currId);
+                  reachableFromHead.add(currId);
+                  const foundNode = Array.from(allDiscoveredNodes.values()).find((n) => n.id === currId);
+                  if (foundNode && foundNode.nextId) {
+                    currId = foundNode.nextId;
+                  } else {
                     break;
                   }
                 }
               }
-              if (headAddr)
-                break;
-              if (isCallerMain && !headAddr)
-                break;
-            }
-          }
-          if (!headAddr && previousSnapshot?.headId) {
-            const prevHeadNode = previousSnapshot.nodes.find((n) => n.id === previousSnapshot.headId);
-            if (prevHeadNode && !this.deletedAddresses.has(prevHeadNode.address)) {
-              headAddr = prevHeadNode.address;
-            }
-          }
-          if (headAddr && !this.deletedAddresses.has(headAddr)) {
-            headId = this.getStableId(headAddr);
-            this.hasInitializedList = true;
-          } else {
-            headAddr = null;
-          }
-          let nodeType;
-          {
-            let sourceDefinedType = null;
-            try {
-              if (fs3.existsSync(resolvedFile)) {
-                const content = fs3.readFileSync(resolvedFile, "utf8");
-                const structMatches = Array.from(content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\{([^}]*?)\}/gs));
-                for (const sm of structMatches) {
-                  const body = sm[2] || "";
-                  if (body.includes("*")) {
-                    sourceDefinedType = sm[1];
-                  }
-                }
-              }
-            } catch {
-            }
-            nodeType = sourceDefinedType || (structureType === "tree" ? "TreeNode" : "Node");
-          }
-          const allDiscoveredNodes = /* @__PURE__ */ new Map();
-          const visitedAddrs = /* @__PURE__ */ new Set();
-          const traverseChain = async (startAddr, isHeadChain, associatedVar) => {
-            let currAddr = startAddr;
-            let depth = 0;
-            const MAX_DEPTH = 50;
-            while (currAddr && !visitedAddrs.has(currAddr) && depth < MAX_DEPTH) {
-              if (this.deletedAddresses.has(currAddr)) {
-                break;
-              }
-              visitedAddrs.add(currAddr);
-              depth++;
-              const id = this.getStableId(currAddr);
-              const ptrCast = `((${nodeType}*)${currAddr})`;
-              const dataField = await this.resolveDataField(evalExpr, ptrCast);
-              const nextField = await this.resolveNextField(evalExpr, ptrCast);
-              const dataStr = await evalExpr(`${ptrCast}->${dataField}`);
-              const nextValStr = await evalExpr(`${ptrCast}->${nextField}`);
-              const nextAddr = this.parsePointer(nextValStr);
-              const nextId = nextAddr && !this.deletedAddresses.has(nextAddr) ? this.getStableId(nextAddr) : null;
-              const isNodeHead = currAddr === headAddr;
-              allDiscoveredNodes.set(currAddr, {
-                id,
-                address: currAddr,
-                data: this.parseData(dataStr || "0"),
-                nextId,
-                nextAddress: nextAddr,
-                isHead: isNodeHead,
-                isDetached: !isHeadChain && !isNodeHead,
-                variableName: isNodeHead ? "head" : depth === 1 ? associatedVar : void 0
-              });
-              if (nextAddr && !this.deletedAddresses.has(nextAddr)) {
-                currAddr = nextAddr;
-              } else {
-                break;
+              for (const node of allDiscoveredNodes.values()) {
+                node.isDetached = !reachableFromHead.has(node.id);
               }
             }
-          };
-          const traverseTree = async (startAddr, isRootTree, associatedVar) => {
-            const queue = [{ addr: startAddr, depth: 0 }];
-            const MAX_NODES = 100;
-            let count = 0;
-            while (queue.length > 0 && count < MAX_NODES) {
-              const item = queue.shift();
-              const currAddr = item.addr;
-              const depth = item.depth;
-              if (!currAddr || visitedAddrs.has(currAddr) || this.deletedAddresses.has(currAddr)) {
-                continue;
-              }
-              visitedAddrs.add(currAddr);
-              count++;
-              const id = this.getStableId(currAddr);
-              const ptrCast = `((${nodeType}*)${currAddr})`;
-              const dataField = await this.resolveDataField(evalExpr, ptrCast);
-              const leftField = await this.resolveLeftField(evalExpr, ptrCast);
-              const rightField = await this.resolveRightField(evalExpr, ptrCast);
-              const dataStr = await evalExpr(`${ptrCast}->${dataField}`);
-              const leftValStr = await evalExpr(`${ptrCast}->${leftField}`);
-              const rightValStr = await evalExpr(`${ptrCast}->${rightField}`);
-              const leftAddr = this.parsePointer(leftValStr);
-              const rightAddr = this.parsePointer(rightValStr);
-              const leftId = leftAddr && !this.deletedAddresses.has(leftAddr) ? this.getStableId(leftAddr) : null;
-              const rightId = rightAddr && !this.deletedAddresses.has(rightAddr) ? this.getStableId(rightAddr) : null;
-              const isNodeRoot = currAddr === headAddr;
-              allDiscoveredNodes.set(currAddr, {
-                id,
-                address: currAddr,
-                data: this.parseData(dataStr || "0"),
-                leftId,
-                leftAddress: leftAddr,
-                rightId,
-                rightAddress: rightAddr,
-                isHead: isNodeRoot,
-                isRoot: isNodeRoot,
-                isDetached: !isRootTree && !isNodeRoot,
-                treeDepth: depth,
-                variableName: isNodeRoot ? structureType === "tree" ? "root" : "head" : depth === 0 ? associatedVar : void 0
-              });
-              if (leftAddr && !this.deletedAddresses.has(leftAddr) && !visitedAddrs.has(leftAddr)) {
-                queue.push({ addr: leftAddr, depth: depth + 1 });
-              }
-              if (rightAddr && !this.deletedAddresses.has(rightAddr) && !visitedAddrs.has(rightAddr)) {
-                queue.push({ addr: rightAddr, depth: depth + 1 });
-              }
-            }
-          };
-          if (headAddr) {
-            if (structureType === "tree") {
-              await traverseTree(headAddr, true, "root");
-            } else {
-              await traverseChain(headAddr, true, "head");
-            }
-          }
-          const activePointers = [];
-          if (hasHead) {
-            activePointers.push({
-              name: structureType === "tree" ? "root" : "head",
-              targetNodeId: headId,
-              targetAddress: headAddr,
-              isNull: headAddr === null
-            });
-          }
-          for (const [varName, varInfo] of Object.entries(localVars)) {
-            if (varName === "head" || varName === "root" || varName === "this")
-              continue;
-            if (varName === "data" || varName === "val" || varName === "key" || varName === "argc" || varName === "argv" || varName === "count" || varName === "i" || varName === "j" || varName === "k" || varName.startsWith("__")) {
-              continue;
-            }
-            if (!varInfo.isArgument) {
-              if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
-                continue;
-              }
-            }
-            const varAddr = this.parsePointer(varInfo.value);
-            const isFreed = varAddr ? this.deletedAddresses.has(varAddr) : false;
-            const targetId = varAddr && !isFreed ? this.getStableId(varAddr) : null;
-            const isTargetingKnownNode = varAddr ? allDiscoveredNodes.has(varAddr) : false;
-            const isPointerType = varInfo.type && (varInfo.type.includes("*") || varInfo.type.includes("&")) || varName === "temp" || varName === "prev" || varName === "curr" || varName === "current" || varName === "forward" || varName === "next" || varName === "node" || varName === "first" || varName === "second" || varName === "third" || varName === "tail" || varName === "last" || varName === "p" || varName === "q" || varName === "l1" || varName === "l2" || varName === "dummy" || varName === "fast" || varName === "slow";
-            if (isPointerType || isTargetingKnownNode) {
-              activePointers.push({
-                name: varName,
-                targetNodeId: targetId,
-                targetAddress: isFreed ? null : varAddr,
-                isNull: varAddr === null || isFreed
-              });
-              if (varAddr && !isFreed && !visitedAddrs.has(varAddr)) {
-                if (structureType === "tree") {
-                  await traverseTree(varAddr, false, varName);
-                } else {
-                  await traverseChain(varAddr, false, varName);
+            let activeVisitingNodeId2 = null;
+            const activeVar = localVars["root"] || localVars["node"] || localVars["curr"] || localVars["current"] || localVars["p"] || localVars["temp"];
+            if (activeVar) {
+              const activeAddr = this.parsePointer(activeVar.value);
+              if (activeAddr && allDiscoveredNodes.has(activeAddr)) {
+                activeVisitingNodeId2 = this.getStableId(activeAddr);
+                const vNode = allDiscoveredNodes.get(activeAddr);
+                if (vNode) {
+                  vNode.isVisiting = true;
                 }
               }
             }
-          }
-          if (previousSnapshot?.nodes && previousSnapshot.hasHead && stepNumber > 1) {
-            for (const prevNode of previousSnapshot.nodes) {
-              if (prevNode.address && !this.deletedAddresses.has(prevNode.address) && !visitedAddrs.has(prevNode.address)) {
-                if (structureType === "tree") {
-                  await traverseTree(prevNode.address, false);
-                } else {
-                  await traverseChain(prevNode.address, false);
+            allNodes = Array.from(allDiscoveredNodes.values());
+            if (previousSnapshot) {
+              const prevReachableIds = new Set(
+                previousSnapshot.nodes.filter((n) => !n.isDetached).map((n) => n.id)
+              );
+              for (const node of allNodes) {
+                if (!node.isDetached && !prevReachableIds.has(node.id)) {
+                  node.isNewlyConnected = true;
                 }
-              }
-            }
-          }
-          if (structureType === "tree") {
-            const reachableFromRoot = /* @__PURE__ */ new Set();
-            if (headId) {
-              const queue = [headId];
-              const visitedTree = /* @__PURE__ */ new Set();
-              while (queue.length > 0) {
-                const currId = queue.shift();
-                if (visitedTree.has(currId))
-                  continue;
-                visitedTree.add(currId);
-                reachableFromRoot.add(currId);
-                const foundNode = Array.from(allDiscoveredNodes.values()).find((n) => n.id === currId);
-                if (foundNode) {
-                  if (foundNode.leftId)
-                    queue.push(foundNode.leftId);
-                  if (foundNode.rightId)
-                    queue.push(foundNode.rightId);
-                }
-              }
-            }
-            for (const node of allDiscoveredNodes.values()) {
-              node.isDetached = !reachableFromRoot.has(node.id);
-            }
-            if (headId) {
-              let inOrderCol = 0;
-              const nodeMap = /* @__PURE__ */ new Map();
-              for (const n of allDiscoveredNodes.values()) {
-                nodeMap.set(n.id, n);
-              }
-              const assignInOrder = (nodeId, depth) => {
-                if (!nodeId)
-                  return;
-                const n = nodeMap.get(nodeId);
-                if (!n)
-                  return;
-                n.treeDepth = depth;
-                if (n.leftId)
-                  assignInOrder(n.leftId, depth + 1);
-                n.treeColumn = inOrderCol++;
-                if (n.rightId)
-                  assignInOrder(n.rightId, depth + 1);
-              };
-              assignInOrder(headId, 0);
-            }
-          } else {
-            const reachableFromHead = /* @__PURE__ */ new Set();
-            if (headId) {
-              let currId = headId;
-              const headVisited = /* @__PURE__ */ new Set();
-              while (currId && !headVisited.has(currId)) {
-                headVisited.add(currId);
-                reachableFromHead.add(currId);
-                const foundNode = Array.from(allDiscoveredNodes.values()).find((n) => n.id === currId);
-                if (foundNode && foundNode.nextId) {
-                  currId = foundNode.nextId;
-                } else {
-                  break;
-                }
-              }
-            }
-            for (const node of allDiscoveredNodes.values()) {
-              node.isDetached = !reachableFromHead.has(node.id);
-            }
-          }
-          let activeVisitingNodeId = null;
-          const activeVar = localVars["root"] || localVars["node"] || localVars["curr"] || localVars["current"] || localVars["p"] || localVars["temp"];
-          if (activeVar) {
-            const activeAddr = this.parsePointer(activeVar.value);
-            if (activeAddr && allDiscoveredNodes.has(activeAddr)) {
-              activeVisitingNodeId = this.getStableId(activeAddr);
-              const vNode = allDiscoveredNodes.get(activeAddr);
-              if (vNode) {
-                vNode.isVisiting = true;
-              }
-            }
-          }
-          const allNodes = Array.from(allDiscoveredNodes.values());
-          if (previousSnapshot) {
-            const prevReachableIds = new Set(
-              previousSnapshot.nodes.filter((n) => !n.isDetached).map((n) => n.id)
-            );
-            for (const node of allNodes) {
-              if (!node.isDetached && !prevReachableIds.has(node.id)) {
-                node.isNewlyConnected = true;
               }
             }
           }
@@ -1435,12 +1821,21 @@ var init_stateExtractor = __esm({
             this.accumulatedTerminalOutput,
             structureType,
             activeVisitingNodeId,
-            funcName
+            funcName,
+            arrays,
+            indexPointers
           );
           if (isReturnOrEnd) {
             changeType = "final";
             if (structureType === "tree") {
               explanation = `Binary tree execution complete (${allNodes.length} nodes). Program execution finished.`;
+            } else if (structureType === "array") {
+              const mainArr = arrays[0];
+              if (mainArr) {
+                explanation = `Array execution complete: [${mainArr.elements.map((e) => e.value).join(", ")}]. Program execution finished.`;
+              } else {
+                explanation = "Program execution finished.";
+              }
             } else {
               const chainNodes = allNodes.filter((n) => !n.isDetached);
               if (chainNodes.length > 0) {
@@ -1459,6 +1854,8 @@ var init_stateExtractor = __esm({
             activeVisitingNodeId,
             nodes: allNodes,
             pointers: activePointers,
+            arrays,
+            indexPointers,
             explanation,
             changeType,
             terminalOutput: this.accumulatedTerminalOutput,
@@ -1572,9 +1969,11 @@ var CppCompiler = class {
         }
       }
     }
-    const args = ["-g", "-O0", "-std=c++17", sourcePath, "-o", executablePath];
+    const relSource = path.basename(sourcePath);
+    const relOut = path.join(".debug-mentor", path.basename(executablePath));
+    const args = ["-g", "-O0", "-std=c++17", relSource, "-o", relOut];
     try {
-      await execFileAsync(compiler, args);
+      await execFileAsync(compiler, args, { cwd: dir });
       return {
         success: true,
         executablePath,
@@ -2044,6 +2443,131 @@ async function runTests() {
   assert.strictEqual(treeVisitRes.changeType, "tree_traversal_visit");
   assert.ok(treeVisitRes.explanation.includes("Visiting tree node containing 30 in inorder()"));
   console.log(`  \u2713 BST Traversal Visit state: "${treeVisitRes.explanation}"`);
+  const arr1 = {
+    name: "arr",
+    type: "int [5]",
+    size: 5,
+    elements: [
+      { index: 0, value: 10 },
+      { index: 1, value: 20 },
+      { index: 2, value: 30 },
+      { index: 3, value: 40 },
+      { index: 4, value: 50 }
+    ]
+  };
+  const arrayInitRes = ExplanationGenerator.generate(
+    [],
+    null,
+    void 0,
+    true,
+    [],
+    null,
+    "",
+    "array",
+    null,
+    void 0,
+    [arr1],
+    [{ name: "i", targetIndex: 0, targetArrayName: "arr", value: 0 }]
+  );
+  assert.strictEqual(arrayInitRes.changeType, "array_initialized");
+  assert.ok(arrayInitRes.explanation.includes("Initialized array 'arr' of size 5: [10, 20, 30, 40, 50]"));
+  console.log(`  \u2713 Array Initialized state: "${arrayInitRes.explanation}"`);
+  const arrSnap1 = {
+    stepNumber: 1,
+    structureType: "array",
+    hasHead: true,
+    headId: null,
+    nodes: [],
+    arrays: [arr1],
+    indexPointers: [{ name: "i", targetIndex: 0, targetArrayName: "arr", value: 0 }],
+    explanation: arrayInitRes.explanation,
+    changeType: "array_initialized"
+  };
+  const arr2 = {
+    ...arr1,
+    elements: arr1.elements.map((e) => e.index === 2 ? { ...e, value: 99, isModified: true } : e)
+  };
+  const arrayUpdateRes = ExplanationGenerator.generate(
+    [],
+    null,
+    arrSnap1,
+    true,
+    [],
+    null,
+    "",
+    "array",
+    null,
+    void 0,
+    [arr2],
+    [{ name: "i", targetIndex: 2, targetArrayName: "arr", value: 2 }]
+  );
+  assert.strictEqual(arrayUpdateRes.changeType, "array_element_updated");
+  assert.ok(arrayUpdateRes.explanation.includes("Updated arr[2] from 30 to 99"));
+  console.log(`  \u2713 Array Element Update state: "${arrayUpdateRes.explanation}"`);
+  const arrSnap2 = {
+    stepNumber: 2,
+    structureType: "array",
+    hasHead: true,
+    headId: null,
+    nodes: [],
+    arrays: [arr2],
+    explanation: arrayUpdateRes.explanation,
+    changeType: "array_element_updated"
+  };
+  const arr3 = {
+    ...arr2,
+    elements: arr2.elements.map((e) => {
+      if (e.index === 0)
+        return { ...e, value: 20 };
+      if (e.index === 1)
+        return { ...e, value: 10 };
+      return e;
+    })
+  };
+  const arraySwapRes = ExplanationGenerator.generate(
+    [],
+    null,
+    arrSnap2,
+    true,
+    [],
+    null,
+    "",
+    "array",
+    null,
+    void 0,
+    [arr3]
+  );
+  assert.strictEqual(arraySwapRes.changeType, "array_element_swapped");
+  assert.ok(arraySwapRes.explanation.includes("Swapped elements arr[0] (20) and arr[1] (10)"));
+  console.log(`  \u2713 Array Element Swap state: "${arraySwapRes.explanation}"`);
+  const arrSnap3 = {
+    stepNumber: 3,
+    structureType: "array",
+    hasHead: true,
+    headId: null,
+    nodes: [],
+    arrays: [arr3],
+    indexPointers: [{ name: "i", targetIndex: 2, targetArrayName: "arr", value: 2 }],
+    explanation: arraySwapRes.explanation,
+    changeType: "array_element_swapped"
+  };
+  const arrayPtrRes = ExplanationGenerator.generate(
+    [],
+    null,
+    arrSnap3,
+    true,
+    [],
+    null,
+    "",
+    "array",
+    null,
+    void 0,
+    [arr3],
+    [{ name: "i", targetIndex: 3, targetArrayName: "arr", value: 3 }]
+  );
+  assert.strictEqual(arrayPtrRes.changeType, "array_pointer_moved");
+  assert.ok(arrayPtrRes.explanation.includes("Index pointer 'i' moved to index 3"));
+  console.log(`  \u2713 Array Pointer Moved state: "${arrayPtrRes.explanation}"`);
   console.log("\n[Test 4] Testing SnapshotManager Non-Destructive History...");
   const manager = new SnapshotManager();
   assert.strictEqual(manager.canGoPrev(), false);
@@ -2103,6 +2627,14 @@ async function runTests() {
   assert.strictEqual(structInfoBst.leftField, "left");
   assert.strictEqual(structInfoBst.rightField, "right");
   console.log("  \u2713 Verified parseStructMembers discovers data/val, next, and BST left/right tree fields");
+  const arrayOpsPath = path4.resolve(process.cwd(), "examples", "array-operations.cpp");
+  const structInfoArray = StateExtractor2.parseStructMembers(arrayOpsPath);
+  assert.strictEqual(structInfoArray.structureType, "array");
+  const arrDecls = StateExtractor2.discoverArrayDeclarations(arrayOpsPath);
+  assert.strictEqual(arrDecls.length, 1);
+  assert.strictEqual(arrDecls[0].name, "arr");
+  assert.strictEqual(arrDecls[0].size, 5);
+  console.log("  \u2713 Verified array structure discovery & declaration parsing for array-operations.cpp");
   const leetcodeFns = StateExtractor2.getUserDefinedFunctions(leetcodePath);
   assert.ok(leetcodeFns.has("reverseList"), "Must detect reverseList");
   const gfgFns = StateExtractor2.getUserDefinedFunctions(gfgPath);
@@ -2117,8 +2649,8 @@ async function runTests() {
   assert.ok(bstFns.has("findNodeAndParent"), "Must detect findNodeAndParent");
   assert.ok(bstFns.has("caseA"), "Must detect caseA");
   console.log("  \u2713 Verified getUserDefinedFunctions discovers helper functions (insert, inorder, findNodeAndParent, caseA)");
-  console.log("\n[Test 6] Testing Compilation of All Internet Examples & BST...");
-  for (const file of [leetcodePath, gfgPath, oopPath, bstPath]) {
+  console.log("\n[Test 6] Testing Compilation of All Internet Examples, BST & Arrays...");
+  for (const file of [leetcodePath, gfgPath, oopPath, bstPath, arrayOpsPath]) {
     const res = await CppCompiler.compile(file);
     assert.strictEqual(res.success, true, `Should compile ${path4.basename(file)}: ${res.errorMessage}`);
     console.log(`  \u2713 Successfully compiled ${path4.basename(file)}`);
