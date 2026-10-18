@@ -778,6 +778,8 @@ function renderArrows() {
 /**
  * Enables smooth pointer-dragging on an array element cell card with an elastic spring
  * bounce-back to its original slot when the left click is released.
+ * Cancels active CSS keyframe animations immediately so floating/highlighted elements
+ * are 100% responsive and smoothly draggable anywhere on the canvas.
  */
 function makeArrayElementDraggable(cellEl: HTMLElement, isElevated: boolean) {
   cellEl.onpointerdown = (e: PointerEvent) => {
@@ -786,9 +788,12 @@ function makeArrayElementDraggable(cellEl: HTMLElement, isElevated: boolean) {
     e.preventDefault();
     e.stopPropagation();
 
+    // Kill any active CSS animations immediately so inline transform controls dragging
+    cellEl.style.animation = 'none';
+    (cellEl.style as any).webkitAnimation = 'none';
     cellEl.setPointerCapture(e.pointerId);
     cellEl.classList.add('dragging');
-    cellEl.style.zIndex = '50';
+    cellEl.style.zIndex = '10000';
     cellEl.style.transition = 'none';
 
     const startX = e.clientX;
@@ -796,9 +801,10 @@ function makeArrayElementDraggable(cellEl: HTMLElement, isElevated: boolean) {
     const initialBaseY = isElevated ? -16 : 0;
 
     const onPointerMove = (moveEv: PointerEvent) => {
+      moveEv.preventDefault();
       const dx = (moveEv.clientX - startX) / cameraZoom;
       const dy = (moveEv.clientY - startY) / cameraZoom;
-      cellEl.style.transform = `translate(${dx}px, ${initialBaseY + dy}px) scale(1.1)`;
+      cellEl.style.transform = `translate(${dx}px, ${initialBaseY + dy}px) scale(1.12)`;
     };
 
     const onPointerUp = (upEv: PointerEvent) => {
@@ -809,12 +815,17 @@ function makeArrayElementDraggable(cellEl: HTMLElement, isElevated: boolean) {
       cellEl.classList.remove('dragging');
       // Satisfying physical spring overshoot bounce-back
       cellEl.style.transition = 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease';
-      cellEl.style.transform = isElevated ? 'translateY(-16px) scale(1.06)' : 'translate(0px, 0px) scale(1)';
+      cellEl.style.transform = isElevated ? 'translate(0px, -16px) scale(1.06)' : 'translate(0px, 0px) scale(1)';
 
       setTimeout(() => {
         if (!cellEl.classList.contains('dragging')) {
-          cellEl.style.zIndex = '';
+          cellEl.style.zIndex = isElevated ? '20' : '';
           cellEl.style.transition = '';
+          if (isElevated) {
+            cellEl.style.transform = 'translateY(-16px) scale(1.06)';
+          } else {
+            cellEl.style.transform = '';
+          }
         }
       }, 550);
 
@@ -830,7 +841,7 @@ function makeArrayElementDraggable(cellEl: HTMLElement, isElevated: boolean) {
 }
 
 // Render Array Structure (deterministic row layout with floating pointer badges)
-function renderArrayDiagram(snapshot: LinkedListSnapshot) {
+function renderArrayDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: LinkedListSnapshot | null) {
   if (simulation) {
     simulation.stop();
     simulation.nodes([]);
@@ -886,6 +897,27 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot) {
       leftPtr !== undefined &&
       rightPtr !== undefined &&
       leftPtr.targetIndex <= rightPtr.targetIndex;
+
+    // Detect if two elements were swapped between previousSnapshot and current arrVar (e.g. Bubble Sort)
+    let swappedPair: { idxA: number; idxB: number } | null = null;
+    const prevArr = previousSnapshot?.arrays?.find((a) => a.name === arrVar.name);
+    if (prevArr && prevArr.elements.length === arrVar.elements.length) {
+      const changedIndices: number[] = [];
+      for (let k = 0; k < arrVar.elements.length; k++) {
+        if (prevArr.elements[k] && prevArr.elements[k].value !== arrVar.elements[k].value) {
+          changedIndices.push(k);
+        }
+      }
+      if (changedIndices.length === 2) {
+        const [a, b] = changedIndices;
+        if (
+          prevArr.elements[a].value === arrVar.elements[b].value &&
+          prevArr.elements[b].value === arrVar.elements[a].value
+        ) {
+          swappedPair = { idxA: a, idxB: b };
+        }
+      }
+    }
 
     // Calculate max numeric value for magnitude bar (VisuAlgo visual encoding)
     const numericVals = arrVar.elements
@@ -946,6 +978,17 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot) {
         col.classList.add('has-thrust');
       }
 
+      // Bubble sort arc hop swap animations
+      if (swappedPair) {
+        const offsetPx = (swappedPair.idxB - swappedPair.idxA) * 76;
+        cell.style.setProperty('--swap-offset', `${offsetPx}px`);
+        if (elem.index === swappedPair.idxA) {
+          cell.classList.add('cell-swapped-left');
+        } else if (elem.index === swappedPair.idxB) {
+          cell.classList.add('cell-swapped-right');
+        }
+      }
+
       // Make cell draggable with bouncy spring release
       makeArrayElementDraggable(cell, isElevated);
 
@@ -994,6 +1037,7 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot) {
 
 // Render the interactive graph with physics and dynamic arrows
 function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = false) {
+  const previousSnapshot = currentSnapshot;
   currentSnapshot = snapshot;
   nodesLayer.innerHTML = '';
   d3Links = [];
@@ -1011,7 +1055,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
 
   if (canvasHint) {
     if (snapshot.structureType === 'array') {
-      canvasHint.textContent = 'Contiguous memory slots • Floating index pointers • Scroll horizontally to explore';
+      canvasHint.textContent = 'Drag elements freely to explore • Release to bounce back • Right-click drag to pan';
     } else {
       canvasHint.textContent = 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
     }
@@ -1064,7 +1108,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
 
   // Handle Array Rendering
   if (snapshot.structureType === 'array') {
-    renderArrayDiagram(snapshot);
+    renderArrayDiagram(snapshot, previousSnapshot);
     return;
   }
 

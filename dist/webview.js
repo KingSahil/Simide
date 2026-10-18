@@ -1598,17 +1598,20 @@
         return;
       e.preventDefault();
       e.stopPropagation();
+      cellEl.style.animation = "none";
+      cellEl.style.webkitAnimation = "none";
       cellEl.setPointerCapture(e.pointerId);
       cellEl.classList.add("dragging");
-      cellEl.style.zIndex = "50";
+      cellEl.style.zIndex = "10000";
       cellEl.style.transition = "none";
       const startX = e.clientX;
       const startY = e.clientY;
       const initialBaseY = isElevated ? -16 : 0;
       const onPointerMove = (moveEv) => {
+        moveEv.preventDefault();
         const dx = (moveEv.clientX - startX) / cameraZoom;
         const dy = (moveEv.clientY - startY) / cameraZoom;
-        cellEl.style.transform = `translate(${dx}px, ${initialBaseY + dy}px) scale(1.1)`;
+        cellEl.style.transform = `translate(${dx}px, ${initialBaseY + dy}px) scale(1.12)`;
       };
       const onPointerUp = (upEv) => {
         try {
@@ -1617,11 +1620,16 @@
         }
         cellEl.classList.remove("dragging");
         cellEl.style.transition = "transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease";
-        cellEl.style.transform = isElevated ? "translateY(-16px) scale(1.06)" : "translate(0px, 0px) scale(1)";
+        cellEl.style.transform = isElevated ? "translate(0px, -16px) scale(1.06)" : "translate(0px, 0px) scale(1)";
         setTimeout(() => {
           if (!cellEl.classList.contains("dragging")) {
-            cellEl.style.zIndex = "";
+            cellEl.style.zIndex = isElevated ? "20" : "";
             cellEl.style.transition = "";
+            if (isElevated) {
+              cellEl.style.transform = "translateY(-16px) scale(1.06)";
+            } else {
+              cellEl.style.transform = "";
+            }
           }
         }, 550);
         cellEl.removeEventListener("pointermove", onPointerMove);
@@ -1633,7 +1641,7 @@
       cellEl.addEventListener("pointercancel", onPointerUp);
     };
   }
-  function renderArrayDiagram(snapshot) {
+  function renderArrayDiagram(snapshot, previousSnapshot) {
     if (simulation) {
       simulation.stop();
       simulation.nodes([]);
@@ -1674,6 +1682,22 @@
         (p) => ["right", "high", "end"].includes(p.name.toLowerCase()) && (!p.targetArrayName || p.targetArrayName === arrVar.name)
       );
       const hasSearchWindow = leftPtr !== void 0 && rightPtr !== void 0 && leftPtr.targetIndex <= rightPtr.targetIndex;
+      let swappedPair = null;
+      const prevArr = previousSnapshot?.arrays?.find((a2) => a2.name === arrVar.name);
+      if (prevArr && prevArr.elements.length === arrVar.elements.length) {
+        const changedIndices = [];
+        for (let k = 0; k < arrVar.elements.length; k++) {
+          if (prevArr.elements[k] && prevArr.elements[k].value !== arrVar.elements[k].value) {
+            changedIndices.push(k);
+          }
+        }
+        if (changedIndices.length === 2) {
+          const [a2, b] = changedIndices;
+          if (prevArr.elements[a2].value === arrVar.elements[b].value && prevArr.elements[b].value === arrVar.elements[a2].value) {
+            swappedPair = { idxA: a2, idxB: b };
+          }
+        }
+      }
       const numericVals = arrVar.elements.filter((e) => !e.isCapacitySlot && typeof e.value === "number").map((e) => Math.abs(e.value));
       const maxVal = numericVals.length > 0 ? Math.max(...numericVals, 1) : 1;
       const stripWrapper = document.createElement("div");
@@ -1715,6 +1739,15 @@
           cell.classList.add("cell-thrust");
           col.classList.add("has-thrust");
         }
+        if (swappedPair) {
+          const offsetPx = (swappedPair.idxB - swappedPair.idxA) * 76;
+          cell.style.setProperty("--swap-offset", `${offsetPx}px`);
+          if (elem.index === swappedPair.idxA) {
+            cell.classList.add("cell-swapped-left");
+          } else if (elem.index === swappedPair.idxB) {
+            cell.classList.add("cell-swapped-right");
+          }
+        }
         makeArrayElementDraggable(cell, isElevated);
         if (hasSearchWindow && !elem.isCapacitySlot) {
           if (elem.index >= leftPtr.targetIndex && elem.index <= rightPtr.targetIndex) {
@@ -1748,6 +1781,7 @@
     nodesLayer.appendChild(container);
   }
   function renderDiagram(snapshot, resetPositions = false) {
+    const previousSnapshot = currentSnapshot;
     currentSnapshot = snapshot;
     nodesLayer.innerHTML = "";
     d3Links = [];
@@ -1763,7 +1797,7 @@
     }
     if (canvasHint) {
       if (snapshot.structureType === "array") {
-        canvasHint.textContent = "Contiguous memory slots \u2022 Floating index pointers \u2022 Scroll horizontally to explore";
+        canvasHint.textContent = "Drag elements freely to explore \u2022 Release to bounce back \u2022 Right-click drag to pan";
       } else {
         canvasHint.textContent = "Drag nodes to move \u2022 Right-click drag to pan \u2022 Scroll to zoom";
       }
@@ -1804,7 +1838,7 @@
       return;
     }
     if (snapshot.structureType === "array") {
-      renderArrayDiagram(snapshot);
+      renderArrayDiagram(snapshot, previousSnapshot);
       return;
     }
     const pointers = snapshot.pointers || [];
