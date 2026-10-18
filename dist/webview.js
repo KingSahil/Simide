@@ -1592,6 +1592,47 @@
       }
     }
   }
+  function makeArrayElementDraggable(cellEl, isElevated) {
+    cellEl.onpointerdown = (e) => {
+      if (e.button !== 0 || isSpacePressed)
+        return;
+      e.preventDefault();
+      e.stopPropagation();
+      cellEl.setPointerCapture(e.pointerId);
+      cellEl.classList.add("dragging");
+      cellEl.style.zIndex = "50";
+      cellEl.style.transition = "none";
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const initialBaseY = isElevated ? -16 : 0;
+      const onPointerMove = (moveEv) => {
+        const dx = (moveEv.clientX - startX) / cameraZoom;
+        const dy = (moveEv.clientY - startY) / cameraZoom;
+        cellEl.style.transform = `translate(${dx}px, ${initialBaseY + dy}px) scale(1.1)`;
+      };
+      const onPointerUp = (upEv) => {
+        try {
+          cellEl.releasePointerCapture(upEv.pointerId);
+        } catch {
+        }
+        cellEl.classList.remove("dragging");
+        cellEl.style.transition = "transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease";
+        cellEl.style.transform = isElevated ? "translateY(-16px) scale(1.06)" : "translate(0px, 0px) scale(1)";
+        setTimeout(() => {
+          if (!cellEl.classList.contains("dragging")) {
+            cellEl.style.zIndex = "";
+            cellEl.style.transition = "";
+          }
+        }, 550);
+        cellEl.removeEventListener("pointermove", onPointerMove);
+        cellEl.removeEventListener("pointerup", onPointerUp);
+        cellEl.removeEventListener("pointercancel", onPointerUp);
+      };
+      cellEl.addEventListener("pointermove", onPointerMove);
+      cellEl.addEventListener("pointerup", onPointerUp);
+      cellEl.addEventListener("pointercancel", onPointerUp);
+    };
+  }
   function renderArrayDiagram(snapshot) {
     if (simulation) {
       simulation.stop();
@@ -1668,7 +1709,9 @@
         const matchingPointers = indexPointers.filter(
           (ptr) => ptr.targetIndex === elem.index && (!ptr.targetArrayName || ptr.targetArrayName === arrVar.name)
         );
+        const isElevated = elem.isActive || elem.isModified || matchingPointers.length > 0;
         if (matchingPointers.length > 0) {
+          col.classList.add("has-active-pointer");
           const ptrContainer = document.createElement("div");
           ptrContainer.className = "array-pointer-container";
           for (const ptr of matchingPointers) {
@@ -1691,6 +1734,11 @@
         if (elem.isActive) {
           cell.classList.add("active");
         }
+        if (isElevated) {
+          cell.classList.add("cell-thrust");
+          col.classList.add("has-thrust");
+        }
+        makeArrayElementDraggable(cell, isElevated);
         if (hasSearchWindow && !elem.isCapacitySlot) {
           if (elem.index >= leftPtr.targetIndex && elem.index <= rightPtr.targetIndex) {
             cell.classList.add("in-range");

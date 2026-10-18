@@ -775,6 +775,60 @@ function renderArrows() {
   }
 }
 
+/**
+ * Enables smooth pointer-dragging on an array element cell card with an elastic spring
+ * bounce-back to its original slot when the left click is released.
+ */
+function makeArrayElementDraggable(cellEl: HTMLElement, isElevated: boolean) {
+  cellEl.onpointerdown = (e: PointerEvent) => {
+    // Only left click (button 0) and not during spacebar camera panning
+    if (e.button !== 0 || isSpacePressed) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    cellEl.setPointerCapture(e.pointerId);
+    cellEl.classList.add('dragging');
+    cellEl.style.zIndex = '50';
+    cellEl.style.transition = 'none';
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const initialBaseY = isElevated ? -16 : 0;
+
+    const onPointerMove = (moveEv: PointerEvent) => {
+      const dx = (moveEv.clientX - startX) / cameraZoom;
+      const dy = (moveEv.clientY - startY) / cameraZoom;
+      cellEl.style.transform = `translate(${dx}px, ${initialBaseY + dy}px) scale(1.1)`;
+    };
+
+    const onPointerUp = (upEv: PointerEvent) => {
+      try {
+        cellEl.releasePointerCapture(upEv.pointerId);
+      } catch {}
+
+      cellEl.classList.remove('dragging');
+      // Satisfying physical spring overshoot bounce-back
+      cellEl.style.transition = 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease';
+      cellEl.style.transform = isElevated ? 'translateY(-16px) scale(1.06)' : 'translate(0px, 0px) scale(1)';
+
+      setTimeout(() => {
+        if (!cellEl.classList.contains('dragging')) {
+          cellEl.style.zIndex = '';
+          cellEl.style.transition = '';
+        }
+      }, 550);
+
+      cellEl.removeEventListener('pointermove', onPointerMove);
+      cellEl.removeEventListener('pointerup', onPointerUp);
+      cellEl.removeEventListener('pointercancel', onPointerUp);
+    };
+
+    cellEl.addEventListener('pointermove', onPointerMove);
+    cellEl.addEventListener('pointerup', onPointerUp);
+    cellEl.addEventListener('pointercancel', onPointerUp);
+  };
+}
+
 // Render Array Structure (deterministic row layout with floating pointer badges)
 function renderArrayDiagram(snapshot: LinkedListSnapshot) {
   if (simulation) {
@@ -888,7 +942,10 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot) {
           (!ptr.targetArrayName || ptr.targetArrayName === arrVar.name)
       );
 
+      const isElevated = elem.isActive || elem.isModified || matchingPointers.length > 0;
+
       if (matchingPointers.length > 0) {
+        col.classList.add('has-active-pointer');
         const ptrContainer = document.createElement('div');
         ptrContainer.className = 'array-pointer-container';
 
@@ -914,6 +971,13 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot) {
       if (elem.isActive) {
         cell.classList.add('active');
       }
+      if (isElevated) {
+        cell.classList.add('cell-thrust');
+        col.classList.add('has-thrust');
+      }
+
+      // Make cell draggable with bouncy spring release
+      makeArrayElementDraggable(cell, isElevated);
 
       // VisuAlgo Search Window Range Highlighting
       if (hasSearchWindow && !elem.isCapacitySlot) {
