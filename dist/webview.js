@@ -1671,10 +1671,6 @@
     for (const arrVar of arrays) {
       const board = document.createElement("div");
       board.className = "array-board";
-      const nameLabel = document.createElement("div");
-      nameLabel.className = "array-name-simple";
-      nameLabel.textContent = arrVar.name;
-      board.appendChild(nameLabel);
       const leftPtr = indexPointers.find(
         (p) => ["left", "low", "start"].includes(p.name.toLowerCase()) && (!p.targetArrayName || p.targetArrayName === arrVar.name)
       );

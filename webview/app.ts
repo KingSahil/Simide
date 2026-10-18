@@ -876,12 +876,6 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Lin
     const board = document.createElement('div');
     board.className = 'array-board';
 
-    // Minimalist clean array name label (e.g. • itemId)
-    const nameLabel = document.createElement('div');
-    nameLabel.className = 'array-name-simple';
-    nameLabel.textContent = arrVar.name;
-    board.appendChild(nameLabel);
-
     // VisuAlgo Two-Pointer Range (e.g. left and right, low and high, start and end)
     const leftPtr = indexPointers.find(
       (p) =>

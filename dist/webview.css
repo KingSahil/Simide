@@ -841,30 +841,6 @@ body.is-canvas-panning * {
   pointer-events: none;
 }
 
-.array-name-simple {
-  font-family: 'JetBrains Mono', Consolas, monospace;
-  font-size: 12px;
-  font-weight: 700;
-  color: #58a6ff;
-  letter-spacing: 0.5px;
-  margin-left: 6px;
-  margin-bottom: 2px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  pointer-events: none;
-  user-select: none;
-}
-
-.array-name-simple::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #388bfd;
-  box-shadow: 0 0 8px #388bfd;
-}
 
 .array-strip-wrapper {
   display: flex;
