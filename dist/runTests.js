@@ -90,40 +90,48 @@ var init_explanationGenerator = __esm({
             };
           }
           const mainArr = arrays[0];
-          const prevArr = previousSnapshot?.arrays?.find((a) => a.name === mainArr.name);
+          const prevArr = previousSnapshot?.arrays?.find(
+            (a) => a.name === mainArr.name || a.name.endsWith("." + mainArr.name) || mainArr.name.endsWith("." + a.name)
+          );
           if (!prevArr || !previousSnapshot || !previousSnapshot.arrays || previousSnapshot.arrays.length === 0) {
+            const valPreview = mainArr.elements.length > 8 ? `[${mainArr.elements.slice(0, 6).map((e) => e.value).join(", ")}, ...] (${mainArr.size} elements)` : `[${mainArr.elements.map((e) => e.value).join(", ")}]`;
             return {
-              explanation: `Initialized array '${mainArr.name}' of size ${mainArr.size}: [${mainArr.elements.map((e) => e.value).join(", ")}].`,
+              explanation: `Initialized array '${mainArr.name}' of size ${mainArr.size}: ${valPreview}.`,
               changeType: "array_initialized"
             };
           }
-          if (prevArr) {
+          for (const arr of arrays) {
+            const pArr = previousSnapshot?.arrays?.find(
+              (a) => a.name === arr.name || a.name.endsWith("." + arr.name) || arr.name.endsWith("." + a.name)
+            );
+            if (!pArr)
+              continue;
             const changedIndices = [];
-            for (let idx = 0; idx < mainArr.elements.length; idx++) {
-              if (prevArr.elements[idx] && prevArr.elements[idx].value !== mainArr.elements[idx].value) {
+            for (let idx = 0; idx < arr.elements.length; idx++) {
+              if (pArr.elements[idx] && pArr.elements[idx].value !== arr.elements[idx].value) {
                 changedIndices.push(idx);
               }
             }
             if (changedIndices.length === 2) {
               const [i, j] = changedIndices;
-              if (prevArr.elements[i].value === mainArr.elements[j].value && prevArr.elements[j].value === mainArr.elements[i].value) {
+              if (pArr.elements[i].value === arr.elements[j].value && pArr.elements[j].value === arr.elements[i].value) {
                 return {
-                  explanation: `Swapped elements ${mainArr.name}[${i}] (${mainArr.elements[i].value}) and ${mainArr.name}[${j}] (${mainArr.elements[j].value}).`,
+                  explanation: `Swapped elements ${arr.name}[${i}] (${arr.elements[i].value}) and ${arr.name}[${j}] (${arr.elements[j].value}).`,
                   changeType: "array_element_swapped"
                 };
               }
             }
             if (changedIndices.length === 1) {
               const idx = changedIndices[0];
-              const oldVal = prevArr.elements[idx]?.value;
-              const newVal = mainArr.elements[idx].value;
+              const oldVal = pArr.elements[idx]?.value;
+              const newVal = arr.elements[idx].value;
               return {
-                explanation: `Updated ${mainArr.name}[${idx}] from ${oldVal} to ${newVal} (${mainArr.name}[${idx}] = ${newVal}).`,
+                explanation: `Updated ${arr.name}[${idx}] from ${oldVal} to ${newVal} (${arr.name}[${idx}] = ${newVal}).`,
                 changeType: "array_element_updated"
               };
             } else if (changedIndices.length > 2) {
               return {
-                explanation: `Updated ${changedIndices.length} elements in array '${mainArr.name}'.`,
+                explanation: `Updated ${changedIndices.length} elements in array '${arr.name}'.`,
                 changeType: "array_element_updated"
               };
             }
@@ -132,7 +140,8 @@ var init_explanationGenerator = __esm({
             for (const currPtr of indexPointers) {
               const prevPtr = previousSnapshot.indexPointers.find((p) => p.name === currPtr.name);
               if (prevPtr && prevPtr.targetIndex !== currPtr.targetIndex) {
-                const elemVal = mainArr.elements[currPtr.targetIndex]?.value;
+                const targetArr = arrays.find((a) => a.name === currPtr.targetArrayName) || mainArr;
+                const elemVal = targetArr.elements[currPtr.targetIndex]?.value;
                 const valInfo = elemVal !== void 0 ? ` (value: ${elemVal})` : "";
                 return {
                   explanation: `Index pointer '${currPtr.name}' moved to index ${currPtr.targetIndex}${valInfo}.`,
@@ -141,8 +150,9 @@ var init_explanationGenerator = __esm({
               }
             }
           }
+          const defaultPreview = mainArr.elements.length > 8 ? `[${mainArr.elements.slice(0, 6).map((e) => e.value).join(", ")}, ...] (${mainArr.size} elements)` : `[${mainArr.elements.map((e) => e.value).join(", ")}]`;
           return {
-            explanation: `Array '${mainArr.name}' state: [${mainArr.elements.map((e) => e.value).join(", ")}].`,
+            explanation: `Array '${mainArr.name}' state: ${defaultPreview}.`,
             changeType: "step"
           };
         }
@@ -238,7 +248,7 @@ var init_explanationGenerator = __esm({
           const found = currentNodes.find((n) => n.id === currId);
           if (found) {
             chain.push(found);
-            currId = found.nextId;
+            currId = found.nextId ?? null;
           } else {
             break;
           }
@@ -344,7 +354,7 @@ var init_explanationGenerator = __esm({
             const prevPtr = previousSnapshot.pointers?.find((p) => p.name === currPtr.name);
             if (prevPtr && prevPtr.targetNodeId !== currPtr.targetNodeId) {
               if (currPtr.isNull || !currPtr.targetNodeId) {
-                const nullMsg = currentSnapshot.structureType === "tree" ? `Pointer '${currPtr.name}' updated to nullptr.` : `Pointer '${currPtr.name}' updated to nullptr (reached end of list).`;
+                const nullMsg = `Pointer '${currPtr.name}' updated to nullptr (reached end of list).`;
                 return {
                   explanation: nullMsg,
                   changeType: "pointer_moved"
@@ -369,7 +379,7 @@ var init_explanationGenerator = __esm({
           const detachedNodes = currentNodes.filter((n) => n.isDetached);
           if (detachedNodes.length === 0) {
             return {
-              explanation: structureType === "tree" ? "root is initialized to nullptr. The binary tree is currently empty." : "head is initialized to nullptr. The linked list is currently empty.",
+              explanation: "head is initialized to nullptr. The linked list is currently empty.",
               changeType: "init"
             };
           } else {
@@ -1248,6 +1258,144 @@ var init_stateExtractor = __esm({
             isDynamic: isDynamicArray || isVector
           });
         }
+        for (const decl of arrayDeclList) {
+          if (discoveredArrays.some((a) => a.name === decl.name || a.name.endsWith("." + decl.name))) {
+            continue;
+          }
+          const candidateExprs = [
+            { expr: decl.name, displayName: decl.name },
+            { expr: `this->${decl.name}`, displayName: decl.name }
+          ];
+          for (const [objName, objInfo] of Object.entries(localVars)) {
+            if (objName.startsWith("__") || objName === "this" || objName === "argc" || objName === "argv" || discoveredArrays.some((a) => a.name === objName)) {
+              continue;
+            }
+            const objType = (objInfo.type || "").toLowerCase();
+            if (objType.includes("*")) {
+              candidateExprs.push({ expr: `${objName}->${decl.name}`, displayName: `${objName}.${decl.name}`, parentObj: objName });
+            } else {
+              candidateExprs.push({ expr: `${objName}.${decl.name}`, displayName: `${objName}.${decl.name}`, parentObj: objName });
+            }
+          }
+          for (const cand of candidateExprs) {
+            let isStackArray = false;
+            let isVector = false;
+            let isDynamic = false;
+            let size = decl.size || 0;
+            const sizeEval = await evalExpr(`sizeof(${cand.expr}) / sizeof((${cand.expr})[0])`);
+            if (sizeEval) {
+              const parsed = parseInt(sizeEval.match(/\d+/)?.[0] || "0", 10);
+              if (parsed > 0 && parsed <= 512) {
+                isStackArray = true;
+                if (size === 0)
+                  size = parsed;
+              }
+            }
+            if (!isStackArray) {
+              const vecEval = await evalExpr(`${cand.expr}.size()`);
+              if (vecEval) {
+                const parsed = parseInt(vecEval.match(/\d+/)?.[0] || "0", 10);
+                if (parsed >= 0 && parsed <= 512) {
+                  isVector = true;
+                  size = parsed;
+                }
+              }
+            }
+            if (!isStackArray && !isVector) {
+              const ptrVal = await evalExpr(cand.expr);
+              if (ptrVal && (ptrVal.includes("0x") || ptrVal.includes("{"))) {
+                isDynamic = true;
+              }
+            }
+            if (!isStackArray && !isVector && !isDynamic) {
+              continue;
+            }
+            let activeCounterVal = null;
+            const counterNames = ["counter", "count", "n", "len", "length", "size", "items", "total"];
+            for (const cName of counterNames) {
+              let cValStr = null;
+              if (cand.parentObj) {
+                cValStr = await evalExpr(`${cand.parentObj}.${cName}`);
+                if (!cValStr)
+                  cValStr = await evalExpr(`${cand.parentObj}->${cName}`);
+              }
+              if (!cValStr) {
+                cValStr = await evalExpr(`this->${cName}`);
+              }
+              if (!cValStr) {
+                cValStr = await evalExpr(cName);
+              }
+              if (cValStr) {
+                const parsedC = parseInt(cValStr.match(/-?\d+/)?.[0] || "", 10);
+                if (!isNaN(parsedC) && parsedC >= 0 && parsedC <= 1e3) {
+                  activeCounterVal = parsedC;
+                  break;
+                }
+              }
+            }
+            if (size === 0) {
+              size = activeCounterVal !== null ? Math.max(5, activeCounterVal) : 5;
+            }
+            let effectiveSize = size;
+            if (size > 15) {
+              if (activeCounterVal !== null) {
+                effectiveSize = Math.max(5, Math.min(activeCounterVal + 2, 20, size));
+              } else {
+                effectiveSize = Math.min(size, 10);
+              }
+            }
+            let baseAddress;
+            const addrEval = await evalExpr(`&(${cand.expr}[0])`);
+            if (addrEval) {
+              baseAddress = this.parsePointer(addrEval) || void 0;
+            }
+            const elements = [];
+            const prevArray = previousSnapshot?.arrays?.find(
+              (a) => a.name === cand.displayName || a.name === decl.name || a.name.endsWith("." + decl.name)
+            );
+            for (let idx = 0; idx < effectiveSize; idx++) {
+              let elemVal = 0;
+              let elemAddr;
+              const elemEval = await evalExpr(`${cand.expr}[${idx}]`);
+              if (elemEval !== null) {
+                elemVal = this.parseData(elemEval);
+              }
+              const elemAddrEval = await evalExpr(`&(${cand.expr}[${idx}])`);
+              if (elemAddrEval) {
+                elemAddr = this.parsePointer(elemAddrEval) || void 0;
+              }
+              const prevElem = prevArray?.elements[idx];
+              const isModified = prevElem !== void 0 && prevElem.value !== elemVal;
+              elements.push({
+                index: idx,
+                value: elemVal,
+                address: elemAddr,
+                isModified,
+                isActive: false
+              });
+            }
+            let capacity;
+            if (isVector) {
+              const capEval = await evalExpr(`${cand.expr}.capacity()`);
+              if (capEval) {
+                const parsedCap = parseInt(capEval.match(/\d+/)?.[0] || "0", 10);
+                if (parsedCap >= size && parsedCap <= 64) {
+                  capacity = parsedCap;
+                }
+              }
+            }
+            discoveredArrays.push({
+              name: cand.displayName,
+              type: isVector ? "std::vector" : "array",
+              size,
+              capacity,
+              elements,
+              address: baseAddress,
+              isDynamic: isDynamic || isVector
+            });
+            break;
+          }
+        }
         const indexVarNames = /* @__PURE__ */ new Set([
           "i",
           "j",
@@ -1263,7 +1411,10 @@ var init_stateExtractor = __esm({
           "end",
           "p",
           "ptr",
-          "curr"
+          "curr",
+          "counter",
+          "count",
+          "pos"
         ]);
         for (const [varName, varInfo] of Object.entries(localVars)) {
           if (discoveredArrays.some((a) => a.name === varName)) {
@@ -1293,6 +1444,40 @@ var init_stateExtractor = __esm({
                   if (arr.elements[parsed]) {
                     arr.elements[parsed].isActive = true;
                   }
+                }
+              }
+            }
+          }
+        }
+        for (const arr of discoveredArrays) {
+          for (const cName of ["counter", "count", "idx", "index", "i", "j"]) {
+            if (indexPointers.some((p) => p.name === cName && p.targetArrayName === arr.name)) {
+              continue;
+            }
+            let cValStr = null;
+            if (arr.name.includes(".")) {
+              const parentObj = arr.name.split(".")[0];
+              cValStr = await evalExpr(`${parentObj}.${cName}`);
+              if (!cValStr)
+                cValStr = await evalExpr(`${parentObj}->${cName}`);
+            }
+            if (!cValStr) {
+              cValStr = await evalExpr(`this->${cName}`);
+            }
+            if (!cValStr && !localVars[cName]) {
+              cValStr = await evalExpr(cName);
+            }
+            if (cValStr) {
+              const parsed = parseInt(cValStr.match(/-?\d+/)?.[0] || "", 10);
+              if (!isNaN(parsed) && parsed >= 0 && parsed < arr.size) {
+                indexPointers.push({
+                  name: cName,
+                  targetIndex: parsed,
+                  targetArrayName: arr.name,
+                  value: parsed
+                });
+                if (arr.elements[parsed]) {
+                  arr.elements[parsed].isActive = true;
                 }
               }
             }
@@ -1362,7 +1547,11 @@ var init_stateExtractor = __esm({
                 const arrayDecls = this.discoverArrayDeclarations(resolvedFile);
                 if (arrayDecls.length > 0) {
                   const firstArr = arrayDecls[0];
-                  hasHead = rawLine > firstArr.line;
+                  if (funcRange && firstArr.line < funcRange.startLine) {
+                    hasHead = rawLine > funcRange.startLine;
+                  } else {
+                    hasHead = rawLine > firstArr.line;
+                  }
                 } else {
                   hasHead = true;
                 }
@@ -1548,7 +1737,7 @@ var init_stateExtractor = __esm({
                 }
                 let valStr = localVars[cand]?.value;
                 if (!valStr) {
-                  valStr = await evalExpr(cand) || void 0;
+                  valStr = await evalExpr(cand);
                 }
                 if (valStr) {
                   if (cand === "head_ref" || cand === "root_ref" || valStr.includes("**")) {
@@ -1618,7 +1807,7 @@ var init_stateExtractor = __esm({
             }
             if (!headAddr && previousSnapshot?.headId) {
               const prevHeadNode = previousSnapshot.nodes.find((n) => n.id === previousSnapshot.headId);
-              if (prevHeadNode && !this.deletedAddresses.has(prevHeadNode.address)) {
+              if (prevHeadNode && prevHeadNode.address && !this.deletedAddresses.has(prevHeadNode.address)) {
                 headAddr = prevHeadNode.address;
               }
             }

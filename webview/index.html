@@ -69,13 +69,13 @@
       <!-- Linked List Card -->
       <div class="card">
         <div class="card-title-row">
-          <span class="card-title">Linked List</span>
+          <span id="cardTitle" class="card-title">Visualization</span>
           <div style="display: flex; align-items: center; gap: 8px;">
             <button id="btnResetLayout" class="btn-text-action" title="Reset node positions">↺ Reset</button>
             <span id="stepChip" class="step-chip">Step 1</span>
           </div>
         </div>
-        <div class="canvas-hint">Drag nodes to move • Right-click drag to pan • Scroll to zoom</div>
+        <div id="canvasHint" class="canvas-hint">Drag nodes to move • Right-click drag to pan • Scroll to zoom</div>
         <div id="graphViewport" class="graph-viewport">
           <div id="graphCanvas" class="graph-canvas">
             <svg id="arrowsSvg" class="arrows-svg-layer">

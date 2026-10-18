@@ -32,6 +32,8 @@ const errorDetails = document.getElementById('errorDetails') as HTMLDivElement;
 
 const badgeDot = document.getElementById('badgeDot') as HTMLSpanElement;
 const badgeText = document.getElementById('badgeText') as HTMLSpanElement;
+const cardTitle = document.getElementById('cardTitle') as HTMLSpanElement | null;
+const canvasHint = document.getElementById('canvasHint') as HTMLDivElement | null;
 const stepChip = document.getElementById('stepChip') as HTMLSpanElement;
 const graphViewport = document.getElementById('graphViewport') as HTMLDivElement;
 const graphCanvas = document.getElementById('graphCanvas') as HTMLDivElement;
@@ -378,8 +380,10 @@ function makeDraggable(el: HTMLElement, id: string) {
       d3Node.fy = null;
 
       // Lower alphaTarget and give a lively alpha bump so it bounces back into spring equilibrium
-      simulation.alphaTarget(0);
-      simulation.alpha(0.6).restart();
+      if (simulation) {
+        simulation.alphaTarget(0);
+        simulation.alpha(0.6).restart();
+      }
 
       el.removeEventListener('pointermove', onPointerMove);
       el.removeEventListener('pointerup', onPointerUp);
@@ -771,6 +775,60 @@ function renderArrows() {
   }
 }
 
+/**
+ * Enables smooth pointer-dragging on an array element cell card with an elastic spring
+ * bounce-back to its original slot when the left click is released.
+ */
+function makeArrayElementDraggable(cellEl: HTMLElement, isElevated: boolean) {
+  cellEl.onpointerdown = (e: PointerEvent) => {
+    // Only left click (button 0) and not during spacebar camera panning
+    if (e.button !== 0 || isSpacePressed) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    cellEl.setPointerCapture(e.pointerId);
+    cellEl.classList.add('dragging');
+    cellEl.style.zIndex = '50';
+    cellEl.style.transition = 'none';
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const initialBaseY = isElevated ? -16 : 0;
+
+    const onPointerMove = (moveEv: PointerEvent) => {
+      const dx = (moveEv.clientX - startX) / cameraZoom;
+      const dy = (moveEv.clientY - startY) / cameraZoom;
+      cellEl.style.transform = `translate(${dx}px, ${initialBaseY + dy}px) scale(1.1)`;
+    };
+
+    const onPointerUp = (upEv: PointerEvent) => {
+      try {
+        cellEl.releasePointerCapture(upEv.pointerId);
+      } catch {}
+
+      cellEl.classList.remove('dragging');
+      // Satisfying physical spring overshoot bounce-back
+      cellEl.style.transition = 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease';
+      cellEl.style.transform = isElevated ? 'translateY(-16px) scale(1.06)' : 'translate(0px, 0px) scale(1)';
+
+      setTimeout(() => {
+        if (!cellEl.classList.contains('dragging')) {
+          cellEl.style.zIndex = '';
+          cellEl.style.transition = '';
+        }
+      }, 550);
+
+      cellEl.removeEventListener('pointermove', onPointerMove);
+      cellEl.removeEventListener('pointerup', onPointerUp);
+      cellEl.removeEventListener('pointercancel', onPointerUp);
+    };
+
+    cellEl.addEventListener('pointermove', onPointerMove);
+    cellEl.addEventListener('pointerup', onPointerUp);
+    cellEl.addEventListener('pointercancel', onPointerUp);
+  };
+}
+
 // Render Array Structure (deterministic row layout with floating pointer badges)
 function renderArrayDiagram(snapshot: LinkedListSnapshot) {
   if (simulation) {
@@ -780,11 +838,28 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot) {
   const paths = arrowsSvg.querySelectorAll('path');
   paths.forEach((p) => p.remove());
 
-  const container = document.createElement('div');
-  container.className = 'array-board-container';
-
   const arrays = snapshot.arrays || [];
   const indexPointers = snapshot.indexPointers || [];
+
+  if (arrays.length === 0) {
+    const emptyMsg = document.createElement('div');
+    emptyMsg.className = 'empty-canvas-message';
+    emptyMsg.innerHTML = `
+      <div class="empty-icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#737D8C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+        </svg>
+      </div>
+      <div class="empty-title">Array Initializing</div>
+      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to allocate and initialize the array.</div>
+    `;
+    nodesLayer.appendChild(emptyMsg);
+    return;
+  }
+
+  const container = document.createElement('div');
+  container.className = 'array-board-container';
 
   for (const arrVar of arrays) {
     const board = document.createElement('div');
@@ -867,7 +942,10 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot) {
           (!ptr.targetArrayName || ptr.targetArrayName === arrVar.name)
       );
 
+      const isElevated = elem.isActive || elem.isModified || matchingPointers.length > 0;
+
       if (matchingPointers.length > 0) {
+        col.classList.add('has-active-pointer');
         const ptrContainer = document.createElement('div');
         ptrContainer.className = 'array-pointer-container';
 
@@ -893,6 +971,13 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot) {
       if (elem.isActive) {
         cell.classList.add('active');
       }
+      if (isElevated) {
+        cell.classList.add('cell-thrust');
+        col.classList.add('has-thrust');
+      }
+
+      // Make cell draggable with bouncy spring release
+      makeArrayElementDraggable(cell, isElevated);
 
       // VisuAlgo Search Window Range Highlighting
       if (hasSearchWindow && !elem.isCapacitySlot) {
@@ -953,6 +1038,24 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
   nodesLayer.innerHTML = '';
   d3Links = [];
   const activeIds = new Set<string>();
+
+  if (cardTitle) {
+    if (snapshot.structureType === 'array') {
+      cardTitle.textContent = 'ARRAY';
+    } else if (snapshot.structureType === 'tree') {
+      cardTitle.textContent = 'BINARY TREE';
+    } else {
+      cardTitle.textContent = 'LINKED LIST';
+    }
+  }
+
+  if (canvasHint) {
+    if (snapshot.structureType === 'array') {
+      canvasHint.textContent = 'Contiguous memory slots • Floating index pointers • Scroll horizontally to explore';
+    } else {
+      canvasHint.textContent = 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
+    }
+  }
 
   if (resetPositions) {
     nodePositions.clear();
@@ -1183,7 +1286,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
       const node = nodes.find((n) => n.id === currId);
       if (node) {
         reachableNodes.push(node);
-        currId = node.nextId;
+        currId = node.nextId ?? null;
       } else {
         break;
       }

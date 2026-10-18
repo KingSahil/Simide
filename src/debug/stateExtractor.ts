@@ -1156,7 +1156,181 @@ export class StateExtractor {
       });
     }
 
-    // 2. Discover Index Pointers (i, j, left, right, mid, etc.)
+    // Phase 1b: Search for class/struct member arrays or arrays accessible via scope
+    for (const decl of arrayDeclList) {
+      if (discoveredArrays.some((a) => a.name === decl.name || a.name.endsWith('.' + decl.name))) {
+        continue;
+      }
+
+      // Generate candidates:
+      // 1. decl.name directly (e.g. inside a member function like shop::setPrice)
+      // 2. this->decl.name
+      // 3. For each object variable in localVars: objName.decl.name or objName->decl.name
+      const candidateExprs: Array<{ expr: string; displayName: string; parentObj?: string }> = [
+        { expr: decl.name, displayName: decl.name },
+        { expr: `this->${decl.name}`, displayName: decl.name },
+      ];
+
+      for (const [objName, objInfo] of Object.entries(localVars)) {
+        if (
+          objName.startsWith('__') ||
+          objName === 'this' ||
+          objName === 'argc' ||
+          objName === 'argv' ||
+          discoveredArrays.some((a) => a.name === objName)
+        ) {
+          continue;
+        }
+        const objType = (objInfo.type || '').toLowerCase();
+        if (objType.includes('*')) {
+          candidateExprs.push({ expr: `${objName}->${decl.name}`, displayName: `${objName}.${decl.name}`, parentObj: objName });
+        } else {
+          candidateExprs.push({ expr: `${objName}.${decl.name}`, displayName: `${objName}.${decl.name}`, parentObj: objName });
+        }
+      }
+
+      for (const cand of candidateExprs) {
+        // Test if this candidate expression is valid and accessible in GDB
+        let isStackArray = false;
+        let isVector = false;
+        let isDynamic = false;
+        let size = decl.size || 0;
+
+        // Try evaluating sizeof(cand.expr) / sizeof(cand.expr[0])
+        const sizeEval = await evalExpr(`sizeof(${cand.expr}) / sizeof((${cand.expr})[0])`);
+        if (sizeEval) {
+          const parsed = parseInt(sizeEval.match(/\d+/)?.[0] || '0', 10);
+          if (parsed > 0 && parsed <= 512) {
+            isStackArray = true;
+            if (size === 0) size = parsed;
+          }
+        }
+
+        if (!isStackArray) {
+          const vecEval = await evalExpr(`${cand.expr}.size()`);
+          if (vecEval) {
+            const parsed = parseInt(vecEval.match(/\d+/)?.[0] || '0', 10);
+            if (parsed >= 0 && parsed <= 512) {
+              isVector = true;
+              size = parsed;
+            }
+          }
+        }
+
+        if (!isStackArray && !isVector) {
+          const ptrVal = await evalExpr(cand.expr);
+          if (ptrVal && (ptrVal.includes('0x') || ptrVal.includes('{'))) {
+            isDynamic = true;
+          }
+        }
+
+        if (!isStackArray && !isVector && !isDynamic) {
+          continue;
+        }
+
+        // Active bound / counter detection for large arrays (e.g. itemId[100])
+        let activeCounterVal: number | null = null;
+        const counterNames = ['counter', 'count', 'n', 'len', 'length', 'size', 'items', 'total'];
+        for (const cName of counterNames) {
+          let cValStr: string | null = null;
+          if (cand.parentObj) {
+            cValStr = await evalExpr(`${cand.parentObj}.${cName}`);
+            if (!cValStr) cValStr = await evalExpr(`${cand.parentObj}->${cName}`);
+          }
+          if (!cValStr) {
+            cValStr = await evalExpr(`this->${cName}`);
+          }
+          if (!cValStr) {
+            cValStr = await evalExpr(cName);
+          }
+          if (cValStr) {
+            const parsedC = parseInt(cValStr.match(/-?\d+/)?.[0] || '', 10);
+            if (!isNaN(parsedC) && parsedC >= 0 && parsedC <= 1000) {
+              activeCounterVal = parsedC;
+              break;
+            }
+          }
+        }
+
+        if (size === 0) {
+          size = activeCounterVal !== null ? Math.max(5, activeCounterVal) : 5;
+        }
+
+        // Display a sensible bounded window if size > 15
+        let effectiveSize = size;
+        if (size > 15) {
+          if (activeCounterVal !== null) {
+            effectiveSize = Math.max(5, Math.min(activeCounterVal + 2, 20, size));
+          } else {
+            effectiveSize = Math.min(size, 10);
+          }
+        }
+
+        // Base address
+        let baseAddress: string | undefined;
+        const addrEval = await evalExpr(`&(${cand.expr}[0])`);
+        if (addrEval) {
+          baseAddress = this.parsePointer(addrEval) || undefined;
+        }
+
+        // Fetch elements
+        const elements: ArrayElement[] = [];
+        const prevArray = previousSnapshot?.arrays?.find(
+          (a) => a.name === cand.displayName || a.name === decl.name || a.name.endsWith('.' + decl.name)
+        );
+
+        for (let idx = 0; idx < effectiveSize; idx++) {
+          let elemVal: number | string = 0;
+          let elemAddr: string | undefined;
+
+          const elemEval = await evalExpr(`${cand.expr}[${idx}]`);
+          if (elemEval !== null) {
+            elemVal = this.parseData(elemEval);
+          }
+
+          const elemAddrEval = await evalExpr(`&(${cand.expr}[${idx}])`);
+          if (elemAddrEval) {
+            elemAddr = this.parsePointer(elemAddrEval) || undefined;
+          }
+
+          const prevElem = prevArray?.elements[idx];
+          const isModified = prevElem !== undefined && prevElem.value !== elemVal;
+
+          elements.push({
+            index: idx,
+            value: elemVal,
+            address: elemAddr,
+            isModified,
+            isActive: false,
+          });
+        }
+
+        let capacity: number | undefined;
+        if (isVector) {
+          const capEval = await evalExpr(`${cand.expr}.capacity()`);
+          if (capEval) {
+            const parsedCap = parseInt(capEval.match(/\d+/)?.[0] || '0', 10);
+            if (parsedCap >= size && parsedCap <= 64) {
+              capacity = parsedCap;
+            }
+          }
+        }
+
+        discoveredArrays.push({
+          name: cand.displayName,
+          type: isVector ? 'std::vector' : 'array',
+          size: size,
+          capacity,
+          elements,
+          address: baseAddress,
+          isDynamic: isDynamic || isVector,
+        });
+
+        break;
+      }
+    }
+
+    // 2. Discover Index Pointers (i, j, left, right, mid, counter, etc.)
     const indexVarNames = new Set([
       'i',
       'j',
@@ -1173,6 +1347,9 @@ export class StateExtractor {
       'p',
       'ptr',
       'curr',
+      'counter',
+      'count',
+      'pos',
     ]);
 
     for (const [varName, varInfo] of Object.entries(localVars)) {
@@ -1211,6 +1388,41 @@ export class StateExtractor {
               if (arr.elements[parsed]) {
                 arr.elements[parsed].isActive = true;
               }
+            }
+          }
+        }
+      }
+    }
+
+    // Probe member counters (e.g. counter, count) on objects or in scope for discovered arrays
+    for (const arr of discoveredArrays) {
+      for (const cName of ['counter', 'count', 'idx', 'index', 'i', 'j']) {
+        if (indexPointers.some((p) => p.name === cName && p.targetArrayName === arr.name)) {
+          continue;
+        }
+        let cValStr: string | null = null;
+        if (arr.name.includes('.')) {
+          const parentObj = arr.name.split('.')[0];
+          cValStr = await evalExpr(`${parentObj}.${cName}`);
+          if (!cValStr) cValStr = await evalExpr(`${parentObj}->${cName}`);
+        }
+        if (!cValStr) {
+          cValStr = await evalExpr(`this->${cName}`);
+        }
+        if (!cValStr && !localVars[cName]) {
+          cValStr = await evalExpr(cName);
+        }
+        if (cValStr) {
+          const parsed = parseInt(cValStr.match(/-?\d+/)?.[0] || '', 10);
+          if (!isNaN(parsed) && parsed >= 0 && parsed < arr.size) {
+            indexPointers.push({
+              name: cName,
+              targetIndex: parsed,
+              targetArrayName: arr.name,
+              value: parsed,
+            });
+            if (arr.elements[parsed]) {
+              arr.elements[parsed].isActive = true;
             }
           }
         }
@@ -1297,7 +1509,12 @@ export class StateExtractor {
             const arrayDecls = this.discoverArrayDeclarations(resolvedFile);
             if (arrayDecls.length > 0) {
               const firstArr = arrayDecls[0];
-              hasHead = rawLine > firstArr.line;
+              if (funcRange && firstArr.line < funcRange.startLine) {
+                // Class member or global array declared before main function
+                hasHead = rawLine > funcRange.startLine;
+              } else {
+                hasHead = rawLine > firstArr.line;
+              }
             } else {
               hasHead = true;
             }
@@ -1520,9 +1737,9 @@ export class StateExtractor {
           if (varDecls.has(cand) && !this.isVariableInitialized(cand, rawLine, varDecls, funcRange)) {
             continue;
           }
-          let valStr = localVars[cand]?.value;
+          let valStr: string | null | undefined = localVars[cand]?.value;
           if (!valStr) {
-            valStr = (await evalExpr(cand)) || undefined;
+            valStr = await evalExpr(cand);
           }
           if (valStr) {
             if (cand === 'head_ref' || cand === 'root_ref' || valStr.includes('**')) {
@@ -1544,7 +1761,7 @@ export class StateExtractor {
       // Prioritize the 'main' frame where the true root/head pointer lives,
       // avoiding local recursive parameters (e.g. insert's 'root') shadowing the real root.
       if (!headAddr) {
-        const mainFrame = frames.find((f) => {
+        const mainFrame = frames.find((f: any) => {
           const name = (f.name || '').toLowerCase();
           const path = f.source?.path || f.source?.name || '';
           return this.isUserSource(path) && (name === 'main' || name.startsWith('main('));
@@ -1599,7 +1816,7 @@ export class StateExtractor {
       // C: Retain previous head address if still valid and not deleted
       if (!headAddr && previousSnapshot?.headId) {
         const prevHeadNode = previousSnapshot.nodes.find((n) => n.id === previousSnapshot.headId);
-        if (prevHeadNode && !this.deletedAddresses.has(prevHeadNode.address)) {
+        if (prevHeadNode && prevHeadNode.address && !this.deletedAddresses.has(prevHeadNode.address)) {
           headAddr = prevHeadNode.address;
         }
       }
