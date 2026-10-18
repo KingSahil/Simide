@@ -12,7 +12,5 @@ npm-debug.log*
 # OS Files
 .DS_Store
 Thumbs.db
-dist/extension.js
-dist/extension.js.map
-dist/webview.js
-dist/webview.js.map
+# Build output
+dist/
