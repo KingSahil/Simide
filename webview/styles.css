@@ -820,7 +820,7 @@ body.is-canvas-panning * {
 .array-board-container {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 28px;
   padding: 24px;
   position: absolute;
   top: 10px;
@@ -829,48 +829,36 @@ body.is-canvas-panning * {
 }
 
 .array-board {
-  background: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
-  border: 1.5px solid #30363d;
-  border-radius: 10px;
-  padding: 16px 20px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
   display: inline-flex;
   flex-direction: column;
+  gap: 6px;
 }
 
-.array-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 22px;
-}
-
-.array-header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.array-name-badge {
+.array-name-simple {
   font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12px;
   font-weight: 700;
-  font-size: 13px;
-  padding: 2px 8px;
-  background: rgba(0, 102, 255, 0.15);
-  color: #388bfd;
-  border: 1px solid rgba(0, 102, 255, 0.4);
-  border-radius: 6px;
+  color: #58a6ff;
+  letter-spacing: 0.5px;
+  margin-left: 6px;
+  margin-bottom: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.array-meta-chip {
-  font-size: 11px;
-  font-family: 'JetBrains Mono', Consolas, monospace;
-  color: var(--secondary-text);
-  background: var(--elevated-surface);
-  padding: 2px 8px;
-  border-radius: 9999px;
-  border: 1px solid var(--border-color);
+.array-name-simple::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #388bfd;
+  box-shadow: 0 0 8px #388bfd;
 }
 
 .array-strip-wrapper {
@@ -983,14 +971,15 @@ body.is-canvas-panning * {
 
 .array-cell {
   position: relative;
-  width: 64px;
-  height: 72px;
+  width: 60px;
+  height: 66px;
   border: 1.5px solid #30363d;
   border-radius: 9px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
+  gap: 5px;
   padding: 6px 4px;
   background: linear-gradient(180deg, #1b2129 0%, #12171e 100%);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
@@ -1034,28 +1023,23 @@ body.is-canvas-panning * {
 .array-cell-index {
   position: relative;
   z-index: 2;
-  font-size: 10px;
+  font-size: 10.5px;
   font-family: 'JetBrains Mono', Consolas, monospace;
   font-weight: 600;
   color: #737d8c;
+  line-height: 1;
 }
 
 .array-cell-val {
   position: relative;
   z-index: 2;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
   font-family: 'JetBrains Mono', Consolas, monospace;
   color: #f5f7fa;
+  line-height: 1.1;
 }
 
-.array-cell-addr {
-  position: relative;
-  z-index: 2;
-  font-size: 8.5px;
-  font-family: 'JetBrains Mono', Consolas, monospace;
-  color: #57606a;
-}
 
 /* Bouncy Upward Thrust Animation (VisuAlgo & Modern DSA style) */
 @keyframes arrayUpwardThrust {

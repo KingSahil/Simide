@@ -1663,33 +1663,10 @@
     for (const arrVar of arrays) {
       const board = document.createElement("div");
       board.className = "array-board";
-      const header = document.createElement("div");
-      header.className = "array-header";
-      const headerLeft = document.createElement("div");
-      headerLeft.className = "array-header-left";
-      const nameBadge = document.createElement("span");
-      nameBadge.className = "array-name-badge";
-      nameBadge.textContent = arrVar.name;
-      const typeChip = document.createElement("span");
-      typeChip.className = "array-meta-chip";
-      if (arrVar.capacity !== void 0) {
-        typeChip.textContent = `${arrVar.name} (size: ${arrVar.size}, cap: ${arrVar.capacity})`;
-      } else {
-        typeChip.textContent = `${arrVar.type}[${arrVar.size}]`;
-      }
-      headerLeft.appendChild(nameBadge);
-      headerLeft.appendChild(typeChip);
-      const headerRight = document.createElement("div");
-      headerRight.className = "array-header-right";
-      if (arrVar.address) {
-        const addrChip = document.createElement("span");
-        addrChip.className = "array-meta-chip";
-        addrChip.textContent = `Base: ${arrVar.address}`;
-        headerRight.appendChild(addrChip);
-      }
-      header.appendChild(headerLeft);
-      header.appendChild(headerRight);
-      board.appendChild(header);
+      const nameLabel = document.createElement("div");
+      nameLabel.className = "array-name-simple";
+      nameLabel.textContent = arrVar.name;
+      board.appendChild(nameLabel);
       const leftPtr = indexPointers.find(
         (p) => ["left", "low", "start"].includes(p.name.toLowerCase()) && (!p.targetArrayName || p.targetArrayName === arrVar.name)
       );
@@ -1759,16 +1736,8 @@
         const valSpan = document.createElement("span");
         valSpan.className = "array-cell-val";
         valSpan.textContent = String(elem.value);
-        const addrSpan = document.createElement("span");
-        addrSpan.className = "array-cell-addr";
-        if (elem.isCapacitySlot) {
-          addrSpan.textContent = "buffer";
-        } else {
-          addrSpan.textContent = elem.address ? elem.address.slice(-4) : `+${elem.index * 4}`;
-        }
         cell.appendChild(indexSpan);
         cell.appendChild(valSpan);
-        cell.appendChild(addrSpan);
         col.appendChild(cell);
         strip.appendChild(col);
       }
