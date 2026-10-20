@@ -1241,10 +1241,9 @@ function renderDebuggerQueueDiagram(snapshot: LinkedListSnapshot) {
     const col = document.createElement('div');
     col.className = 'array-column';
 
-    // Queue pointers only display when queue is non-empty
-    const isQueueNonEmpty = queue.size > 0 && queue.front >= 0 && queue.rear >= 0;
-    const isFront = isQueueNonEmpty && i === queue.front;
-    const isRear = isQueueNonEmpty && i === queue.rear;
+    // Queue pointers display whenever front/rear point to valid indices
+    const isFront = queue.front >= 0 && i === queue.front;
+    const isRear = queue.rear >= 0 && i === queue.rear;
     const hasPointers = isFront || isRear;
     const isOccupied = slot.hasValue && slot.value !== null && slot.value !== undefined;
     const isElevated = isOccupied && (slot.isHighlighted || slot.isEnqueuing || hasPointers);

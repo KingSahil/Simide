@@ -60,8 +60,8 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     this.disposables.push(
       DebugTrackerFactory.onStopped(async (event: DebuggerStopEvent) => {
         ExecutionController.setPaused(true);
-        // Small delay to ensure DAP stack frames are completely populated
-        await new Promise((r) => setTimeout(r, 60));
+        // Minimal delay to ensure DAP stack frames are completely populated
+        await new Promise((r) => setTimeout(r, 10));
         vscode.commands.executeCommand('workbench.action.closePanel');
 
         // Inspect call stack to see if we stepped into library or CRT internals

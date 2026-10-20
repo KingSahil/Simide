@@ -30,6 +30,14 @@ export class StateExtractor {
   private static cachedStructureType: StructureType | null = null;
   private static accumulatedTerminalOutput: string = '';
   private static hasInitializedList: boolean = false;
+  private static cachedQueueFrontExpr: string | null = null;
+  private static cachedQueueRearExpr: string | null = null;
+  private static cachedQueueCapExpr: string | null = null;
+  private static cachedQueueCountExpr: string | null = null;
+  private static cachedQueueArrExpr: string | null = null;
+  private static cachedStackTopExpr: string | null = null;
+  private static cachedStackCapExpr: string | null = null;
+  private static cachedStackArrExpr: string | null = null;
 
   public static setActiveSourceFile(filePath: string): void {
     this.activeSourceFile = filePath;
@@ -56,6 +64,14 @@ export class StateExtractor {
     this.cachedStructureType = null;
     this.accumulatedTerminalOutput = '';
     this.hasInitializedList = false;
+    this.cachedQueueFrontExpr = null;
+    this.cachedQueueRearExpr = null;
+    this.cachedQueueCapExpr = null;
+    this.cachedQueueCountExpr = null;
+    this.cachedQueueArrExpr = null;
+    this.cachedStackTopExpr = null;
+    this.cachedStackCapExpr = null;
+    this.cachedStackArrExpr = null;
   }
 
   public static resolveFilePath(sourceFilePath?: string): string | null {
@@ -1474,10 +1490,11 @@ export class StateExtractor {
   }
 
   public static async extractStackState(
-    evalExpr: (expr: string) => Promise<string | null>,
+    evalExpr: (expr: string, targetFrameId?: number) => Promise<string | null>,
     localVars: Record<string, any>,
     executedLineText: string,
-    previousSnapshot?: LinkedListSnapshot
+    previousSnapshot?: LinkedListSnapshot,
+    frames?: any[]
   ): Promise<StackModel | undefined> {
     let stackName = 'stack';
     let topVal = -1;
@@ -1491,40 +1508,62 @@ export class StateExtractor {
       }
     }
 
+    const frameIdsToTry = frames && frames.length > 0 ? frames.map((f) => f.id) : [undefined];
+
+    const evaluateAcrossFrames = async (exprs: string[]): Promise<string | null> => {
+      for (const fId of frameIdsToTry) {
+        for (const expr of exprs) {
+          const res = await evalExpr(expr, fId);
+          if (res && this.isValidEvalNumber(res)) {
+            return res;
+          }
+        }
+      }
+      return null;
+    };
+
     const topCandidates = [
+      'this->top',
+      'this->topIndex',
+      'this->m_top',
       `${stackName}.top`,
       `${stackName}.topIndex`,
-      `this->top`,
-      `top`,
-      `topIndex`,
+      's.top',
+      'stack.top',
+      'top',
+      'topIndex',
     ];
-    for (const cand of topCandidates) {
-      const res = await evalExpr(cand);
-      if (res) {
-        const parsed = parseInt(res.match(/-?\d+/)?.[0] || '', 10);
-        if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
-          topVal = parsed;
-          break;
-        }
+    if (this.cachedStackTopExpr) {
+      topCandidates.unshift(this.cachedStackTopExpr);
+    }
+
+    const topRes = await evaluateAcrossFrames(topCandidates);
+    if (topRes) {
+      const parsed = parseInt(topRes.match(/-?\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
+        topVal = parsed;
       }
     }
 
     const capCandidates = [
+      'this->capacity',
+      'this->MAX',
+      'this->CAPACITY',
       `${stackName}.capacity`,
       `${stackName}.MAX`,
       `${stackName}.size`,
-      `MAX`,
-      `CAPACITY`,
-      `capacity`,
+      'MAX',
+      'CAPACITY',
+      'capacity',
     ];
-    for (const cand of capCandidates) {
-      const res = await evalExpr(cand);
-      if (res) {
-        const parsed = parseInt(res.match(/\d+/)?.[0] || '', 10);
-        if (!isNaN(parsed) && parsed >= 2 && parsed <= 64) {
-          capacity = parsed;
-          break;
-        }
+    if (this.cachedStackCapExpr) {
+      capCandidates.unshift(this.cachedStackCapExpr);
+    }
+    const capRes = await evaluateAcrossFrames(capCandidates);
+    if (capRes) {
+      const parsed = parseInt(capRes.match(/\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= 2 && parsed <= 64) {
+        capacity = parsed;
       }
     }
 
@@ -1545,40 +1584,55 @@ export class StateExtractor {
     }
 
     if (topVal >= 0) {
+      let foundArr = false;
+      let targetArrName: string | null = null;
+      let targetFrameId: number | undefined = undefined;
+
       const arrNames = [
         'this->arr',
+        'this->items',
+        'this->data',
+        'this->elements',
         `${stackName}.arr`,
+        `${stackName}.items`,
+        `${stackName}.data`,
+        `${stackName}.elements`,
         's.arr',
         'stack.arr',
         'arr',
-        'this->items',
-        `${stackName}.items`,
-        's.items',
         'items',
-        'this->data',
-        `${stackName}.data`,
         'data',
-        'this->elements',
-        `${stackName}.elements`,
         'elements',
       ];
-      let foundArr = false;
-      for (const aName of arrNames) {
-        const testElem = await evalExpr(`${aName}[0]`);
-        if (this.isValidEvalNumber(testElem)) {
-          foundArr = true;
-          for (let i = 0; i <= topVal; i++) {
-            const elRes = await evalExpr(`${aName}[${i}]`);
-            const val = this.isValidEvalNumber(elRes) ? this.parseData(elRes) : 0;
-            elements.push({
-              id: `stack_elem_${i}`,
-              value: val,
-              index: i,
-              isTop: i === topVal,
-              isHighlighted: i === topVal,
-            });
+      if (this.cachedStackArrExpr) {
+        arrNames.unshift(this.cachedStackArrExpr);
+      }
+
+      for (const fId of frameIdsToTry) {
+        for (const aName of arrNames) {
+          const testElem = await evalExpr(`${aName}[0]`, fId);
+          if (this.isValidEvalNumber(testElem)) {
+            targetArrName = aName;
+            targetFrameId = fId;
+            this.cachedStackArrExpr = aName;
+            break;
           }
-          break;
+        }
+        if (targetArrName) break;
+      }
+
+      if (targetArrName) {
+        foundArr = true;
+        for (let i = 0; i <= topVal; i++) {
+          const elRes = await evalExpr(`${targetArrName}[${i}]`, targetFrameId);
+          const val = this.isValidEvalNumber(elRes) ? this.parseData(elRes) : 0;
+          elements.push({
+            id: `stack_elem_${i}`,
+            value: val,
+            index: i,
+            isTop: i === topVal,
+            isHighlighted: i === topVal,
+          });
         }
       }
 
@@ -1614,10 +1668,11 @@ export class StateExtractor {
   }
 
   public static async extractQueueState(
-    evalExpr: (expr: string) => Promise<string | null>,
+    evalExpr: (expr: string, targetFrameId?: number) => Promise<string | null>,
     localVars: Record<string, any>,
     executedLineText: string,
-    previousSnapshot?: LinkedListSnapshot
+    previousSnapshot?: LinkedListSnapshot,
+    frames?: any[]
   ): Promise<QueueModel | undefined> {
     let queueName = 'q';
     let frontVal = -1;
@@ -1631,90 +1686,115 @@ export class StateExtractor {
       }
     }
 
+    const frameIdsToTry = frames && frames.length > 0 ? frames.map((f) => f.id) : [undefined];
+
+    const evaluateAcrossFrames = async (exprs: string[]): Promise<string | null> => {
+      for (const fId of frameIdsToTry) {
+        for (const expr of exprs) {
+          const res = await evalExpr(expr, fId);
+          if (res && this.isValidEvalNumber(res)) {
+            return res;
+          }
+        }
+      }
+      return null;
+    };
+
     const frontCands = [
       'this->front',
+      'this->m_front',
       `${queueName}.front`,
+      `${queueName}.m_front`,
       'q.front',
       'queue.front',
       'front',
-      'this->m_front',
-      `${queueName}.m_front`,
+      'm_front',
     ];
-    for (const c of frontCands) {
-      const res = await evalExpr(c);
-      if (this.isValidEvalNumber(res)) {
-        const parsed = parseInt(res!.match(/-?\d+/)?.[0] || '', 10);
-        if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
-          frontVal = parsed;
-          break;
-        }
+    if (this.cachedQueueFrontExpr) {
+      frontCands.unshift(this.cachedQueueFrontExpr);
+    }
+    const frontRes = await evaluateAcrossFrames(frontCands);
+    if (frontRes) {
+      const parsed = parseInt(frontRes.match(/-?\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
+        frontVal = parsed;
       }
     }
 
     const rearCands = [
       'this->rear',
+      'this->m_rear',
       `${queueName}.rear`,
+      `${queueName}.m_rear`,
       'q.rear',
       'queue.rear',
       'rear',
-      'this->m_rear',
-      `${queueName}.m_rear`,
+      'm_rear',
     ];
-    for (const c of rearCands) {
-      const res = await evalExpr(c);
-      if (this.isValidEvalNumber(res)) {
-        const parsed = parseInt(res!.match(/-?\d+/)?.[0] || '', 10);
-        if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
-          rearVal = parsed;
-          break;
-        }
+    if (this.cachedQueueRearExpr) {
+      rearCands.unshift(this.cachedQueueRearExpr);
+    }
+    const rearRes = await evaluateAcrossFrames(rearCands);
+    if (rearRes) {
+      const parsed = parseInt(rearRes.match(/-?\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
+        rearVal = parsed;
       }
     }
 
     const capCands = [
       'this->capacity',
+      'this->MAX',
+      'this->CAPACITY',
       `${queueName}.capacity`,
+      `${queueName}.MAX`,
+      `${queueName}.CAPACITY`,
       'q.capacity',
       'queue.capacity',
-      'this->MAX',
-      `${queueName}.MAX`,
-      'this->CAPACITY',
-      `${queueName}.CAPACITY`,
       'capacity',
       'MAX',
       'CAPACITY',
     ];
-    for (const c of capCands) {
-      const res = await evalExpr(c);
-      if (this.isValidEvalNumber(res)) {
-        const parsed = parseInt(res!.match(/\d+/)?.[0] || '', 10);
-        if (!isNaN(parsed) && parsed >= 2 && parsed <= 128) {
-          capacity = parsed;
-          break;
-        }
+    if (this.cachedQueueCapExpr) {
+      capCands.unshift(this.cachedQueueCapExpr);
+    }
+    const capRes = await evaluateAcrossFrames(capCands);
+    if (capRes) {
+      const parsed = parseInt(capRes.match(/\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= 2 && parsed <= 128) {
+        capacity = parsed;
       }
     }
 
     let countVal: number | null = null;
     const countCands = [
       'this->count',
+      'this->size',
+      'this->m_count',
       `${queueName}.count`,
+      `${queueName}.size`,
       'q.count',
       'queue.count',
       'count',
-      'this->size',
-      `${queueName}.size`,
-      'q.size',
+      'size',
     ];
-    for (const c of countCands) {
-      const res = await evalExpr(c);
-      if (this.isValidEvalNumber(res)) {
-        const parsed = parseInt(res!.match(/\d+/)?.[0] || '', 10);
-        if (!isNaN(parsed) && parsed >= 0 && parsed <= 128) {
-          countVal = parsed;
-          break;
-        }
+    if (this.cachedQueueCountExpr) {
+      countCands.unshift(this.cachedQueueCountExpr);
+    }
+    const countRes = await evaluateAcrossFrames(countCands);
+    if (countRes) {
+      const parsed = parseInt(countRes.match(/\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= 0 && parsed <= 128) {
+        countVal = parsed;
       }
+    }
+
+    // If unresolved in current step, preserve previous pointers if valid
+    if (frontVal === -1 && previousSnapshot?.queue?.front !== undefined && previousSnapshot.queue.front >= 0) {
+      frontVal = previousSnapshot.queue.front;
+    }
+    if (rearVal === -1 && previousSnapshot?.queue?.rear !== undefined && previousSnapshot.queue.rear >= 0) {
+      rearVal = previousSnapshot.queue.rear;
     }
 
     let activeMethod: 'enqueue' | 'dequeue' | 'front' | 'rear' | null = null;
@@ -1736,31 +1816,40 @@ export class StateExtractor {
     }
 
     const slots: QueueSlot[] = [];
+    let foundArrName: string | null = null;
+    let foundArrFrameId: number | undefined = undefined;
+
     const arrNames = [
       'this->arr',
+      'this->items',
+      'this->data',
+      'this->elements',
       `${queueName}.arr`,
+      `${queueName}.items`,
+      `${queueName}.data`,
+      `${queueName}.elements`,
       'q.arr',
       'queue.arr',
       'arr',
-      'this->items',
-      `${queueName}.items`,
-      'q.items',
       'items',
-      'this->data',
-      `${queueName}.data`,
-      'q.data',
       'data',
-      'this->elements',
-      `${queueName}.elements`,
       'elements',
     ];
-    let foundArrName: string | null = null;
-    for (const aName of arrNames) {
-      const test = await evalExpr(`${aName}[0]`);
-      if (this.isValidEvalNumber(test)) {
-        foundArrName = aName;
-        break;
+    if (this.cachedQueueArrExpr) {
+      arrNames.unshift(this.cachedQueueArrExpr);
+    }
+
+    for (const fId of frameIdsToTry) {
+      for (const aName of arrNames) {
+        const test = await evalExpr(`${aName}[0]`, fId);
+        if (this.isValidEvalNumber(test)) {
+          foundArrName = aName;
+          foundArrFrameId = fId;
+          this.cachedQueueArrExpr = aName;
+          break;
+        }
       }
+      if (foundArrName) break;
     }
 
     let size = 0;
@@ -1774,16 +1863,14 @@ export class StateExtractor {
       }
     }
 
-    // A queue is empty if size is 0 or front/rear are -1
-    if (size === 0 || frontVal === -1 || rearVal === -1) {
-      frontVal = -1;
-      rearVal = -1;
+    // Only if BOTH frontVal and rearVal are explicitly -1 (and count is 0 or null) do we consider the queue completely uninitialized/empty
+    if (frontVal === -1 && rearVal === -1) {
       size = 0;
     }
 
     if (foundArrName) {
       for (let i = 0; i < capacity; i++) {
-        const elRes = await evalExpr(`${foundArrName}[${i}]`);
+        const elRes = await evalExpr(`${foundArrName}[${i}]`, foundArrFrameId);
         const val = this.isValidEvalNumber(elRes) ? this.parseData(elRes) : null;
         let hasVal = false;
         if (size > 0 && frontVal !== -1 && rearVal !== -1) {
@@ -1800,12 +1887,11 @@ export class StateExtractor {
           index: i,
           value: hasVal ? val : null,
           hasValue: hasVal,
-          isFront: size > 0 && i === frontVal,
-          isRear: size > 0 && i === rearVal,
+          isFront: frontVal >= 0 && i === frontVal,
+          isRear: rearVal >= 0 && i === rearVal,
           isHighlighted:
-            size > 0 &&
-            ((activeMethod === 'enqueue' && i === rearVal) ||
-              (activeMethod === 'dequeue' && i === frontVal)),
+            (activeMethod === 'enqueue' && i === rearVal) ||
+            (activeMethod === 'dequeue' && i === frontVal),
         });
       }
     } else {
@@ -1826,8 +1912,8 @@ export class StateExtractor {
           index: i,
           value: hasVal ? prevVal : null,
           hasValue: hasVal,
-          isFront: size > 0 && i === frontVal,
-          isRear: size > 0 && i === rearVal,
+          isFront: frontVal >= 0 && i === frontVal,
+          isRear: rearVal >= 0 && i === rearVal,
         });
       }
     }
@@ -2112,6 +2198,10 @@ export class StateExtractor {
         if (arrays.length > 0) {
           this.hasInitializedList = true;
         }
+      } else if (structureType === 'stack' || structureType === 'queue') {
+        // Stack and queue models are linear/circular array/buffer structures.
+        // Skip linked-list and binary-tree pointer chasing to eliminate 30+ redundant GDB roundtrips.
+        this.hasInitializedList = true;
       } else {
         // 3. Inspect 'head' / 'root' across current frame and caller frames
         let headAddr: string | null = null;
@@ -2627,9 +2717,9 @@ export class StateExtractor {
       let stackData: StackModel | undefined = undefined;
       let queueData: QueueModel | undefined = undefined;
       if (structureType === 'stack') {
-        stackData = await this.extractStackState(evalExpr, localVars, executedLineText, previousSnapshot);
+        stackData = await this.extractStackState(evalExpr, localVars, executedLineText, previousSnapshot, frames);
       } else if (structureType === 'queue') {
-        queueData = await this.extractQueueState(evalExpr, localVars, executedLineText, previousSnapshot);
+        queueData = await this.extractQueueState(evalExpr, localVars, executedLineText, previousSnapshot, frames);
       }
 
       // 8. Generate Pedagogical Explanation
