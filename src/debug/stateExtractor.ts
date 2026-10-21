@@ -1,4 +1,4 @@
-import { ClangAstParser, ASTNode } from './parser/clangAstParser';
+import { ClangAstParser, ASTNode } from '../parser/clangAstParser';
 
 export class StateExtractor {
     private parser: ClangAstParser;
