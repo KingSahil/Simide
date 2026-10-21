@@ -6,7 +6,36 @@ export class StateExtractor {
     constructor() {
         this.parser = new ClangAstParser();
     }
+        /**
+     * Parses a pointer type string or AST node to extract pointer details.
+     */
+    public static parsePointer(input: string | ASTNode): { isPointer: boolean; targetType: string; pointerDepth: number } {
+        let typeStr = '';
+        if (typeof input === 'string') {
+            typeStr = input;
+        } else if (input) {
+            typeStr = input.type?.qualType || input.name || '';
+            if (input.kind === 'PointerType' && input.inner && input.inner.length > 0) {
+                typeStr = (input.inner[0].type?.qualType || input.inner[0].name || '') + '*';
+            }
+        }
 
+        const pointerDepth = (typeStr.match(/\*/g) || []).length;
+        const isPointer = pointerDepth > 0 || typeStr.includes('*');
+        const targetType = typeStr.replace(/\*/g, '').trim();
+
+        return {
+            isPointer,
+            targetType,
+            pointerDepth
+        };
+    }
+
+    // Instance method wrapper for compatibility
+    public parsePointer(input: string | ASTNode) {
+        return StateExtractor.parsePointer(input);
+    }
+    
     async extractSourceStructure(filePath: string, includeDirs: string[] = []): Promise<void> {
         try {
             const ast = await this.parser.parseFile(filePath, { includeDirs });
