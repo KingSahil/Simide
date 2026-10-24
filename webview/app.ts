@@ -1,10 +1,12 @@
 import {
-  ArrayVariable,
-  IndexPointer,
   LinkedListSnapshot,
   ListNode,
-  StackElement,
+  ArrayVariable,
+  IndexPointer,
   StackModel,
+  QueueModel,
+  StackElement,
+  QueueSlot,
 } from '../src/visualization/linkedListModel';
 import { ExtensionMessage, WebviewMessage } from '../src/sidebar/messages';
 import {
@@ -27,7 +29,7 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 
-// DOM Elements
+// DOM Elements: Debugger Views
 const initialView = document.getElementById('initialView') as HTMLDivElement;
 const loadingView = document.getElementById('loadingView') as HTMLDivElement;
 const loadingText = document.getElementById('loadingText') as HTMLDivElement;
@@ -327,6 +329,57 @@ function showView(view: 'initial' | 'loading' | 'active' | 'error') {
   btnRestart.style.display = view === 'active' || view === 'error' ? 'inline-flex' : 'none';
 }
 
+// Satisfying physical spring overshoot bounce-back draggable for Stack and Queue elements
+function makeSpringDraggable(el: HTMLElement) {
+  el.onpointerdown = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    el.setPointerCapture(e.pointerId);
+    el.classList.add('dragging');
+    el.style.transition = 'none';
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+
+    const onPointerMove = (moveEv: PointerEvent) => {
+      moveEv.preventDefault();
+      const dx = moveEv.clientX - startX;
+      const dy = moveEv.clientY - startY;
+      el.style.transform = `translate(${dx}px, ${dy}px) scale(1.08)`;
+    };
+
+    const onPointerUp = (upEv: PointerEvent) => {
+      try {
+        el.releasePointerCapture(upEv.pointerId);
+      } catch {}
+
+      el.classList.remove('dragging');
+      // Satisfying spring overshoot bounce-back
+      el.style.transition = 'transform 0.52s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease';
+      el.style.transform = 'translate(0px, 0px) scale(1)';
+
+      setTimeout(() => {
+        if (!el.classList.contains('dragging')) {
+          el.style.transition = '';
+          el.style.transform = '';
+        }
+      }, 550);
+
+      el.removeEventListener('pointermove', onPointerMove);
+      el.removeEventListener('pointerup', onPointerUp);
+      el.removeEventListener('pointercancel', onPointerUp);
+    };
+
+    el.addEventListener('pointermove', onPointerMove);
+    el.addEventListener('pointerup', onPointerUp);
+    el.addEventListener('pointercancel', onPointerUp);
+  };
+}
+
+
+
 function updateBadge(status: 'idle' | 'running' | 'paused' | 'error' | 'terminated') {
   badgeDot.className = 'badge-dot';
   if (status === 'paused') {
@@ -597,8 +650,10 @@ function drawBezierArrow(
   let marker = 'url(#arrowHead)';
   if (isMuted) {
     marker = 'url(#arrowHeadMuted)';
-  } else if (color === '#36C779') {
+  } else if (color === '#36C779' || color.toLowerCase() === '#238636') {
     marker = 'url(#arrowHeadGreen)';
+  } else if (color === '#1F6FEB' || color.toLowerCase() === '#1f6feb') {
+    marker = 'url(#arrowHeadBlue)';
   }
   pathEl.setAttribute('marker-end', marker);
   if (arrowsGroup) {
@@ -960,6 +1015,21 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Lin
 
       const isElevated: boolean = Boolean(elem.isActive || elem.isModified || matchingPointers.length > 0);
 
+      // Check previous elevation to trigger a single bounce on highlight or de-highlight transition
+      let wasElevated = false;
+      if (previousSnapshot) {
+        const prevArr = previousSnapshot.arrays?.find((a) => a.name === arrVar.name);
+        const prevElem = prevArr?.elements.find((e) => e.index === elem.index);
+        const prevMatchingPointers = (previousSnapshot.indexPointers || []).filter(
+          (ptr) =>
+            ptr.targetIndex === elem.index &&
+            (!ptr.targetArrayName || ptr.targetArrayName === arrVar.name)
+        );
+        wasElevated = Boolean(
+          prevElem?.isActive || prevElem?.isModified || prevMatchingPointers.length > 0
+        );
+      }
+
       if (matchingPointers.length > 0) {
         col.classList.add('has-active-pointer');
         const ptrContainer = document.createElement('div');
@@ -990,6 +1060,15 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Lin
       if (isElevated) {
         cell.classList.add('cell-thrust');
         col.classList.add('has-thrust');
+      }
+
+      // One-time bounce animation only at the exact moment of highlight or de-highlight
+      if (previousSnapshot) {
+        if (!wasElevated && isElevated) {
+          cell.classList.add('cell-bounce-in');
+        } else if (wasElevated && !isElevated) {
+          cell.classList.add('cell-bounce-out');
+        }
       }
 
       // Bubble sort arc hop swap animations
@@ -1046,6 +1125,267 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Lin
     container.appendChild(board);
   }
 
+  nodesLayer.appendChild(container);
+}// Render Stack in Debugger Canvas (deterministic horizontal array layout with floating TOP badge)
+function renderDebuggerStackDiagram(
+  snapshot: LinkedListSnapshot,
+  previousSnapshot?: LinkedListSnapshot | null
+) {
+  if (simulation) {
+    simulation.stop();
+    simulation.nodes([]);
+  }
+  const paths = arrowsSvg.querySelectorAll('path');
+  paths.forEach((p) => p.remove());
+
+  const stack = snapshot.stack;
+  if (!stack) {
+    const emptyMsg = document.createElement('div');
+    emptyMsg.className = 'empty-canvas-message';
+    emptyMsg.innerHTML = `
+      <div class="empty-icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#737D8C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+        </svg>
+      </div>
+      <div class="empty-title">Stack Initializing</div>
+      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to execute stack instructions.</div>
+    `;
+    nodesLayer.appendChild(emptyMsg);
+    return;
+  }
+
+  const container = document.createElement('div');
+  container.className = 'array-board-container';
+
+  const board = document.createElement('div');
+  board.className = 'array-board';
+
+  // Horizontal strip wrapper
+  const stripWrapper = document.createElement('div');
+  stripWrapper.className = 'array-strip-wrapper';
+
+  const strip = document.createElement('div');
+  strip.className = 'array-strip';
+
+  for (let i = 0; i < stack.capacity; i++) {
+    const elem = stack.elements.find((e) => e.index === i);
+    const col = document.createElement('div');
+    col.className = 'array-column';
+
+    const isTop = i === stack.topIndex && stack.topIndex >= 0;
+    const isOccupied = elem !== undefined && elem.value !== null && elem.value !== undefined;
+    const isElevated = isOccupied && (isTop || elem.isHighlighted || elem.isPushing);
+
+    // Check previous stack state to trigger a one-shot bounce on highlight / de-highlight
+    let wasElevated = false;
+    if (previousSnapshot?.stack) {
+      const prevStack = previousSnapshot.stack;
+      const prevElem = prevStack.elements.find((e) => e.index === i);
+      const prevIsTop = i === prevStack.topIndex && prevStack.topIndex >= 0;
+      const prevOccupied = prevElem !== undefined && prevElem.value !== null && prevElem.value !== undefined;
+      wasElevated = prevOccupied && (prevIsTop || prevElem.isHighlighted || prevElem.isPushing);
+    }
+
+    // Index Pointer Badge pointing to TOP cell
+    if (isTop) {
+      col.classList.add('has-active-pointer');
+      const ptrContainer = document.createElement('div');
+      ptrContainer.className = 'array-pointer-container';
+
+      const topPill = document.createElement('div');
+      topPill.className = 'array-pointer-pill ptr-top';
+      topPill.innerHTML = `<span>TOP</span><span class="ptr-arrow">↓</span>`;
+      ptrContainer.appendChild(topPill);
+      col.appendChild(ptrContainer);
+    }
+
+    // Cell
+    const cell = document.createElement('div');
+    cell.className = 'array-cell';
+
+    if (!isOccupied) {
+      cell.classList.add('capacity-slot');
+    }
+    if (elem && (elem.isHighlighted || elem.isPushing)) {
+      cell.classList.add('active');
+    }
+    if (isElevated) {
+      cell.classList.add('cell-thrust');
+      col.classList.add('has-thrust');
+    }
+
+    // One-time bounce animation only at the exact moment of highlight or de-highlight
+    if (previousSnapshot) {
+      if (!wasElevated && isElevated) {
+        cell.classList.add('cell-bounce-in');
+      } else if (wasElevated && !isElevated) {
+        cell.classList.add('cell-bounce-out');
+      }
+    }
+
+    // Interactive spring draggable
+    makeArrayElementDraggable(cell, isElevated);
+
+    // Index label [0]
+    const indexSpan = document.createElement('span');
+    indexSpan.className = 'array-cell-index';
+    indexSpan.textContent = `[${i}]`;
+
+    // Value label
+    const valSpan = document.createElement('span');
+    valSpan.className = 'array-cell-val';
+    valSpan.textContent = isOccupied ? String(elem.value) : '—';
+
+    cell.appendChild(indexSpan);
+    cell.appendChild(valSpan);
+
+    col.appendChild(cell);
+    strip.appendChild(col);
+  }
+
+  stripWrapper.appendChild(strip);
+  board.appendChild(stripWrapper);
+  container.appendChild(board);
+  nodesLayer.appendChild(container);
+}
+
+// Render Queue in Debugger Canvas (deterministic horizontal array layout with floating FRONT and REAR badges)
+function renderDebuggerQueueDiagram(
+  snapshot: LinkedListSnapshot,
+  previousSnapshot?: LinkedListSnapshot | null
+) {
+  if (simulation) {
+    simulation.stop();
+    simulation.nodes([]);
+  }
+  const paths = arrowsSvg.querySelectorAll('path');
+  paths.forEach((p) => p.remove());
+
+  const queue = snapshot.queue;
+  if (!queue) {
+    const emptyMsg = document.createElement('div');
+    emptyMsg.className = 'empty-canvas-message';
+    emptyMsg.innerHTML = `
+      <div class="empty-icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#737D8C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+        </svg>
+      </div>
+      <div class="empty-title">Queue Initializing</div>
+      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to execute queue instructions.</div>
+    `;
+    nodesLayer.appendChild(emptyMsg);
+    return;
+  }
+
+  const container = document.createElement('div');
+  container.className = 'array-board-container';
+
+  const board = document.createElement('div');
+  board.className = 'array-board';
+
+  // Horizontal strip wrapper
+  const stripWrapper = document.createElement('div');
+  stripWrapper.className = 'array-strip-wrapper';
+
+  const strip = document.createElement('div');
+  strip.className = 'array-strip';
+
+  for (let i = 0; i < queue.capacity; i++) {
+    const slot = queue.slots[i] || { index: i, value: null, hasValue: false };
+    const col = document.createElement('div');
+    col.className = 'array-column';
+
+    // Queue pointers display whenever front/rear point to valid indices
+    const isFront = queue.front >= 0 && i === queue.front;
+    const isRear = queue.rear >= 0 && i === queue.rear;
+    const hasPointers = isFront || isRear;
+    const isOccupied = slot.hasValue && slot.value !== null && slot.value !== undefined;
+    const isElevated = isOccupied && (slot.isHighlighted || slot.isEnqueuing || hasPointers);
+
+    // Check previous queue state to trigger a one-shot bounce on highlight / de-highlight
+    let wasElevated = false;
+    if (previousSnapshot?.queue) {
+      const prevQ = previousSnapshot.queue;
+      const prevSlot = prevQ.slots[i] || { index: i, value: null, hasValue: false };
+      const prevIsFront = prevQ.front >= 0 && i === prevQ.front;
+      const prevIsRear = prevQ.rear >= 0 && i === prevQ.rear;
+      const prevHasPointers = prevIsFront || prevIsRear;
+      const prevOccupied = prevSlot.hasValue && prevSlot.value !== null && prevSlot.value !== undefined;
+      wasElevated = prevOccupied && (prevSlot.isHighlighted || prevSlot.isEnqueuing || prevHasPointers);
+    }
+
+    // Index Pointer Badges pointing to this cell
+    if (hasPointers) {
+      col.classList.add('has-active-pointer');
+      const ptrContainer = document.createElement('div');
+      ptrContainer.className = 'array-pointer-container';
+
+      if (isFront) {
+        const frontPill = document.createElement('div');
+        frontPill.className = 'array-pointer-pill ptr-front';
+        frontPill.innerHTML = `<span>FRONT</span><span class="ptr-arrow">↓</span>`;
+        ptrContainer.appendChild(frontPill);
+      }
+      if (isRear) {
+        const rearPill = document.createElement('div');
+        rearPill.className = 'array-pointer-pill ptr-rear';
+        rearPill.innerHTML = `<span>REAR</span><span class="ptr-arrow">↓</span>`;
+        ptrContainer.appendChild(rearPill);
+      }
+      col.appendChild(ptrContainer);
+    }
+
+    // Cell
+    const cell = document.createElement('div');
+    cell.className = 'array-cell';
+
+    if (!isOccupied) {
+      cell.classList.add('capacity-slot');
+    }
+    if (slot.isHighlighted || slot.isEnqueuing) {
+      cell.classList.add('active');
+    }
+    if (isElevated) {
+      cell.classList.add('cell-thrust');
+      col.classList.add('has-thrust');
+    }
+
+    // One-time bounce animation only at the exact moment of highlight or de-highlight
+    if (previousSnapshot) {
+      if (!wasElevated && isElevated) {
+        cell.classList.add('cell-bounce-in');
+      } else if (wasElevated && !isElevated) {
+        cell.classList.add('cell-bounce-out');
+      }
+    }
+
+    // Interactive spring draggable: pulls and snaps back
+    makeArrayElementDraggable(cell, isElevated);
+
+    // Index label [0]
+    const indexSpan = document.createElement('span');
+    indexSpan.className = 'array-cell-index';
+    indexSpan.textContent = `[${i}]`;
+
+    // Value label
+    const valSpan = document.createElement('span');
+    valSpan.className = 'array-cell-val';
+    valSpan.textContent = isOccupied ? String(slot.value) : '—';
+
+    cell.appendChild(indexSpan);
+    cell.appendChild(valSpan);
+
+    col.appendChild(cell);
+    strip.appendChild(col);
+  }
+
+  stripWrapper.appendChild(strip);
+  board.appendChild(stripWrapper);
+  container.appendChild(board);
   nodesLayer.appendChild(container);
 }
 
@@ -1170,13 +1510,15 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
       cardTitle.textContent = 'BINARY TREE';
     } else if (snapshot.structureType === 'stack') {
       cardTitle.textContent = 'STACK (LIFO)';
+    } else if (snapshot.structureType === 'queue') {
+      cardTitle.textContent = 'CIRCULAR QUEUE (FIFO)';
     } else {
       cardTitle.textContent = 'LINKED LIST';
     }
   }
 
   if (canvasHint) {
-    if (snapshot.structureType === 'array' || snapshot.structureType === 'stack') {
+    if (snapshot.structureType === 'array' || snapshot.structureType === 'stack' || snapshot.structureType === 'queue') {
       canvasHint.textContent = 'Drag elements freely to explore • Release to bounce back • Right-click drag to pan';
     } else {
       canvasHint.textContent = 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
@@ -1186,6 +1528,18 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
   if (resetPositions) {
     nodePositions.clear();
     d3NodesMap.clear();
+  }
+
+  // Handle Stack Rendering
+  if (snapshot.structureType === 'stack') {
+    renderDebuggerStackDiagram(snapshot, previousSnapshot);
+    return;
+  }
+
+  // Handle Queue Rendering
+  if (snapshot.structureType === 'queue') {
+    renderDebuggerQueueDiagram(snapshot, previousSnapshot);
+    return;
   }
 
   const { headId, nodes } = snapshot;
@@ -1578,7 +1932,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
   initOrUpdateSimulation(Array.from(d3NodesMap.values()), validLinks, resetPositions);
 }
 
-// Event Listeners
+// Event Listeners: Debugger Controls
 btnInitialVisualize.onclick = () => vscode.postMessage({ command: 'visualize' });
 
 if (btnExampleStack) {
@@ -1606,6 +1960,12 @@ btnResetLayout.onclick = () => {
     renderDiagram(currentSnapshot, true);
   }
 };
+if (btnClearTerminal) {
+  btnClearTerminal.onclick = () => {
+    if (terminalText) terminalText.textContent = '';
+    if (terminalPlaceholder) terminalPlaceholder.style.display = 'inline';
+  };
+}
 
 // Viewport Pan Navigation (Right-Click Drag, Middle-Click, Space+Left-Click)
 graphViewport.addEventListener('contextmenu', (e) => {

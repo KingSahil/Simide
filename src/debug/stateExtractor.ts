@@ -8,6 +8,8 @@ import {
   LinkedListSnapshot,
   ListNode,
   PointerVariable,
+  QueueModel,
+  QueueSlot,
   SourceLocation,
   StackElement,
   StackModel,
@@ -31,6 +33,14 @@ export class StateExtractor {
   private static cachedStackArrExpr: string | null = null;
   private static accumulatedTerminalOutput: string = '';
   private static hasInitializedList: boolean = false;
+  private static cachedQueueFrontExpr: string | null = null;
+  private static cachedQueueRearExpr: string | null = null;
+  private static cachedQueueCapExpr: string | null = null;
+  private static cachedQueueCountExpr: string | null = null;
+  private static cachedQueueArrExpr: string | null = null;
+  private static cachedStackTopExpr: string | null = null;
+  private static cachedStackCapExpr: string | null = null;
+  private static cachedStackArrExpr: string | null = null;
 
   public static setActiveSourceFile(filePath: string): void {
     this.activeSourceFile = filePath;
@@ -60,6 +70,14 @@ export class StateExtractor {
     this.cachedStackArrExpr = null;
     this.accumulatedTerminalOutput = '';
     this.hasInitializedList = false;
+    this.cachedQueueFrontExpr = null;
+    this.cachedQueueRearExpr = null;
+    this.cachedQueueCapExpr = null;
+    this.cachedQueueCountExpr = null;
+    this.cachedQueueArrExpr = null;
+    this.cachedStackTopExpr = null;
+    this.cachedStackCapExpr = null;
+    this.cachedStackArrExpr = null;
   }
 
   public static resolveFilePath(sourceFilePath?: string): string | null {
@@ -402,16 +420,23 @@ export class StateExtractor {
         }
       }
 
-      // If no linked list or tree struct was found, check if this is a stack or array file
+      // If no linked list or tree struct was found, check for queue, stack, or array
       if (!hasNodePointer) {
-        const content = fs.readFileSync(resolvedPath, 'utf8');
+        const isQueue =
+          content.includes('<queue>') ||
+          /(?:class|struct)\s+(?:Circular)?Queue/i.test(content) ||
+          /\bqueue\s*<\s*[^>]+\s*>/i.test(content) ||
+          (/\bfront\b/i.test(content) && /\brear\b/i.test(content) && (/\benqueue\b/i.test(content) || /\bdequeue\b/i.test(content)));
+
         const isStack =
           content.includes('<stack>') ||
           /(?:class|struct)\s+(?:Array)?Stack/i.test(content) ||
           /\bstack\s*<\s*[^>]+\s*>/i.test(content) ||
-          (/\btop\b/i.test(content) && (/\bpush\b/i.test(content) || /\bpop\b/i.test(content)));
+          (/\btop\b/i.test(content) && (/\bpush\b/i.test(content) || /\bpop\b/i.test(content)) && !/\bfront\b/i.test(content));
 
-        if (isStack) {
+        if (isQueue) {
+          structureType = 'queue';
+        } else if (isStack) {
           structureType = 'stack';
         } else {
           const arrayDecls = this.discoverArrayDeclarations(resolvedPath);
@@ -749,6 +774,25 @@ export class StateExtractor {
       return match[0].toLowerCase();
     }
     return null;
+  }
+
+  public static isValidEvalNumber(res: string | null): boolean {
+    if (!res) return false;
+    const lower = res.toLowerCase();
+    if (
+      lower.includes('error') ||
+      lower.includes('no symbol') ||
+      lower.includes('cannot access') ||
+      lower.includes('unable to create') ||
+      lower.includes('-var-create') ||
+      lower.includes('has no member') ||
+      lower.includes('not defined') ||
+      lower.includes('optimized out') ||
+      lower.includes('incomplete')
+    ) {
+      return false;
+    }
+    return /-?\d+/.test(res);
   }
 
   private static parseData(valStr?: string | null): number | string {
@@ -1648,6 +1692,277 @@ export class StateExtractor {
     };
   }
 
+  public static async extractQueueState(
+    evalExpr: (expr: string, targetFrameId?: number) => Promise<string | null>,
+    localVars: Record<string, any>,
+    executedLineText: string,
+    previousSnapshot?: LinkedListSnapshot,
+    frames?: any[]
+  ): Promise<QueueModel | undefined> {
+    let queueName = 'q';
+    let frontVal = -1;
+    let rearVal = -1;
+    let capacity = 5;
+
+    for (const k of Object.keys(localVars)) {
+      if (k.toLowerCase().includes('queue') || k.toLowerCase().startsWith('q')) {
+        queueName = k;
+        break;
+      }
+    }
+
+    const frameIdsToTry = frames && frames.length > 0 ? frames.map((f) => f.id) : [undefined];
+
+    const evaluateAcrossFrames = async (exprs: string[]): Promise<string | null> => {
+      for (const fId of frameIdsToTry) {
+        for (const expr of exprs) {
+          const res = await evalExpr(expr, fId);
+          if (res && this.isValidEvalNumber(res)) {
+            return res;
+          }
+        }
+      }
+      return null;
+    };
+
+    const frontCands = [
+      'this->front',
+      'this->m_front',
+      `${queueName}.front`,
+      `${queueName}.m_front`,
+      'q.front',
+      'queue.front',
+      'front',
+      'm_front',
+    ];
+    if (this.cachedQueueFrontExpr) {
+      frontCands.unshift(this.cachedQueueFrontExpr);
+    }
+    const frontRes = await evaluateAcrossFrames(frontCands);
+    if (frontRes) {
+      const parsed = parseInt(frontRes.match(/-?\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
+        frontVal = parsed;
+      }
+    }
+
+    const rearCands = [
+      'this->rear',
+      'this->m_rear',
+      `${queueName}.rear`,
+      `${queueName}.m_rear`,
+      'q.rear',
+      'queue.rear',
+      'rear',
+      'm_rear',
+    ];
+    if (this.cachedQueueRearExpr) {
+      rearCands.unshift(this.cachedQueueRearExpr);
+    }
+    const rearRes = await evaluateAcrossFrames(rearCands);
+    if (rearRes) {
+      const parsed = parseInt(rearRes.match(/-?\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
+        rearVal = parsed;
+      }
+    }
+
+    const capCands = [
+      'this->capacity',
+      'this->MAX',
+      'this->CAPACITY',
+      `${queueName}.capacity`,
+      `${queueName}.MAX`,
+      `${queueName}.CAPACITY`,
+      'q.capacity',
+      'queue.capacity',
+      'capacity',
+      'MAX',
+      'CAPACITY',
+    ];
+    if (this.cachedQueueCapExpr) {
+      capCands.unshift(this.cachedQueueCapExpr);
+    }
+    const capRes = await evaluateAcrossFrames(capCands);
+    if (capRes) {
+      const parsed = parseInt(capRes.match(/\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= 2 && parsed <= 128) {
+        capacity = parsed;
+      }
+    }
+
+    let countVal: number | null = null;
+    const countCands = [
+      'this->count',
+      'this->size',
+      'this->m_count',
+      `${queueName}.count`,
+      `${queueName}.size`,
+      'q.count',
+      'queue.count',
+      'count',
+      'size',
+    ];
+    if (this.cachedQueueCountExpr) {
+      countCands.unshift(this.cachedQueueCountExpr);
+    }
+    const countRes = await evaluateAcrossFrames(countCands);
+    if (countRes) {
+      const parsed = parseInt(countRes.match(/\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= 0 && parsed <= 128) {
+        countVal = parsed;
+      }
+    }
+
+    // If unresolved in current step, preserve previous pointers if valid
+    if (frontVal === -1 && previousSnapshot?.queue?.front !== undefined && previousSnapshot.queue.front >= 0) {
+      frontVal = previousSnapshot.queue.front;
+    }
+    if (rearVal === -1 && previousSnapshot?.queue?.rear !== undefined && previousSnapshot.queue.rear >= 0) {
+      rearVal = previousSnapshot.queue.rear;
+    }
+
+    let activeMethod: 'enqueue' | 'dequeue' | 'front' | 'rear' | null = null;
+    let methodParam: number | string | undefined = undefined;
+    const cleanLine = executedLineText.toLowerCase();
+    if (cleanLine.includes('enqueue(') || cleanLine.includes('push(')) {
+      activeMethod = 'enqueue';
+      const m = executedLineText.match(/(?:enqueue|push)\s*\(\s*([^)]+)\s*\)/i);
+      if (m) {
+        const valRes = await evalExpr(m[1].trim());
+        methodParam = valRes && this.isValidEvalNumber(valRes) ? this.parseData(valRes) : m[1].trim();
+      }
+    } else if (cleanLine.includes('dequeue(') || cleanLine.includes('pop(')) {
+      activeMethod = 'dequeue';
+    } else if (cleanLine.includes('front(') || cleanLine.includes('getfront(')) {
+      activeMethod = 'front';
+    } else if (cleanLine.includes('rear(') || cleanLine.includes('getrear(')) {
+      activeMethod = 'rear';
+    }
+
+    const slots: QueueSlot[] = [];
+    let foundArrName: string | null = null;
+    let foundArrFrameId: number | undefined = undefined;
+
+    const arrNames = [
+      'this->arr',
+      'this->items',
+      'this->data',
+      'this->elements',
+      `${queueName}.arr`,
+      `${queueName}.items`,
+      `${queueName}.data`,
+      `${queueName}.elements`,
+      'q.arr',
+      'queue.arr',
+      'arr',
+      'items',
+      'data',
+      'elements',
+    ];
+    if (this.cachedQueueArrExpr) {
+      arrNames.unshift(this.cachedQueueArrExpr);
+    }
+
+    for (const fId of frameIdsToTry) {
+      for (const aName of arrNames) {
+        const test = await evalExpr(`${aName}[0]`, fId);
+        if (this.isValidEvalNumber(test)) {
+          foundArrName = aName;
+          foundArrFrameId = fId;
+          this.cachedQueueArrExpr = aName;
+          break;
+        }
+      }
+      if (foundArrName) break;
+    }
+
+    let size = 0;
+    if (countVal !== null) {
+      size = countVal;
+    } else if (frontVal !== -1 && rearVal !== -1) {
+      if (rearVal >= frontVal) {
+        size = rearVal - frontVal + 1;
+      } else {
+        size = capacity - frontVal + rearVal + 1;
+      }
+    }
+
+    // Only if BOTH frontVal and rearVal are explicitly -1 (and count is 0 or null) do we consider the queue completely uninitialized/empty
+    if (frontVal === -1 && rearVal === -1) {
+      size = 0;
+    }
+
+    if (foundArrName) {
+      for (let i = 0; i < capacity; i++) {
+        const elRes = await evalExpr(`${foundArrName}[${i}]`, foundArrFrameId);
+        const val = this.isValidEvalNumber(elRes) ? this.parseData(elRes) : null;
+        let hasVal = false;
+        if (size > 0 && frontVal !== -1 && rearVal !== -1) {
+          if (countVal !== null) {
+            const offsetFromFront = (i - frontVal + capacity) % capacity;
+            hasVal = offsetFromFront < countVal;
+          } else if (frontVal <= rearVal) {
+            hasVal = i >= frontVal && i <= rearVal;
+          } else {
+            hasVal = i >= frontVal || i <= rearVal;
+          }
+        }
+        slots.push({
+          index: i,
+          value: hasVal ? val : null,
+          hasValue: hasVal,
+          isFront: frontVal >= 0 && i === frontVal,
+          isRear: rearVal >= 0 && i === rearVal,
+          isHighlighted:
+            (activeMethod === 'enqueue' && i === rearVal) ||
+            (activeMethod === 'dequeue' && i === frontVal),
+        });
+      }
+    } else {
+      for (let i = 0; i < capacity; i++) {
+        let hasVal = false;
+        if (size > 0 && frontVal !== -1 && rearVal !== -1) {
+          if (countVal !== null) {
+            const offsetFromFront = (i - frontVal + capacity) % capacity;
+            hasVal = offsetFromFront < countVal;
+          } else if (frontVal <= rearVal) {
+            hasVal = i >= frontVal && i <= rearVal;
+          } else {
+            hasVal = i >= frontVal || i <= rearVal;
+          }
+        }
+        const prevVal = previousSnapshot?.queue?.slots[i]?.value ?? null;
+        slots.push({
+          index: i,
+          value: hasVal ? prevVal : null,
+          hasValue: hasVal,
+          isFront: frontVal >= 0 && i === frontVal,
+          isRear: rearVal >= 0 && i === rearVal,
+        });
+      }
+    }
+
+    const justWrapped =
+      (activeMethod === 'enqueue' && rearVal === 0 && (previousSnapshot?.queue?.rear === capacity - 1)) ||
+      (frontVal > rearVal && previousSnapshot?.queue?.front !== undefined && previousSnapshot.queue.front <= previousSnapshot.queue.rear);
+
+    return {
+      name: queueName,
+      slots,
+      front: frontVal,
+      rear: rearVal,
+      capacity,
+      size,
+      isCircular: true,
+      justWrapped,
+      activeMethod,
+      methodParam,
+      isOverflow: size >= capacity && activeMethod === 'enqueue',
+      isUnderflow: size === 0 && activeMethod === 'dequeue',
+    };
+  }
+
   public static async extractState(
     session: vscode.DebugSession,
     threadId: number,
@@ -1936,9 +2251,9 @@ export class StateExtractor {
         if (arrays.length > 0) {
           this.hasInitializedList = true;
         }
-      } else if (structureType === 'stack') {
-        // Stack models are linear array/buffer structures.
-        // We do not chase linked list / tree pointers.
+      } else if (structureType === 'stack' || structureType === 'queue') {
+        // Stack and queue models are linear/circular array/buffer structures.
+        // Skip linked-list and binary-tree pointer chasing to eliminate 30+ redundant GDB roundtrips.
         this.hasInitializedList = true;
       } else {
         // 3. Inspect 'head' / 'root' across current frame and caller frames
@@ -2451,10 +2766,13 @@ export class StateExtractor {
         this.accumulatedTerminalOutput += printedInStep;
       }
 
-      // 7. Extract Stack State if applicable
+      // 7. Extract Stack or Queue State if applicable
       let stackData: StackModel | undefined = undefined;
+      let queueData: QueueModel | undefined = undefined;
       if (structureType === 'stack') {
         stackData = await this.extractStackState(evalExpr, localVars, executedLineText, previousSnapshot, frames);
+      } else if (structureType === 'queue') {
+        queueData = await this.extractQueueState(evalExpr, localVars, executedLineText, previousSnapshot, frames);
       }
 
       // 8. Generate Pedagogical Explanation
@@ -2471,7 +2789,8 @@ export class StateExtractor {
         funcName,
         arrays,
         indexPointers,
-        stackData
+        stackData,
+        queueData
       );
 
       // If execution reached the return statement or end of main, mark as final
@@ -2488,6 +2807,8 @@ export class StateExtractor {
           }
         } else if (structureType === 'stack') {
           explanation = `Stack execution complete. Program execution finished.`;
+        } else if (structureType === 'queue') {
+          explanation = `Circular queue execution complete. Program execution finished.`;
         } else {
           const chainNodes = allNodes.filter((n) => !n.isDetached);
           if (chainNodes.length > 0) {
@@ -2510,6 +2831,7 @@ export class StateExtractor {
         arrays,
         indexPointers,
         stack: stackData,
+        queue: queueData,
         explanation,
         changeType,
         terminalOutput: this.accumulatedTerminalOutput,

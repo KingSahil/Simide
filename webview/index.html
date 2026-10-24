@@ -19,7 +19,7 @@
           <circle cx="8.25" cy="12" r="1" fill="#0066FF"/>
           <path d="M10 12H13.5M13.5 12L12 10.5M13.5 12L12 13.5" stroke="#0066FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           <rect x="14" y="7" width="8" height="10" rx="2" stroke="#36C779" stroke-width="2" fill="#151B23"/>
-          <line x1="18.5" y1="7" x2="18.5" y2="17" stroke="#2A3441" stroke-width="1.5"/>
+          <line x1="18.5" y1="18.5" x2="18.5" y2="17" stroke="#2A3441" stroke-width="1.5"/>
           <circle cx="16.25" cy="12" r="1.5" fill="#F5F7FA"/>
         </svg>
         <span class="brand-title">SimIDE</span>
@@ -88,7 +88,7 @@
       <div id="loadingSubtext" class="loading-subtext">Compiling source and starting debugger</div>
     </div>
 
-    <!-- Active Visualization View (Screens 3-7) -->
+    <!-- Screen 3: Active Visualization View (Debugger) -->
     <div id="activeView" style="display: none;">
       <!-- Linked List Card -->
       <div class="card">
@@ -106,6 +106,9 @@
               <defs>
                 <marker id="arrowHead" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto" markerUnits="userSpaceOnUse">
                   <path d="M 0 0.5 L 7 3.5 L 0 6.5 Z" fill="#0066FF" />
+                </marker>
+                <marker id="arrowHeadBlue" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto" markerUnits="userSpaceOnUse">
+                  <path d="M 0 0.5 L 7 3.5 L 0 6.5 Z" fill="#1F6FEB" />
                 </marker>
                 <marker id="arrowHeadGreen" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto" markerUnits="userSpaceOnUse">
                   <path d="M 0 0.5 L 7 3.5 L 0 6.5 Z" fill="#36C779" />
@@ -166,7 +169,7 @@
       </div>
     </div>
 
-    <!-- Screen 8: Error View -->
+    <!-- Screen 4: Error View -->
     <div id="errorView" class="error-view" style="display: none;">
       <div class="error-title">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">

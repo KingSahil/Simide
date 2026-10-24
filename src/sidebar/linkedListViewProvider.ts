@@ -61,8 +61,8 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     this.disposables.push(
       DebugTrackerFactory.onStopped(async (event: DebuggerStopEvent) => {
         ExecutionController.setPaused(true);
-        // Small delay to ensure DAP stack frames are completely populated
-        await new Promise((r) => setTimeout(r, 60));
+        // Minimal delay to ensure DAP stack frames are completely populated
+        await new Promise((r) => setTimeout(r, 10));
         vscode.commands.executeCommand('workbench.action.closePanel');
 
         // Inspect call stack to see if we stepped into library or CRT internals
@@ -309,7 +309,11 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           const isTrivialHelper = [
             'isfull',
             'isempty',
+            'getfront',
+            'getrear',
             'peek',
+            'front',
+            'rear',
             'top',
             'size',
           ].includes(fnName.toLowerCase());
@@ -331,7 +335,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       if (callsUserFunction) {
         await ExecutionController.stepIn();
       } else {
-        // Otherwise step OVER (so new Node(...) constructors and cout statements execute cleanly in 1 step)
+        // Otherwise step OVER (so new Node(...) constructors, cout statements, and queue/stack operations execute cleanly in 1 step)
         await ExecutionController.next();
       }
     } catch {

@@ -67,11 +67,12 @@ The extension is organized into 4 cleanly decoupled subsystems:
   - `debugAdapterTracker.ts`: Intercepts low-level DAP events (`stopped`, `continued`, `terminated`) sent by the debugger adapter without interfering with VS Code's native debug tools.
   - `executionController.ts`: Dispatches execution commands (step over, step in, step out, continue, pause) via DAP custom requests or VS Code commands.
   - `stateExtractor.ts`: The central inspection engine.
-    - Dynamically scans the user's C++ source file to discover struct definitions (`Node`, `ListNode`, `TreeNode`), pointer declarations, and user-defined functions (`printList`, `reverseList`, `push`, `deleteNode`, `insert`, `inorder`, class methods).
-    - Detects data structure mode (`linked_list` vs `tree`) based on struct member definitions (`left` & `right` vs `next`).
-    - Traverses memory chains from `head` as well as disconnected/detached chains.
+    - Dynamically scans the user's C++ source file to discover struct definitions (`Node`, `ListNode`, `TreeNode`, `CircularQueue`, `Stack`), pointer declarations, and user-defined functions (`printList`, `reverseList`, `push`, `pop`, `enqueue`, `dequeue`, `deleteNode`, `insert`, `inorder`, class methods).
+    - Detects data structure mode (`linked_list`, `tree`, `array`, `stack`, `queue`) based on struct member definitions and array declarations.
     - In tree mode, runs BFS `traverseTree` from root address, calculates depth levels (`treeDepth`), and assigns non-overlapping horizontal columns (`treeColumn`) via in-order traversal indexing.
     - Resolves root pointers across recursive helper stack frames by looking up caller frames if the current frame receives a by-value `nullptr` parameter.
+    - In stack mode (`extractStackState`), evaluates `top`, `capacity`, and array items (`arr`, `items`, `data`) across caller frames, tracking active push, pop, and peek operations.
+    - In circular queue mode (`extractQueueState`), evaluates `front`, `rear`, `count`, `capacity`, and buffer slots across all stack frames (`this->front`, `q.front`, caller frames). Prevents premature pointer resets (`front = -1`, `rear = -1`) when size is 0 and tracks circular wrap-around (`(rear + 1) % capacity`).
     - Prevents uninitialized stack memory from appearing as ghost nodes on Step 1 by enforcing `rawLine > declLine` and `hasSteppedPastFirstPointerDecl`.
     - Tracks memory freeing via `delete` and records `deletedAddresses` (including Case A leaf and single-child BST deletions).
     - Captures `std::cout` / `printf` calls and accumulates terminal output.
@@ -80,13 +81,16 @@ The extension is organized into 4 cleanly decoupled subsystems:
 ### 2. The Visualization Engine (`src/visualization/`)
 * **Role**: Transforms raw runtime data into pedagogical models and manages non-destructive historical navigation.
 * **Key Components**:
-  - `linkedListModel.ts`: Defines standard TypeScript interfaces (`ListNode`, `PointerVariable`, `LinkedListSnapshot`, `SourceLocation`, `ChangeType`, `StructureType`). Includes tree layout coordinates (`treeDepth`, `treeColumn`), branch links (`leftId`, `rightId`), and node state flags (`isRoot`, `isVisiting`).
+  - `linkedListModel.ts`: Defines standard TypeScript interfaces (`ListNode`, `PointerVariable`, `LinkedListSnapshot`, `SourceLocation`, `ChangeType`, `StructureType`, `ArrayVariable`, `IndexPointer`, `StackModel`, `QueueModel`, `QueueSlot`). Includes coordinates for trees, arrays, stacks, and circular queues.
   - `explanationGenerator.ts`: A rule-based pedagogical explainer. It compares the previous snapshot with the current snapshot to generate clear teaching explanations for:
     - Node creation and detached allocations
     - Head/Root assignment and pointer aliasing
     - Pointer linking and unlinking
     - Binary Search Tree branch links (`left`, `right`) and traversal visits (`inorder`, `preorder`, `postorder`)
     - Node bypassing and memory deletions via `delete` (including BST Case A deletions)
+    - Array element updates, swaps, and index pointer movements (`i`, `j`, `k`, `low`, `high`, `mid`)
+    - Stack push (`stack_push`), pop (`stack_pop`), peek (`stack_peek`), and overflow/underflow warnings
+    - Circular queue enqueue (`queue_enqueue`), dequeue (`queue_dequeue`), circular wrap-around (`queue_wrap`), and full/empty states
     - Pointer movements during traversals (e.g. `curr = curr->next` or tree recursions)
     - Live terminal output statements
   - `snapshotManager.ts`: Stores an immutable history of every execution step. Allows scrubbing backward and forward through previous states without restarting the process.
@@ -103,11 +107,14 @@ The extension is organized into 4 cleanly decoupled subsystems:
 * **Role**: Runs inside an isolated Chromium iframe in VS Code to render the interactive UI.
 * **Key Components**:
   - `index.html`: Clean, semantic HTML layout with containers for controls, linked list/tree canvas, terminal output card, pedagogical explanation, and diagnostic banners.
-  - `styles.css`: Strict dark-mode styling utilizing `#0D1117` palette, rounded pill buttons, infinite dot-grid background, zero scrollbars, terminal card styling, circular tree nodes (`.tree-node-card`), and green pulse visiting animations (`.visiting`).
+  - `styles.css`: Strict dark-mode styling utilizing `#0D1117` palette, rounded pill buttons, infinite dot-grid background, zero scrollbars, terminal card styling, circular tree nodes (`.tree-node-card`), green pulse visiting animations (`.visiting`), array cells with spring lift (`.cell-thrust`), vertical stack tray (`.stack-board`), and circular queue strip with persistent `FRONT` and `REAR` badges (`.ptr-front`, `.ptr-rear`).
   - `app.ts`: Client-side rendering and physics simulation engine:
-    - **Dual-Mode Layout**: Adapts layout based on `snapshot.structureType`:
+    - **Multi-Structure Dynamic Layout**:
       - **Linked List**: D3 force-directed physics simulation (`d3.forceManyBody()`, `d3.forceLink()`, `d3.forceCenter()`) with interactive drag & drop.
       - **Binary Search Tree**: Fixed-coordinate in-order column and depth layout (`node.treeColumn * 64px`, `node.treeDepth * 70px`), with downward cubic bezier branch arrows clipped to circular node perimeters via `getCirclePerimeterIntersection`.
+      - **Linear Array**: Horizontal array board with floating index pointer pills, elevated active slots, and spring draggable cells.
+      - **Stack (LIFO)**: Vertical stack tray with bottom-up indexing, elevated top element, and animated `TOP` pointer badge.
+      - **Circular Queue (FIFO)**: Horizontal circular buffer with persistent `FRONT` and `REAR` badges displaying across method calls and caller frames, showing wrap-around movements and current capacity slots.
     - **Pan & Zoom Camera**: Excalidraw-style canvas navigation with Right-Click Pan, Mouse Wheel Zoom (0.35x to 2.5x), Spacebar drag, and double-click to reset.
     - **Live Terminal Card**: Displays real-time output printed by the running C++ program.
 
@@ -152,13 +159,33 @@ SimIDE dynamically switches from linked list to tree mode when it detects `left`
 5. **Caller Frame Root Discovery**: In recursive functions like `insert(root, val)` or `inorder(root)`, if a base-case stack frame receives `root == nullptr`, `StateExtractor` walks up the call stack to find the original root pointer in `main()` so the full tree topology is never lost during recursive steps.
 6. **Case A Deletion Support**: Accurately tracks leaf and single-child node deletions, unlinking parent branch pointers and updating heap allocation tracking.
 
-### 5. Multi-File Switching & Non-Intrusive Active Editor Tracking
-In multi-file educational workspaces (e.g., alternating between `linked-list.cpp` and `bst-traversals.cpp`):
+### 5. Linear Array Simulation & Index Pointer Tracking
+When analyzing linear array algorithms (traversals, searching, sorting, swaps):
+1. **Declaration Parsing**: Scans for static stack arrays (`int arr[5]`) and dynamic heap arrays (`int* arr = new int[5]`).
+2. **Interactive Cell Board**: Each array cell supports spring-damper drag physics and lifts upward (`.cell-thrust`) when active.
+3. **Dynamic Index Pointers**: Tracks variable indices (`i`, `j`, `k`, `low`, `high`, `mid`, `start`, `end`) across function calls and renders color-coded badge pills floating directly above their target slot index.
+4. **Mutations & Swaps**: Highlights mutated indices (`arr[2] = 99`) and swaps (`temp = arr[0]; arr[0] = arr[1]; arr[1] = temp;`) with distinct pedagogical descriptions.
+
+### 6. Stack (LIFO) Push/Pop/Peek Simulation
+When analyzing stack structures (`Stack s;`):
+1. **Multi-Frame Top Evaluation**: Evaluates `top` / `topIndex` across member methods (`push`, `pop`, `peek`) and caller frames.
+2. **Vertical Tray Layout**: Displays elements stacked bottom-up with the `TOP` badge floating above the uppermost element.
+3. **Boundary Protections**: Automatically detects and alerts on Stack Overflow (`top >= capacity`) and Stack Underflow (`top == -1` on pop).
+
+### 7. Circular Queue (FIFO) Simulation & Continuous Pointer Tracking
+Circular buffers represent one of the most conceptually challenging concepts for beginners due to index wrap-around:
+1. **Multi-Frame Pointer Persistence**: Evaluates `front`, `rear`, `count`, and `capacity` across all stack frames (`this->front`, `q.front`, caller frames). Pointers continue tracking seamlessly when stepped into helper functions or member methods (`enqueue`, `dequeue`, `isFull`, `isEmpty`, `getFront`).
+2. **Wrap-Around Recognition**: Accurately identifies and explains pointer wrapping events:
+   `↺ Circular Queue Wrap-Around! Rear wrapped around: rear = (4 + 1) % 5 = 0. Enqueued value at front index 0!`
+3. **Non-Destructive Pointer Display**: Preserves `FRONT` and `REAR` badges even when `size == 0` or during in-method setup lines, preventing UI badges from disappearing during transitions.
+
+### 8. Multi-File Switching & Non-Intrusive Active Editor Tracking
+In multi-file educational workspaces (e.g., alternating between `linked-list.cpp`, `bst-traversals.cpp`, `array-operations.cpp`, and `circular-queue.cpp`):
 1. **Active Editor Registration**: `CppCompiler.setLastActiveSourceFile` and `LinkedListViewProvider` track the focused C++ file across visible editors and tab focus changes.
 2. **Zero-Redirect Tab Switching**: When users open or click another tab, `LinkedListViewProvider` updates its internal active file pointer without invoking `vscode.window.showTextDocument` to force-redirect the user back to the old file.
 3. **Isolated Binary Compilation**: Each source file compiles to its own isolated target in `.debug-mentor/`, preserving independent build states and executables.
 
-### 6. Zero-Distraction Debugging & Panel Suppression
+### 9. Zero-Distraction Debugging & Panel Suppression
 To maximize visual screen real estate on smaller laptop screens:
 1. **Debug Console Suppression**: `DebugSessionManager` configures `internalConsoleOptions: 'neverOpen'` so VS Code's native Debug Console does not steal focus or pop open on every breakpoint.
 2. **AI Sidebar Suppression**: Suppresses third-party and background AI agent sidebars when starting a debugging session.

@@ -4,6 +4,7 @@ import {
   LinkedListSnapshot,
   ListNode,
   PointerVariable,
+  QueueModel,
   StackModel,
   StructureType,
 } from './linkedListModel';
@@ -22,7 +23,8 @@ export class ExplanationGenerator {
     currentFuncName?: string,
     arrays: ArrayVariable[] = [],
     indexPointers: IndexPointer[] = [],
-    stack?: StackModel
+    stack?: StackModel,
+    queue?: QueueModel
   ): { explanation: string; changeType: LinkedListSnapshot['changeType'] } {
     if (structureType === 'stack') {
       if (!hasHead || !stack) {
@@ -44,7 +46,7 @@ export class ExplanationGenerator {
 
       if (stack.isOverflow) {
         return {
-          explanation: `Stack Overflow! Cannot push: stack '${stack.name}' is full (${stack.elements.length}/${stack.capacity}).`,
+          explanation: `Stack Overflow! Cannot push: stack '${stack.name}' is already at maximum capacity (${stack.capacity}).`,
           changeType: 'step',
         };
       }
@@ -123,6 +125,128 @@ export class ExplanationGenerator {
         changeType: 'step',
       };
     }
+
+    if (structureType === 'queue') {
+      if (!hasHead || !queue) {
+        return {
+          explanation: 'Program paused at main(). Click Next to initialize the circular queue.',
+          changeType: 'init',
+        };
+      }
+
+      if (printedInStep) {
+        const cleanPrint = printedInStep.replace(/\n$/, '');
+        const totalClean = (accumulatedOutput || '').trim();
+        const summaryText = totalClean.length > 0 ? ` Program output: ${totalClean}` : '';
+        return {
+          explanation: `Printed to terminal: "${cleanPrint}".${summaryText}`,
+          changeType: 'print',
+        };
+      }
+
+      if (queue.isOverflow) {
+        return {
+          explanation: `Queue Overflow! Cannot enqueue: circular queue '${queue.name}' is full (${queue.size}/${queue.capacity}).`,
+          changeType: 'step',
+        };
+      }
+
+      if (queue.isUnderflow) {
+        return {
+          explanation: `Queue Underflow! Cannot ${queue.activeMethod || 'dequeue'}: queue '${queue.name}' is empty.`,
+          changeType: 'step',
+        };
+      }
+
+      const prevQueue = previousSnapshot?.queue;
+      const isWrapEvent =
+        queue.justWrapped ||
+        (queue.activeMethod === 'enqueue' && queue.rear === 0 && prevQueue && prevQueue.rear === queue.capacity - 1);
+
+      if (isWrapEvent) {
+        const enqVal = queue.methodParam !== undefined ? queue.methodParam : (queue.slots[0]?.value ?? '');
+        return {
+          explanation: `↺ Circular Queue Wrap-Around! Rear wrapped around: rear = (${queue.capacity - 1} + 1) % ${queue.capacity} = 0. Enqueued value ${enqVal} at front index 0!`,
+          changeType: 'queue_wrap',
+        };
+      }
+
+      if (queue.activeMethod === 'enqueue') {
+        const enqVal = queue.methodParam !== undefined ? queue.methodParam : (queue.slots[queue.rear]?.value ?? '');
+        return {
+          explanation: `Enqueued value ${enqVal} at rear (index ${queue.rear}). Size: ${queue.size}/${queue.capacity}.`,
+          changeType: 'queue_enqueue',
+        };
+      }
+
+      if (queue.activeMethod === 'dequeue') {
+        const deqVal =
+          queue.methodReturnValue !== undefined
+            ? queue.methodReturnValue
+            : (prevQueue && prevQueue.front >= 0 ? prevQueue.slots[prevQueue.front]?.value ?? '' : '');
+        const frontDesc = queue.size > 0 ? `Front pointer moved to index ${queue.front}.` : 'The queue is now empty (front: -1, rear: -1).';
+        return {
+          explanation: `Dequeued value ${deqVal} from front. ${frontDesc} Size: ${queue.size}/${queue.capacity}.`,
+          changeType: 'queue_dequeue',
+        };
+      }
+
+      if (queue.activeMethod === 'front') {
+        const frontVal =
+          queue.methodReturnValue !== undefined
+            ? queue.methodReturnValue
+            : (queue.front >= 0 ? queue.slots[queue.front]?.value ?? 'empty' : 'empty');
+        return {
+          explanation: `Inspected front of circular queue: value is ${frontVal} at index ${queue.front}. Queue remains unchanged.`,
+          changeType: 'queue_front',
+        };
+      }
+
+      if (queue.activeMethod === 'rear') {
+        const rearVal =
+          queue.methodReturnValue !== undefined
+            ? queue.methodReturnValue
+            : (queue.rear >= 0 ? queue.slots[queue.rear]?.value ?? 'empty' : 'empty');
+        return {
+          explanation: `Inspected rear of circular queue: value is ${rearVal} at index ${queue.rear}. Queue remains unchanged.`,
+          changeType: 'queue_rear',
+        };
+      }
+
+      if (!prevQueue || previousSnapshot?.structureType !== 'queue') {
+        if (queue.size === 0) {
+          return {
+            explanation: `Circular queue '${queue.name}' initialized to empty (front: -1, rear: -1, capacity: ${queue.capacity}).`,
+            changeType: 'queue_initialized',
+          };
+        }
+        return {
+          explanation: `Initialized circular queue '${queue.name}' of capacity ${queue.capacity} (size: ${queue.size}).`,
+          changeType: 'queue_initialized',
+        };
+      }
+
+      if (queue.size > prevQueue.size) {
+        const val = queue.slots[queue.rear]?.value ?? '';
+        return {
+          explanation: `Enqueued value ${val} at rear (index ${queue.rear}). Size: ${queue.size}/${queue.capacity}.`,
+          changeType: 'queue_enqueue',
+        };
+      }
+
+      if (queue.size < prevQueue.size) {
+        return {
+          explanation: `Dequeued element from front. Front is now at index ${queue.front}. Size: ${queue.size}/${queue.capacity}.`,
+          changeType: 'queue_dequeue',
+        };
+      }
+
+      return {
+        explanation: `Circular queue '${queue.name}' has ${queue.size} element(s) (front: ${queue.front}, rear: ${queue.rear}).`,
+        changeType: 'step',
+      };
+    }
+
     if (structureType === 'array') {
       if (!hasHead || arrays.length === 0) {
         return {
