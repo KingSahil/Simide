@@ -96,16 +96,23 @@ c:\Projects\vscode-extension\
 ### [`src/debug/stateExtractor.ts`](file:///c:/Projects/vscode-extension/src/debug/stateExtractor.ts)
 * **What it does**: The central inspection engine. Extracts variables, resolves structs, tracks multi-function call stacks, emulates terminal output, and manages memory lifetimes.
 * **Extraction Pipeline**:
-  1. **Multi-Function Stack Frame Inspection**: Identifies user-defined functions (`printList`, `reverseList`, `deleteNode`, `insert`, `inorder`, OOP methods) versus CRT internal routines.
-  2. **Struct & Field Discovery**: Automatically discovers data fields (`data`, `val`) and pointer fields (`next` for lists, `left` and `right` for trees) across struct definitions.
-  3. **Structure Type Detection**: Assigns `structureType: 'tree'` if `left` and `right` pointer fields exist; otherwise defaults to `'linked_list'`.
-  4. **Uninitialized Stack Pointer Protection**: Validates `rawLine > declLine` and enforces `hasSteppedPastFirstPointerDecl` so uninitialized stack garbage is never parsed as real nodes on Step 1.
-  5. **Pointer Translation**: Reads memory addresses, checks for null (`0x0`, `nullptr`), and maps valid addresses to stable node IDs (`node_1`, `node_2`).
-  6. **Tree Topology & In-Order Column Calculation**: For trees, executes BFS `traverseTree(rootAddr)` to harvest all reachable nodes, measures `treeDepth`, and applies in-order traversal to calculate deterministic `treeColumn` positions.
-  7. **Recursive Stack Frame Root Resolution**: In recursive functions, looks up caller frames if the current frame receives a by-value `nullptr` parameter, preventing the tree root from vanishing.
-  8. **GDB Error String Filtering**: Filters out internal GDB error responses (such as `-var-create: unable to create variable object`) from being parsed as integer values.
-  9. **Memory Deallocation Tracking**: Detects heap deallocations via `delete` statements, recording freed addresses in `deletedAddresses` (supporting both linked-list node deletions and BST Case A deletions).
-  10. **Terminal Output Emulation**: Evaluates `cout` and `printf` statements in real time, appending output to `accumulatedTerminalOutput`.
+  1. **Multi-Function Stack Frame Inspection**: Identifies user-defined functions (`printList`, `reverseList`, `push`, `pop`, `enqueue`, `dequeue`, `deleteNode`, `insert`, `inorder`, OOP methods) versus CRT internal routines.
+  2. **Struct & Field Discovery**: Automatically discovers data fields (`data`, `val`), pointer fields (`next` for lists, `left` and `right` for trees), and member elements for stack/queue buffers (`arr`, `items`, `data`).
+  3. **Structure Type Detection**: Detects structure type dynamically:
+     - `'tree'`: Struct contains `left` and `right` pointer fields.
+     - `'stack'`: Name/type indicates stack (has `top`, `push`, `pop`).
+     - `'queue'`: Name/type indicates queue (has `front`, `rear`, `enqueue`, `dequeue`, `count`).
+     - `'array'`: Direct array declaration (`int arr[5]`, `int* arr = new int[5]`).
+     - `'linked_list'`: Pointer chain with `next` pointers.
+  4. **Multi-Frame Evaluation for Stack & Queue**: In `extractStackState` and `extractQueueState`, walks up the call stack frames (`frameIdsToTry`), ensuring member variables (`this->front`, `this->top`) or object members (`q.front`, `s.top`) resolve accurately whether stopped in `main()` or stepped inside helper methods.
+  5. **Continuous Queue Pointer Preservation**: Does not wipe `front` or `rear` to `-1` when `size == 0`, preserving their active slot positions throughout execution.
+  6. **Uninitialized Stack Pointer Protection**: Validates `rawLine > declLine` and enforces `hasSteppedPastFirstPointerDecl` so uninitialized stack garbage is never parsed as real nodes on Step 1.
+  7. **Pointer Translation**: Reads memory addresses, checks for null (`0x0`, `nullptr`), and maps valid addresses to stable node IDs (`node_1`, `node_2`).
+  8. **Tree Topology & In-Order Column Calculation**: For trees, executes BFS `traverseTree(rootAddr)` to harvest all reachable nodes, measures `treeDepth`, and applies in-order traversal to calculate deterministic `treeColumn` positions.
+  9. **Recursive Stack Frame Root Resolution**: In recursive functions, looks up caller frames if the current frame receives a by-value `nullptr` parameter, preventing the tree root from vanishing.
+  10. **GDB Error String Filtering**: Filters out internal GDB error responses (such as `-var-create: unable to create variable object`) from being parsed as integer values.
+  11. **Memory Deallocation Tracking**: Detects heap deallocations via `delete` statements, recording freed addresses in `deletedAddresses` (supporting both linked-list node deletions and BST Case A deletions).
+  12. **Terminal Output Emulation**: Evaluates `cout` and `printf` statements in real time, appending output to `accumulatedTerminalOutput`.
 
 ---
 
@@ -114,7 +121,7 @@ c:\Projects\vscode-extension\
 ### [`src/visualization/linkedListModel.ts`](file:///c:/Projects/vscode-extension/src/visualization/linkedListModel.ts)
 * **What it does**: Defines pure data models used across the extension and webview.
 * **Core Interfaces**:
-  - `StructureType`: `'linked_list' | 'tree'`.
+  - `StructureType`: `'linked_list' | 'tree' | 'array' | 'stack' | 'queue'`.
   - `ChangeType`:
     ```typescript
     export type ChangeType =
@@ -131,7 +138,49 @@ c:\Projects\vscode-extension\
       | 'tree_root_assigned'
       | 'tree_node_created'
       | 'tree_child_linked'
-      | 'tree_traversal_visit';
+      | 'tree_traversal_visit'
+      | 'array_initialized'
+      | 'array_element_updated'
+      | 'array_element_swapped'
+      | 'array_pointer_moved'
+      | 'stack_push'
+      | 'stack_pop'
+      | 'stack_peek'
+      | 'stack_initialized'
+      | 'queue_enqueue'
+      | 'queue_dequeue'
+      | 'queue_front'
+      | 'queue_rear'
+      | 'queue_wrap'
+      | 'queue_initialized';
+    ```
+  - `StackModel` & `QueueModel`:
+    ```typescript
+    export interface StackModel {
+      name: string;
+      elements: StackElement[];
+      topIndex: number;
+      capacity: number;
+      activeMethod?: 'push' | 'pop' | 'peek' | 'init' | null;
+      methodParam?: number | string;
+      isOverflow?: boolean;
+      isUnderflow?: boolean;
+    }
+
+    export interface QueueModel {
+      name: string;
+      slots: QueueSlot[];
+      front: number;
+      rear: number;
+      capacity: number;
+      size: number;
+      isCircular: boolean;
+      justWrapped?: boolean;
+      activeMethod?: 'enqueue' | 'dequeue' | 'front' | 'rear' | 'init' | null;
+      methodParam?: number | string;
+      isOverflow?: boolean;
+      isUnderflow?: boolean;
+    }
     ```
   - `ListNode`:
     ```typescript
@@ -159,6 +208,10 @@ c:\Projects\vscode-extension\
       structureType?: StructureType;
       nodes: ListNode[];
       pointers?: PointerVariable[];
+      arrays?: ArrayVariable[];
+      indexPointers?: IndexPointer[];
+      stack?: StackModel;
+      queue?: QueueModel;
       explanation: string;
       changeType: ChangeType;
       terminalOutput?: string;

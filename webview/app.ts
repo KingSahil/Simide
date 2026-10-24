@@ -643,8 +643,10 @@ function drawBezierArrow(
   let marker = 'url(#arrowHead)';
   if (isMuted) {
     marker = 'url(#arrowHeadMuted)';
-  } else if (color === '#36C779') {
+  } else if (color === '#36C779' || color.toLowerCase() === '#238636') {
     marker = 'url(#arrowHeadGreen)';
+  } else if (color === '#1F6FEB' || color.toLowerCase() === '#1f6feb') {
+    marker = 'url(#arrowHeadBlue)';
   }
   pathEl.setAttribute('marker-end', marker);
   if (arrowsGroup) {
@@ -1006,6 +1008,21 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Lin
 
       const isElevated = elem.isActive || elem.isModified || matchingPointers.length > 0;
 
+      // Check previous elevation to trigger a single bounce on highlight or de-highlight transition
+      let wasElevated = false;
+      if (previousSnapshot) {
+        const prevArr = previousSnapshot.arrays?.find((a) => a.name === arrVar.name);
+        const prevElem = prevArr?.elements.find((e) => e.index === elem.index);
+        const prevMatchingPointers = (previousSnapshot.indexPointers || []).filter(
+          (ptr) =>
+            ptr.targetIndex === elem.index &&
+            (!ptr.targetArrayName || ptr.targetArrayName === arrVar.name)
+        );
+        wasElevated = Boolean(
+          prevElem?.isActive || prevElem?.isModified || prevMatchingPointers.length > 0
+        );
+      }
+
       if (matchingPointers.length > 0) {
         col.classList.add('has-active-pointer');
         const ptrContainer = document.createElement('div');
@@ -1036,6 +1053,15 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Lin
       if (isElevated) {
         cell.classList.add('cell-thrust');
         col.classList.add('has-thrust');
+      }
+
+      // One-time bounce animation only at the exact moment of highlight or de-highlight
+      if (previousSnapshot) {
+        if (!wasElevated && isElevated) {
+          cell.classList.add('cell-bounce-in');
+        } else if (wasElevated && !isElevated) {
+          cell.classList.add('cell-bounce-out');
+        }
       }
 
       // Bubble sort arc hop swap animations
@@ -1094,7 +1120,10 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Lin
 
   nodesLayer.appendChild(container);
 }// Render Stack in Debugger Canvas (deterministic horizontal array layout with floating TOP badge)
-function renderDebuggerStackDiagram(snapshot: LinkedListSnapshot) {
+function renderDebuggerStackDiagram(
+  snapshot: LinkedListSnapshot,
+  previousSnapshot?: LinkedListSnapshot | null
+) {
   if (simulation) {
     simulation.stop();
     simulation.nodes([]);
@@ -1142,6 +1171,16 @@ function renderDebuggerStackDiagram(snapshot: LinkedListSnapshot) {
     const isOccupied = elem !== undefined && elem.value !== null && elem.value !== undefined;
     const isElevated = isOccupied && (isTop || elem.isHighlighted || elem.isPushing);
 
+    // Check previous stack state to trigger a one-shot bounce on highlight / de-highlight
+    let wasElevated = false;
+    if (previousSnapshot?.stack) {
+      const prevStack = previousSnapshot.stack;
+      const prevElem = prevStack.elements.find((e) => e.index === i);
+      const prevIsTop = i === prevStack.topIndex && prevStack.topIndex >= 0;
+      const prevOccupied = prevElem !== undefined && prevElem.value !== null && prevElem.value !== undefined;
+      wasElevated = prevOccupied && (prevIsTop || prevElem.isHighlighted || prevElem.isPushing);
+    }
+
     // Index Pointer Badge pointing to TOP cell
     if (isTop) {
       col.classList.add('has-active-pointer');
@@ -1168,6 +1207,15 @@ function renderDebuggerStackDiagram(snapshot: LinkedListSnapshot) {
     if (isElevated) {
       cell.classList.add('cell-thrust');
       col.classList.add('has-thrust');
+    }
+
+    // One-time bounce animation only at the exact moment of highlight or de-highlight
+    if (previousSnapshot) {
+      if (!wasElevated && isElevated) {
+        cell.classList.add('cell-bounce-in');
+      } else if (wasElevated && !isElevated) {
+        cell.classList.add('cell-bounce-out');
+      }
     }
 
     // Interactive spring draggable
@@ -1197,7 +1245,10 @@ function renderDebuggerStackDiagram(snapshot: LinkedListSnapshot) {
 }
 
 // Render Queue in Debugger Canvas (deterministic horizontal array layout with floating FRONT and REAR badges)
-function renderDebuggerQueueDiagram(snapshot: LinkedListSnapshot) {
+function renderDebuggerQueueDiagram(
+  snapshot: LinkedListSnapshot,
+  previousSnapshot?: LinkedListSnapshot | null
+) {
   if (simulation) {
     simulation.stop();
     simulation.nodes([]);
@@ -1248,6 +1299,18 @@ function renderDebuggerQueueDiagram(snapshot: LinkedListSnapshot) {
     const isOccupied = slot.hasValue && slot.value !== null && slot.value !== undefined;
     const isElevated = isOccupied && (slot.isHighlighted || slot.isEnqueuing || hasPointers);
 
+    // Check previous queue state to trigger a one-shot bounce on highlight / de-highlight
+    let wasElevated = false;
+    if (previousSnapshot?.queue) {
+      const prevQ = previousSnapshot.queue;
+      const prevSlot = prevQ.slots[i] || { index: i, value: null, hasValue: false };
+      const prevIsFront = prevQ.front >= 0 && i === prevQ.front;
+      const prevIsRear = prevQ.rear >= 0 && i === prevQ.rear;
+      const prevHasPointers = prevIsFront || prevIsRear;
+      const prevOccupied = prevSlot.hasValue && prevSlot.value !== null && prevSlot.value !== undefined;
+      wasElevated = prevOccupied && (prevSlot.isHighlighted || prevSlot.isEnqueuing || prevHasPointers);
+    }
+
     // Index Pointer Badges pointing to this cell
     if (hasPointers) {
       col.classList.add('has-active-pointer');
@@ -1282,6 +1345,15 @@ function renderDebuggerQueueDiagram(snapshot: LinkedListSnapshot) {
     if (isElevated) {
       cell.classList.add('cell-thrust');
       col.classList.add('has-thrust');
+    }
+
+    // One-time bounce animation only at the exact moment of highlight or de-highlight
+    if (previousSnapshot) {
+      if (!wasElevated && isElevated) {
+        cell.classList.add('cell-bounce-in');
+      } else if (wasElevated && !isElevated) {
+        cell.classList.add('cell-bounce-out');
+      }
     }
 
     // Interactive spring draggable: pulls and snaps back
@@ -1347,13 +1419,13 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
 
   // Handle Stack Rendering
   if (snapshot.structureType === 'stack') {
-    renderDebuggerStackDiagram(snapshot);
+    renderDebuggerStackDiagram(snapshot, previousSnapshot);
     return;
   }
 
   // Handle Queue Rendering
   if (snapshot.structureType === 'queue') {
-    renderDebuggerQueueDiagram(snapshot);
+    renderDebuggerQueueDiagram(snapshot, previousSnapshot);
     return;
   }
 

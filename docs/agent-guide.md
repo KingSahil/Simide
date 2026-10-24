@@ -73,21 +73,28 @@ In multi-file workflows, a user may switch tabs to inspect another file (e.g., f
 When a debug session starts, default VS Code configurations may pop open the Debug Console or bottom terminal panel, and third-party AI extensions may open sidebars that crush the user's workspace layout.
 - **Rule**: Always pass `internalConsoleOptions: 'neverOpen'` and `suppressDebugView: true` in the launch configuration, and invoke `vscode.commands.executeCommand('workbench.action.closePanel')` upon visualization to ensure an unobstructed canvas.
 
+### Gotcha 10: Multi-Frame Member Pointer Resolution (Stack & Queue Traversal)
+When students step into member methods or helper functions (e.g. `q.enqueue(10)`, `s.pop()`, `isFull()`, `isEmpty()`), the current stack frame changes from `main()` to the function frame.
+- Inside member methods, member variables evaluate as `this->front`, `this->rear`, `this->top`, whereas in caller frames they evaluate as `q.front` or `s.top`.
+- **Rule**: Never evaluate pointer/state expressions only in the topmost frame! [`StateExtractor.extractQueueState`](file:///c:/Projects/vscode-extension/src/debug/stateExtractor.ts) and [`StateExtractor.extractStackState`](file:///c:/Projects/vscode-extension/src/debug/stateExtractor.ts) iterate through `frameIdsToTry` across all user stack frames, guaranteeing that `FRONT`, `REAR`, and `TOP` pointers resolve and display regardless of which method or helper is actively executing.
+- **Rule**: Never wipe `front = -1` and `rear = -1` when `size == 0`. Valid pointer indices must remain intact during intermediate setup lines.
+
 ---
 
 ## 4. Test Suite Map
 
-When running `npm test`, the following 9 validations are executed:
+When running `npm test`, the following validations are executed:
 
 1. **Compiler Detection**: Validates `g++` / `clang++` in PATH.
 2. **Debugger Discovery**: Validates `gdb.exe` in PATH or MinGW.
-3. **Pedagogical Explanation Generator**: Validates all `changeType` cases (creation, linking, deletion, traversal, bypass, terminal print, in-place value update, BST root/child/traversals).
+3. **Pedagogical Explanation Generator**: Validates all `changeType` cases (creation, linking, deletion, traversal, bypass, terminal print, in-place value update, BST root/child/traversals, array swaps/updates/pointer moves, stack push/pop/peek/init, circular queue enqueue/dequeue/wrap/init).
 4. **SnapshotManager History**: Validates non-destructive time-travel scrubbing.
-5. **StateExtractor Pointer Parsing**: Validates handling of C++ references, type casts, nulls, BST struct detection, and user-defined functions.
-6. **Compilation of Real-World Examples**: Compiles `leetcode-206-reverse.cpp`, `gfg-push-delete.cpp`, `oop-linked-list.cpp`, and `bst-traversals.cpp`.
+5. **StateExtractor Pointer Parsing & Discovery**: Validates handling of C++ references, type casts, nulls, array declarations, stack/queue structs, BST struct detection, and user-defined functions.
+6. **Compilation of Real-World Examples**: Compiles `leetcode-206-reverse.cpp`, `gfg-push-delete.cpp`, `oop-linked-list.cpp`, `bst-traversals.cpp`, `array-operations.cpp`, `stack-operations.cpp`, and `circular-queue.cpp`.
 7. **Headless GDB Stepping**: Real line-by-line GDB stepping and state extraction on `linked-list.cpp`.
 8. **Headless GDB LeetCode Reversal**: Real GDB execution of LeetCode 206 `reverseList` validating in-place reversed chain (`3 -> 2 -> 1`).
 9. **Headless GDB BST Traversals**: Real GDB execution of `bst-traversals.cpp` verifying BFS node discovery, preorder/inorder/postorder stepping, and Case A deletions.
+10. **Headless GDB Array Operations**: Real GDB execution of `array-operations.cpp` verifying element mutation (`arr[2]=99`), element swapping (`arr[0]=20, arr[1]=10`), and stdout traversal printing.
 
 ---
 
