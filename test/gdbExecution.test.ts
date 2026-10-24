@@ -254,11 +254,91 @@ async function testArrayOperationsGdb() {
   }
 }
 
+async function testStackOperationsGdb() {
+  console.log('=== Running Real GDB Stepping on Stack Operations (LIFO, push, pop, peek) ===\n');
+
+  const debugMentorDir = getWindowsShortPath(path.resolve(process.cwd(), 'examples/.debug-mentor'));
+  const exeFile = 'stack-operations.exe';
+  const exePath = path.join(debugMentorDir, exeFile);
+  assert.ok(fs.existsSync(exePath), 'Compiled Stack executable must exist');
+
+  const debuggerInfo = await DebugSessionManager.findDebuggerPath();
+  assert.ok(debuggerInfo, 'GDB must be available');
+
+  const gdbCmds = [
+    'break main',
+    'run',
+    // Stack s;
+    'next',
+    'print s.top',
+    'print s.capacity',
+    // s.push(10);
+    'next',
+    'print s.top',
+    'print s.arr[0]',
+    // s.push(20);
+    'next',
+    'print s.top',
+    'print s.arr[1]',
+    // s.push(30);
+    'next',
+    'print s.top',
+    'print s.arr[2]',
+    // int topVal = s.peek();
+    'next',
+    'print topVal',
+    // int poppedVal = s.pop();
+    'next',
+    'print poppedVal',
+    'print s.top',
+    // s.push(40);
+    'next',
+    'print s.top',
+    'print s.arr[2]',
+    'quit',
+  ];
+
+  const scriptFile = 'test_stack_gdb.txt';
+  const scriptPath = path.join(debugMentorDir, scriptFile);
+  fs.writeFileSync(scriptPath, gdbCmds.join('\n'), 'utf8');
+
+  try {
+    const { stdout } = await execFileAsync(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
+    console.log('[GDB Stack Operations Output Sample]');
+    const lines = stdout.split('\n').filter((l) => l.includes('$') || l.includes('Breakpoint'));
+    lines.forEach((l) => console.log('  ' + l.trim()));
+
+    // Verify key stack states
+    assert.ok(stdout.includes('= -1'), 'Initial top should be -1');
+    assert.ok(stdout.includes('= 6'), 'Capacity should be 6');
+    assert.ok(stdout.includes('= 10'), 'Pushed value should be 10');
+    assert.ok(stdout.includes('= 20'), 'Pushed value should be 20');
+    assert.ok(stdout.includes('= 30'), 'Pushed value should be 30');
+    assert.ok(stdout.includes('= 40'), 'Pushed value should be 40');
+
+    // Run executable directly to verify stdout prints
+    const { stdout: progOutput } = await execFileAsync(path.resolve(debugMentorDir, exeFile), [], { cwd: debugMentorDir });
+    assert.ok(progOutput.includes('Pushed: 10'), 'Must print Pushed: 10');
+    assert.ok(progOutput.includes('Popped: 30'), 'Must print Popped: 30');
+    assert.ok(progOutput.includes('Final stack top value: 40'), 'Must print Final stack top value: 40');
+
+    console.log('\n✓ Verified real GDB runtime stops and stack LIFO top transitions');
+    console.log('✓ Verified stack push (10, 20, 30), pop (30), and top reassignment (40)');
+    console.log('✓ Verified stdout stack lifecycle output');
+    console.log('=== Real GDB Stack Operations Test PASSED ===\n');
+  } finally {
+    if (fs.existsSync(scriptPath)) {
+      fs.unlinkSync(scriptPath);
+    }
+  }
+}
+
 async function runAllGdbTests() {
   await testGdbExecution();
   await testLeetcodeReverseGdb();
   await testBstTraversalsGdb();
   await testArrayOperationsGdb();
+  await testStackOperationsGdb();
 }
 
 runAllGdbTests().catch((err) => {

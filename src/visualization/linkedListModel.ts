@@ -1,4 +1,4 @@
-export type StructureType = 'linked_list' | 'tree' | 'array';
+export type StructureType = 'linked_list' | 'tree' | 'array' | 'stack';
 
 export interface ArrayElement {
   index: number;
@@ -25,6 +25,28 @@ export interface IndexPointer {
   targetIndex: number;
   targetArrayName: string;
   value?: number | string;
+}
+
+export interface StackElement {
+  id: string;
+  value: number | string;
+  index: number;
+  isTop?: boolean;
+  isHighlighted?: boolean;
+  isPopping?: boolean;
+  isPushing?: boolean;
+}
+
+export interface StackModel {
+  name: string;
+  elements: StackElement[];
+  topIndex: number; // -1 when empty
+  capacity: number;
+  activeMethod?: 'push' | 'pop' | 'peek' | 'init' | null;
+  methodParam?: number | string;
+  methodReturnValue?: number | string;
+  isOverflow?: boolean;
+  isUnderflow?: boolean;
 }
 
 export interface ListNode {
@@ -82,19 +104,24 @@ export type ChangeType =
   | 'array_element_updated'
   | 'array_element_swapped'
   | 'array_pointer_moved'
+  | 'stack_push'
+  | 'stack_pop'
+  | 'stack_peek'
+  | 'stack_initialized'
   | 'final';
 
 export interface LinkedListSnapshot {
   stepNumber: number;
   structureType?: StructureType;
   source?: SourceLocation;
-  hasHead: boolean; // Also represents hasRoot when structureType === 'tree', or hasArray when structureType === 'array'
+  hasHead: boolean; // Also represents hasRoot when structureType === 'tree', hasArray when array, hasStack when stack
   headId: string | null; // Also represents rootId when structureType === 'tree'
   activeVisitingNodeId?: string | null;
   nodes: ListNode[];
   pointers?: PointerVariable[];
   arrays?: ArrayVariable[];
   indexPointers?: IndexPointer[];
+  stack?: StackModel;
   explanation: string;
   changeType: ChangeType;
   terminalOutput?: string;

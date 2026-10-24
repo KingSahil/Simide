@@ -9,6 +9,8 @@ import {
   ListNode,
   PointerVariable,
   SourceLocation,
+  StackElement,
+  StackModel,
   StructureType,
 } from '../visualization/linkedListModel';
 import { ExplanationGenerator } from '../visualization/explanationGenerator';
@@ -24,6 +26,9 @@ export class StateExtractor {
   private static cachedLeftField: string | null = null;
   private static cachedRightField: string | null = null;
   private static cachedStructureType: StructureType | null = null;
+  private static cachedStackTopExpr: string | null = null;
+  private static cachedStackCapExpr: string | null = null;
+  private static cachedStackArrExpr: string | null = null;
   private static accumulatedTerminalOutput: string = '';
   private static hasInitializedList: boolean = false;
 
@@ -50,6 +55,9 @@ export class StateExtractor {
     this.cachedLeftField = null;
     this.cachedRightField = null;
     this.cachedStructureType = null;
+    this.cachedStackTopExpr = null;
+    this.cachedStackCapExpr = null;
+    this.cachedStackArrExpr = null;
     this.accumulatedTerminalOutput = '';
     this.hasInitializedList = false;
   }
@@ -394,11 +402,22 @@ export class StateExtractor {
         }
       }
 
-      // If no linked list or tree struct was found, check if this is an array file
+      // If no linked list or tree struct was found, check if this is a stack or array file
       if (!hasNodePointer) {
-        const arrayDecls = this.discoverArrayDeclarations(resolvedPath);
-        if (arrayDecls.length > 0) {
-          structureType = 'array';
+        const content = fs.readFileSync(resolvedPath, 'utf8');
+        const isStack =
+          content.includes('<stack>') ||
+          /(?:class|struct)\s+(?:Array)?Stack/i.test(content) ||
+          /\bstack\s*<\s*[^>]+\s*>/i.test(content) ||
+          (/\btop\b/i.test(content) && (/\bpush\b/i.test(content) || /\bpop\b/i.test(content)));
+
+        if (isStack) {
+          structureType = 'stack';
+        } else {
+          const arrayDecls = this.discoverArrayDeclarations(resolvedPath);
+          if (arrayDecls.length > 0) {
+            structureType = 'array';
+          }
         }
       }
     } catch {
@@ -767,6 +786,25 @@ export class StateExtractor {
       return n;
     }
     return valStr.trim();
+  }
+
+  public static isValidEvalNumber(res: string | null): boolean {
+    if (!res) return false;
+    const lower = res.toLowerCase();
+    if (
+      lower.includes('error') ||
+      lower.includes('no symbol') ||
+      lower.includes('cannot access') ||
+      lower.includes('unable to create') ||
+      lower.includes('-var-create') ||
+      lower.includes('has no member') ||
+      lower.includes('not defined') ||
+      lower.includes('optimized out') ||
+      lower.includes('incomplete')
+    ) {
+      return false;
+    }
+    return /-?\d+/.test(res);
   }
 
   private static async resolveDataField(
@@ -1432,6 +1470,184 @@ export class StateExtractor {
     return { arrays: discoveredArrays, indexPointers };
   }
 
+  public static async extractStackState(
+    evalExpr: (expr: string, targetFrameId?: number) => Promise<string | null>,
+    localVars: Record<string, any>,
+    executedLineText: string,
+    previousSnapshot?: LinkedListSnapshot,
+    frames?: any[]
+  ): Promise<StackModel | undefined> {
+    let stackName = 'stack';
+    let topVal = -1;
+    let capacity = 6;
+    let elements: StackElement[] = [];
+
+    for (const k of Object.keys(localVars)) {
+      if (k.toLowerCase().includes('stack') || k === 's' || k === 'st') {
+        stackName = k;
+        break;
+      }
+    }
+
+    const frameIdsToTry = frames && frames.length > 0 ? frames.map((f) => f.id) : [undefined];
+
+    const evaluateAcrossFrames = async (exprs: string[]): Promise<string | null> => {
+      for (const fId of frameIdsToTry) {
+        for (const expr of exprs) {
+          const res = await evalExpr(expr, fId);
+          if (res && this.isValidEvalNumber(res)) {
+            return res;
+          }
+        }
+      }
+      return null;
+    };
+
+    const topCandidates = [
+      'this->top',
+      'this->topIndex',
+      'this->m_top',
+      `${stackName}.top`,
+      `${stackName}.topIndex`,
+      's.top',
+      'stack.top',
+      'top',
+      'topIndex',
+    ];
+    if (this.cachedStackTopExpr) {
+      topCandidates.unshift(this.cachedStackTopExpr);
+    }
+
+    const topRes = await evaluateAcrossFrames(topCandidates);
+    if (topRes) {
+      const parsed = parseInt(topRes.match(/-?\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
+        topVal = parsed;
+      }
+    }
+
+    const capCandidates = [
+      'this->capacity',
+      'this->MAX',
+      'this->CAPACITY',
+      `${stackName}.capacity`,
+      `${stackName}.MAX`,
+      `${stackName}.size`,
+      'MAX',
+      'CAPACITY',
+      'capacity',
+    ];
+    if (this.cachedStackCapExpr) {
+      capCandidates.unshift(this.cachedStackCapExpr);
+    }
+    const capRes = await evaluateAcrossFrames(capCandidates);
+    if (capRes) {
+      const parsed = parseInt(capRes.match(/\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= 2 && parsed <= 64) {
+        capacity = parsed;
+      }
+    }
+
+    let activeMethod: 'push' | 'pop' | 'peek' | null = null;
+    let methodParam: number | string | undefined = undefined;
+    const cleanLine = executedLineText.toLowerCase();
+    if (cleanLine.includes('push(')) {
+      activeMethod = 'push';
+      const m = executedLineText.match(/push\s*\(\s*([^)]+)\s*\)/i);
+      if (m) {
+        const valRes = await evalExpr(m[1].trim());
+        methodParam = valRes && this.isValidEvalNumber(valRes) ? this.parseData(valRes) : m[1].trim();
+      }
+    } else if (cleanLine.includes('pop(')) {
+      activeMethod = 'pop';
+    } else if (cleanLine.includes('peek(') || cleanLine.includes('.top(')) {
+      activeMethod = 'peek';
+    }
+
+    if (topVal >= 0) {
+      let foundArr = false;
+      let targetArrName: string | null = null;
+      let targetFrameId: number | undefined = undefined;
+
+      const arrNames = [
+        'this->arr',
+        'this->items',
+        'this->data',
+        'this->elements',
+        `${stackName}.arr`,
+        `${stackName}.items`,
+        `${stackName}.data`,
+        `${stackName}.elements`,
+        's.arr',
+        'stack.arr',
+        'arr',
+        'items',
+        'data',
+        'elements',
+      ];
+      if (this.cachedStackArrExpr) {
+        arrNames.unshift(this.cachedStackArrExpr);
+      }
+
+      for (const fId of frameIdsToTry) {
+        for (const aName of arrNames) {
+          const testElem = await evalExpr(`${aName}[0]`, fId);
+          if (this.isValidEvalNumber(testElem)) {
+            targetArrName = aName;
+            targetFrameId = fId;
+            this.cachedStackArrExpr = aName;
+            break;
+          }
+        }
+        if (targetArrName) break;
+      }
+
+      if (targetArrName) {
+        foundArr = true;
+        for (let i = 0; i <= topVal; i++) {
+          const elRes = await evalExpr(`${targetArrName}[${i}]`, targetFrameId);
+          const val = this.isValidEvalNumber(elRes) ? this.parseData(elRes) : 0;
+          elements.push({
+            id: `stack_elem_${i}`,
+            value: val,
+            index: i,
+            isTop: i === topVal,
+            isHighlighted: i === topVal,
+          });
+        }
+      }
+
+      if (!foundArr && previousSnapshot?.stack) {
+        elements = previousSnapshot.stack.elements.map((e) => ({ ...e, isHighlighted: false, isTop: false }));
+        if (activeMethod === 'push' && methodParam !== undefined && topVal >= elements.length) {
+          elements.push({
+            id: `stack_elem_${topVal}`,
+            value: methodParam,
+            index: topVal,
+            isTop: true,
+            isHighlighted: true,
+          });
+        } else if (activeMethod === 'pop') {
+          elements = elements.slice(0, Math.max(0, topVal + 1));
+          if (elements.length > 0) {
+            elements[elements.length - 1].isTop = true;
+          }
+        }
+      }
+    }
+
+    return {
+      name: stackName,
+      elements,
+      topIndex: topVal,
+      capacity: Math.max(capacity, elements.length, 6),
+      activeMethod,
+      methodParam,
+      isOverflow: topVal >= capacity,
+      isUnderflow: topVal === -1 && activeMethod === 'pop',
+    };
+  }
+
   public static async extractState(
     session: vscode.DebugSession,
     threadId: number,
@@ -1461,10 +1677,18 @@ export class StateExtractor {
       // If execution has completely exited user code (e.g. into CRT exit/shutdown), conclude session
       if (!userFrame) {
         if (previousSnapshot) {
+          let finExp = 'Program execution completed. The linked list is complete.';
+          if (previousSnapshot.structureType === 'tree') {
+            finExp = 'Binary tree execution complete. Program execution finished.';
+          } else if (previousSnapshot.structureType === 'array') {
+            finExp = 'Array execution complete. Program execution finished.';
+          } else if (previousSnapshot.structureType === 'stack') {
+            finExp = 'Stack execution complete. Program execution finished.';
+          }
           return {
             ...previousSnapshot,
             stepNumber,
-            explanation: 'Program execution completed. The linked list is complete.',
+            explanation: finExp,
             changeType: 'final',
             terminalOutput: this.accumulatedTerminalOutput || previousSnapshot.terminalOutput,
             isHistorical: false,
@@ -1692,6 +1916,10 @@ export class StateExtractor {
         if (arrays.length > 0) {
           this.hasInitializedList = true;
         }
+      } else if (structureType === 'stack') {
+        // Stack models are linear array/buffer structures.
+        // We do not chase linked list / tree pointers.
+        this.hasInitializedList = true;
       } else {
         // 3. Inspect 'head' / 'root' across current frame and caller frames
         let headAddr: string | null = null;
@@ -2203,7 +2431,13 @@ export class StateExtractor {
         this.accumulatedTerminalOutput += printedInStep;
       }
 
-      // 7. Generate Pedagogical Explanation
+      // 7. Extract Stack State if applicable
+      let stackData: StackModel | undefined = undefined;
+      if (structureType === 'stack') {
+        stackData = await this.extractStackState(evalExpr, localVars, executedLineText, previousSnapshot, frames);
+      }
+
+      // 8. Generate Pedagogical Explanation
       let { explanation, changeType } = ExplanationGenerator.generate(
         allNodes,
         headId,
@@ -2216,7 +2450,8 @@ export class StateExtractor {
         activeVisitingNodeId,
         funcName,
         arrays,
-        indexPointers
+        indexPointers,
+        stackData
       );
 
       // If execution reached the return statement or end of main, mark as final
@@ -2231,6 +2466,8 @@ export class StateExtractor {
           } else {
             explanation = 'Program execution finished.';
           }
+        } else if (structureType === 'stack') {
+          explanation = `Stack execution complete. Program execution finished.`;
         } else {
           const chainNodes = allNodes.filter((n) => !n.isDetached);
           if (chainNodes.length > 0) {
@@ -2252,6 +2489,7 @@ export class StateExtractor {
         pointers: activePointers,
         arrays,
         indexPointers,
+        stack: stackData,
         explanation,
         changeType,
         terminalOutput: this.accumulatedTerminalOutput,

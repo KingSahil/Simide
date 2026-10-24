@@ -18,6 +18,22 @@
       "internalConsoleOptions": "neverOpen"
     },
     {
+      "name": "Run Extension (Stack Demo)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extension=google.antigravity",
+        "--disable-extension=google.antigravity-code-executor",
+        "${workspaceFolder}/examples/stack-operations.cpp"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile",
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
       "name": "Run Extension (Linked List Demo)",
       "type": "extensionHost",
       "request": "launch",
