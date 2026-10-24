@@ -1,5 +1,210 @@
 "use strict";
 (() => {
+  // src/visualization/graphModel.ts
+  function isGraphSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object" || !("graph" in snapshot))
+      return false;
+    const graph = snapshot.graph;
+    if (typeof graph !== "object" || graph === null || !("vertices" in graph) || !("edges" in graph)) {
+      return false;
+    }
+    return Array.isArray(graph.vertices) && Array.isArray(graph.edges);
+  }
+
+  // src/sidebar/messages.ts
+  function isGraphUpdateStateMessage(message) {
+    return message.visualizationMode === "graph" && isGraphSnapshot(message.snapshot);
+  }
+
+  // webview/graphRenderer.ts
+  function hasNewGraphVertices(previous, current) {
+    if (!current.vertices.length)
+      return false;
+    if (!previous)
+      return true;
+    const previousIds = new Set(previous.vertices.map((vertex) => vertex.id));
+    return current.vertices.some((vertex) => !previousIds.has(vertex.id));
+  }
+  function getGraphEdgeMarker(edge, highlighted) {
+    if (!edge.directed)
+      return null;
+    return highlighted ? "url(#arrowHeadGreen)" : "url(#arrowHead)";
+  }
+  function getGraphEdgeLabel(edge) {
+    if (edge.label && edge.weight !== void 0) {
+      return `${edge.label} (${edge.weight})`;
+    }
+    return edge.label || (edge.weight !== void 0 ? String(edge.weight) : null);
+  }
+  function prepareGraphLayoutLinks(graph) {
+    const vertexIds = new Set(graph.vertices.map((vertex) => vertex.id));
+    const seenPairs = /* @__PURE__ */ new Set();
+    const links = [];
+    for (const edge of graph.edges) {
+      if (edge.sourceId === edge.targetId || !vertexIds.has(edge.sourceId) || !vertexIds.has(edge.targetId)) {
+        continue;
+      }
+      const pair = [edge.sourceId, edge.targetId].sort().join("\0");
+      if (seenPairs.has(pair))
+        continue;
+      seenPairs.add(pair);
+      links.push({
+        source: edge.sourceId,
+        target: edge.targetId,
+        distance: 130,
+        strength: 0.5
+      });
+    }
+    return links;
+  }
+  function prepareGraphEdgeLanes(edges) {
+    const groups = /* @__PURE__ */ new Map();
+    for (const edge of edges) {
+      const pair = [edge.sourceId, edge.targetId].sort().join("\0");
+      const group = groups.get(pair) || [];
+      group.push(edge);
+      groups.set(pair, group);
+    }
+    const lanes = /* @__PURE__ */ new Map();
+    for (const group of groups.values()) {
+      group.forEach((edge, index2) => {
+        const orderedEndpoints = [edge.sourceId, edge.targetId].sort();
+        const orientation = edge.sourceId === orderedEndpoints[0] ? 1 : -1;
+        const offset = (index2 - (group.length - 1) / 2) * 30 * orientation;
+        lanes.set(edge.id, { index: index2, count: group.length, offset });
+      });
+    }
+    return lanes;
+  }
+  function getGraphEdgeGeometry(source, target, nodeRadius, lane) {
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 1e-3) {
+      const loopRadius = nodeRadius + 22 + lane.index * 16;
+      const startAngle = -45 * Math.PI / 180;
+      const endAngle = -135 * Math.PI / 180;
+      const start2 = {
+        x: source.x + Math.cos(startAngle) * nodeRadius,
+        y: source.y + Math.sin(startAngle) * nodeRadius
+      };
+      const end2 = {
+        x: source.x + Math.cos(endAngle) * nodeRadius,
+        y: source.y + Math.sin(endAngle) * nodeRadius
+      };
+      const controlY = source.y - loopRadius * 2;
+      return {
+        path: `M ${start2.x} ${start2.y} C ${source.x + loopRadius} ${controlY}, ${source.x - loopRadius} ${controlY}, ${end2.x} ${end2.y}`,
+        labelX: source.x,
+        labelY: controlY,
+        controlPoints: [
+          { x: source.x + loopRadius, y: controlY },
+          { x: source.x - loopRadius, y: controlY }
+        ]
+      };
+    }
+    const normalX = -dy / distance;
+    const normalY = dx / distance;
+    const control = {
+      x: (source.x + target.x) / 2 + normalX * lane.offset,
+      y: (source.y + target.y) / 2 + normalY * lane.offset
+    };
+    const sourceScale = nodeRadius / Math.hypot(control.x - source.x, control.y - source.y);
+    const targetScale = nodeRadius / Math.hypot(control.x - target.x, control.y - target.y);
+    const start = {
+      x: source.x + (control.x - source.x) * sourceScale,
+      y: source.y + (control.y - source.y) * sourceScale
+    };
+    const end = {
+      x: target.x + (control.x - target.x) * targetScale,
+      y: target.y + (control.y - target.y) * targetScale
+    };
+    return {
+      path: `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`,
+      labelX: (start.x + 2 * control.x + end.x) / 4,
+      labelY: (start.y + 2 * control.y + end.y) / 4,
+      controlPoints: [control]
+    };
+  }
+  function getGraphContentBounds(graph, positions) {
+    let bounds = null;
+    const addPoint = (x3, y3, padding = 0) => {
+      if (!Number.isFinite(x3) || !Number.isFinite(y3))
+        return;
+      const pointBounds = {
+        minX: x3 - padding,
+        minY: y3 - padding,
+        maxX: x3 + padding,
+        maxY: y3 + padding
+      };
+      if (!bounds) {
+        bounds = pointBounds;
+        return;
+      }
+      bounds.minX = Math.min(bounds.minX, pointBounds.minX);
+      bounds.minY = Math.min(bounds.minY, pointBounds.minY);
+      bounds.maxX = Math.max(bounds.maxX, pointBounds.maxX);
+      bounds.maxY = Math.max(bounds.maxY, pointBounds.maxY);
+    };
+    for (const vertex of graph.vertices) {
+      const position = positions.get(vertex.id);
+      if (!position)
+        continue;
+      addPoint(position.x, position.y);
+      addPoint(position.x + position.width, position.y + position.height);
+    }
+    const lanes = prepareGraphEdgeLanes(graph.edges);
+    for (const edge of graph.edges) {
+      const sourcePosition = positions.get(edge.sourceId);
+      const targetPosition = positions.get(edge.targetId);
+      const lane = lanes.get(edge.id);
+      if (!sourcePosition || !targetPosition || !lane)
+        continue;
+      const source = {
+        x: sourcePosition.x + sourcePosition.width / 2,
+        y: sourcePosition.y + sourcePosition.height / 2
+      };
+      const target = {
+        x: targetPosition.x + targetPosition.width / 2,
+        y: targetPosition.y + targetPosition.height / 2
+      };
+      const radius = Math.min(
+        sourcePosition.width,
+        sourcePosition.height,
+        targetPosition.width,
+        targetPosition.height
+      ) / 2;
+      const geometry = getGraphEdgeGeometry(source, target, radius, lane);
+      for (const point of geometry.controlPoints) {
+        addPoint(point.x, point.y, 10);
+      }
+      const label = getGraphEdgeLabel(edge);
+      if (label) {
+        addPoint(geometry.labelX, geometry.labelY, 12);
+        addPoint(geometry.labelX - label.length * 3.5, geometry.labelY - 12);
+        addPoint(geometry.labelX + label.length * 3.5, geometry.labelY + 12);
+      }
+    }
+    return bounds;
+  }
+  function calculateGraphCameraFit(bounds, viewportWidth, viewportHeight, padding = 24) {
+    if (viewportWidth <= padding * 2 || viewportHeight <= padding * 2 || !Number.isFinite(viewportWidth) || !Number.isFinite(viewportHeight)) {
+      return null;
+    }
+    const contentWidth = Math.max(1, bounds.maxX - bounds.minX);
+    const contentHeight = Math.max(1, bounds.maxY - bounds.minY);
+    const scale = Math.min(
+      2.5,
+      (viewportWidth - padding * 2) / contentWidth,
+      (viewportHeight - padding * 2) / contentHeight
+    );
+    return {
+      scale,
+      panX: (viewportWidth - contentWidth * scale) / 2 - bounds.minX * scale,
+      panY: (viewportHeight - contentHeight * scale) / 2 - bounds.minY * scale
+    };
+  }
+
   // node_modules/d3-quadtree/src/add.js
   function add_default(d) {
     const x3 = +this._x.call(null, d), y3 = +this._y.call(null, d);
@@ -1032,6 +1237,7 @@
   var badgeDot = document.getElementById("badgeDot");
   var badgeText = document.getElementById("badgeText");
   var stepChip = document.getElementById("stepChip");
+  var canvasTitle = document.querySelector(".card-title");
   var graphViewport = document.getElementById("graphViewport");
   var graphCanvas = document.getElementById("graphCanvas");
   var arrowsSvg = document.getElementById("arrowsSvg");
@@ -1077,6 +1283,7 @@
   var simulation = null;
   var d3NodesMap = /* @__PURE__ */ new Map();
   var d3Links = [];
+  var cancelActiveNodeDrag = null;
   function onSimulationTick() {
     for (const node of d3NodesMap.values()) {
       if (node.x !== void 0 && node.y !== void 0) {
@@ -1098,6 +1305,7 @@
       }
     }
     renderArrows();
+    applyPendingGraphFit();
   }
   function initOrUpdateSimulation(nodes, links, isReset = false) {
     if (!simulation) {
@@ -1130,6 +1338,15 @@
     } else {
       simulation.alpha(0.6).restart();
     }
+  }
+  function clearSimulation() {
+    if (!simulation)
+      return;
+    simulation.stop();
+    simulation.alphaTarget(0);
+    simulation.nodes([]);
+    const linkForce = simulation.force("link");
+    linkForce?.links([]);
   }
   function registerD3Node(id, el, targetCenterX, targetCenterY, fallbackWidth, fallbackHeight, nodeType, reset = false) {
     let node = d3NodesMap.get(id);
@@ -1184,13 +1401,15 @@
   }
   function getNextAddressDisplay(node) {
     if (node.nextId) {
-      const target = currentSnapshot?.nodes.find((n) => n.id === node.nextId);
+      const listSnapshot2 = currentSnapshot && !isGraphSnapshot(currentSnapshot) ? currentSnapshot : null;
+      const target = listSnapshot2?.nodes.find((n) => n.id === node.nextId);
       if (target?.address) {
         return formatMemoryAddress(target.address, "nullptr");
       }
       return node.nextId;
     }
-    if (node.nextAddress && currentSnapshot?.nodes.some((n) => n.address === node.nextAddress)) {
+    const listSnapshot = currentSnapshot && !isGraphSnapshot(currentSnapshot) ? currentSnapshot : null;
+    if (node.nextAddress && listSnapshot?.nodes.some((n) => n.address === node.nextAddress)) {
       return formatMemoryAddress(node.nextAddress, "nullptr");
     }
     return "nullptr";
@@ -1204,6 +1423,7 @@
   var initialPanX = 0;
   var initialPanY = 0;
   var isSpacePressed = false;
+  var graphFitPending = false;
   function applyCameraTransform(smooth = false) {
     if (smooth) {
       graphCanvas.style.transition = "transform 0.25s cubic-bezier(0.2, 0, 0, 1)";
@@ -1224,6 +1444,25 @@
     cameraPanY = 0;
     cameraZoom = 1;
     applyCameraTransform(smooth);
+  }
+  function applyPendingGraphFit() {
+    if (!graphFitPending || !currentSnapshot || !isGraphSnapshot(currentSnapshot))
+      return;
+    const bounds = getGraphContentBounds(currentSnapshot.graph, nodePositions);
+    if (!bounds)
+      return;
+    const fit = calculateGraphCameraFit(
+      bounds,
+      graphViewport.clientWidth,
+      graphViewport.clientHeight
+    );
+    if (!fit)
+      return;
+    cameraZoom = fit.scale;
+    cameraPanX = fit.panX;
+    cameraPanY = fit.panY;
+    graphFitPending = false;
+    applyCameraTransform(true);
   }
   function showView(view) {
     initialView.style.display = view === "initial" ? "flex" : "none";
@@ -1258,9 +1497,11 @@
       const d3Node = d3NodesMap.get(id);
       if (!d3Node || !simulation)
         return;
+      cancelActiveNodeDrag?.();
       el.setPointerCapture(e.pointerId);
       el.classList.add("dragging");
-      simulation.alphaTarget(0.5).restart();
+      const activeSimulation = simulation;
+      activeSimulation.alphaTarget(0.5).restart();
       d3Node.fx = d3Node.x;
       d3Node.fy = d3Node.y;
       const startMouseX = e.clientX;
@@ -1275,9 +1516,13 @@
         d3Node.targetX = d3Node.fx;
         d3Node.targetY = d3Node.fy;
       };
-      const onPointerUp = (upEv) => {
+      let dragFinished = false;
+      const finishDrag = (pointerId) => {
+        if (dragFinished)
+          return;
+        dragFinished = true;
         try {
-          el.releasePointerCapture(upEv.pointerId);
+          el.releasePointerCapture(pointerId);
         } catch {
         }
         el.classList.remove("dragging");
@@ -1287,12 +1532,18 @@
         }
         d3Node.fx = null;
         d3Node.fy = null;
-        simulation.alphaTarget(0);
-        simulation.alpha(0.6).restart();
+        activeSimulation.alphaTarget(0);
+        activeSimulation.alpha(0.6).restart();
         el.removeEventListener("pointermove", onPointerMove);
         el.removeEventListener("pointerup", onPointerUp);
         el.removeEventListener("pointercancel", onPointerUp);
+        if (cancelActiveNodeDrag === cancelDrag) {
+          cancelActiveNodeDrag = null;
+        }
       };
+      const onPointerUp = (upEv) => finishDrag(upEv.pointerId);
+      const cancelDrag = () => finishDrag(e.pointerId);
+      cancelActiveNodeDrag = cancelDrag;
       el.addEventListener("pointermove", onPointerMove);
       el.addEventListener("pointerup", onPointerUp);
       el.addEventListener("pointercancel", onPointerUp);
@@ -1433,6 +1684,68 @@
       arrowsSvg.appendChild(pathEl);
     }
   }
+  function renderGraphArrows(snapshot) {
+    const lanes = prepareGraphEdgeLanes(snapshot.graph.edges);
+    const validVertexIds = new Set(snapshot.graph.vertices.map((vertex) => vertex.id));
+    for (const edge of snapshot.graph.edges) {
+      if (!validVertexIds.has(edge.sourceId) || !validVertexIds.has(edge.targetId))
+        continue;
+      const sourcePos = nodePositions.get(edge.sourceId);
+      const targetPos = nodePositions.get(edge.targetId);
+      const lane = lanes.get(edge.id);
+      if (!sourcePos || !targetPos || !lane)
+        continue;
+      const source = {
+        x: sourcePos.x + sourcePos.width / 2,
+        y: sourcePos.y + sourcePos.height / 2
+      };
+      const target = {
+        x: targetPos.x + targetPos.width / 2,
+        y: targetPos.y + targetPos.height / 2
+      };
+      const sourceRadius = Math.min(sourcePos.width, sourcePos.height) / 2;
+      const targetRadius = Math.min(targetPos.width, targetPos.height) / 2;
+      const geometry = getGraphEdgeGeometry(
+        source,
+        target,
+        Math.min(sourceRadius, targetRadius),
+        lane
+      );
+      const isHighlighted = edge.isTraversed === true || snapshot.activeEdgeId === edge.id;
+      const color = isHighlighted ? "#36C779" : "#0066FF";
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("class", "graph-edge");
+      path.setAttribute("data-edge-id", edge.id);
+      path.setAttribute("d", geometry.path);
+      path.setAttribute("stroke", color);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke-width", isHighlighted ? "2.4" : "1.8");
+      path.setAttribute("stroke-linecap", "round");
+      const marker = getGraphEdgeMarker(edge, isHighlighted);
+      if (marker) {
+        path.setAttribute("marker-end", marker);
+      }
+      if (arrowsGroup) {
+        arrowsGroup.appendChild(path);
+      } else {
+        arrowsSvg.appendChild(path);
+      }
+      const edgeLabel = getGraphEdgeLabel(edge);
+      if (edgeLabel) {
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("class", "graph-edge-label");
+        text.setAttribute("x", String(geometry.labelX));
+        text.setAttribute("y", String(geometry.labelY - 5));
+        text.setAttribute("text-anchor", "middle");
+        text.textContent = edgeLabel;
+        if (arrowsGroup) {
+          arrowsGroup.appendChild(text);
+        } else {
+          arrowsSvg.appendChild(text);
+        }
+      }
+    }
+  }
   function renderArrows() {
     if (arrowsGroup) {
       arrowsGroup.innerHTML = "";
@@ -1440,7 +1753,13 @@
       const paths = arrowsSvg.querySelectorAll(":scope > path");
       paths.forEach((p) => p.remove());
     }
-    if (!currentSnapshot || !currentSnapshot.hasHead)
+    if (!currentSnapshot)
+      return;
+    if (isGraphSnapshot(currentSnapshot)) {
+      renderGraphArrows(currentSnapshot);
+      return;
+    }
+    if (!currentSnapshot.hasHead)
       return;
     for (const ptr of currentSnapshot.pointers || []) {
       const badgeId = `badge-ptr-${ptr.name}`;
@@ -1588,8 +1907,94 @@
       }
     }
   }
-  function renderDiagram(snapshot, resetPositions = false) {
+  function renderGraphDiagram(snapshot, resetPositions = false) {
+    const enteringGraph = !currentSnapshot || !isGraphSnapshot(currentSnapshot);
+    const previousGraph = currentSnapshot && isGraphSnapshot(currentSnapshot) ? currentSnapshot.graph : void 0;
+    if (enteringGraph || resetPositions || hasNewGraphVertices(previousGraph, snapshot.graph)) {
+      graphFitPending = true;
+    }
     currentSnapshot = snapshot;
+    canvasTitle.textContent = "Graph";
+    nodesLayer.innerHTML = "";
+    d3Links = [];
+    const activeIds = /* @__PURE__ */ new Set();
+    if (resetPositions) {
+      nodePositions.clear();
+      d3NodesMap.clear();
+    }
+    const vertices = snapshot.graph.vertices;
+    if (vertices.length === 0) {
+      nodePositions.clear();
+      d3NodesMap.clear();
+      clearSimulation();
+      graphFitPending = true;
+      const emptyMessage = document.createElement("div");
+      emptyMessage.className = "empty-canvas-message";
+      emptyMessage.textContent = "This graph has no vertices.";
+      nodesLayer.appendChild(emptyMessage);
+      renderArrows();
+      return;
+    }
+    const columns = Math.ceil(Math.sqrt(vertices.length));
+    const spacingX = 132;
+    const spacingY = 112;
+    const centerX = graphCanvas.clientWidth / 2;
+    const centerY = graphCanvas.clientHeight / 2;
+    vertices.forEach((vertex, index2) => {
+      activeIds.add(vertex.id);
+      const nodeEl = document.createElement("div");
+      nodeEl.id = `node-${vertex.id}`;
+      nodeEl.className = "graph-vertex-card";
+      if (vertex.isVisiting || snapshot.activeVertexId === vertex.id) {
+        nodeEl.classList.add("visiting");
+      }
+      if (vertex.isNewlyCreated)
+        nodeEl.classList.add("new-created");
+      if (vertex.isDetached)
+        nodeEl.classList.add("detached");
+      const value = document.createElement("span");
+      value.className = "graph-vertex-value";
+      value.textContent = String(vertex.value);
+      nodeEl.appendChild(value);
+      nodeEl.title = `Vertex ${vertex.id}: ${String(vertex.value)}`;
+      nodesLayer.appendChild(nodeEl);
+      const column = index2 % columns;
+      const row = Math.floor(index2 / columns);
+      const rowSize = Math.min(columns, vertices.length - row * columns);
+      const targetCenterX = centerX + (column - (rowSize - 1) / 2) * spacingX;
+      const rowCount = Math.ceil(vertices.length / columns);
+      const targetCenterY = centerY + (row - (rowCount - 1) / 2) * spacingY;
+      registerD3Node(
+        vertex.id,
+        nodeEl,
+        targetCenterX,
+        targetCenterY,
+        76,
+        54,
+        "node",
+        resetPositions
+      );
+      makeDraggable(nodeEl, vertex.id);
+    });
+    for (const [bodyId] of d3NodesMap.entries()) {
+      if (!activeIds.has(bodyId)) {
+        d3NodesMap.delete(bodyId);
+        nodePositions.delete(bodyId);
+      }
+    }
+    d3Links = prepareGraphLayoutLinks(snapshot.graph).map((link) => ({ ...link }));
+    initOrUpdateSimulation(
+      Array.from(d3NodesMap.values()),
+      d3Links,
+      resetPositions
+    );
+  }
+  function renderLinkedListDiagram(snapshot, resetPositions = false) {
+    if (currentSnapshot && isGraphSnapshot(currentSnapshot)) {
+      resetCameraView(false);
+    }
+    currentSnapshot = snapshot;
+    canvasTitle.textContent = "Linked List";
     nodesLayer.innerHTML = "";
     d3Links = [];
     const activeIds = /* @__PURE__ */ new Set();
@@ -1622,10 +2027,7 @@
       <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to allocate and initialize the ${dsName}.</div>
     `;
       nodesLayer.appendChild(emptyMsg);
-      if (simulation) {
-        simulation.stop();
-        simulation.nodes([]);
-      }
+      clearSimulation();
       return;
     }
     const pointers = snapshot.pointers || [];
@@ -1908,6 +2310,26 @@
     });
     initOrUpdateSimulation(Array.from(d3NodesMap.values()), validLinks, resetPositions);
   }
+  function renderDiagram(snapshot, resetPositions = false) {
+    cancelActiveNodeDrag?.();
+    if (isGraphSnapshot(snapshot)) {
+      renderGraphDiagram(snapshot, resetPositions);
+    } else {
+      renderLinkedListDiagram(snapshot, resetPositions);
+    }
+  }
+  var graphViewportResizeObserver = new ResizeObserver(() => {
+    if (!currentSnapshot || !isGraphSnapshot(currentSnapshot)) {
+      return;
+    }
+    graphFitPending = true;
+    if (simulation && d3NodesMap.size > 0) {
+      simulation.alpha(0.2).restart();
+    } else {
+      requestAnimationFrame(applyPendingGraphFit);
+    }
+  });
+  graphViewportResizeObserver.observe(graphViewport);
   btnInitialVisualize.onclick = () => vscode.postMessage({ command: "visualize" });
   btnPrev.onclick = () => vscode.postMessage({ command: "prev" });
   btnNext.onclick = () => vscode.postMessage({ command: "next" });
@@ -1969,17 +2391,23 @@
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     const zoomFactor = e.deltaY < 0 ? 1.09 : 0.91;
-    const newZoom = Math.min(2.5, Math.max(0.35, cameraZoom * zoomFactor));
+    const newZoom = Math.min(2.5, Math.max(0.05, cameraZoom * zoomFactor));
     cameraPanX = mouseX - (mouseX - cameraPanX) * (newZoom / cameraZoom);
     cameraPanY = mouseY - (mouseY - cameraPanY) * (newZoom / cameraZoom);
     cameraZoom = newZoom;
     applyCameraTransform(false);
   }, { passive: false });
   graphViewport.addEventListener("dblclick", (e) => {
-    if (e.target.closest(".graph-node, .graph-badge-node, .canvas-controls-overlay")) {
+    if (e.target.closest(
+      ".graph-node, .graph-vertex-card, .graph-badge-node, .canvas-controls-overlay"
+    )) {
       return;
     }
     resetCameraView(true);
+    if (currentSnapshot && isGraphSnapshot(currentSnapshot)) {
+      graphFitPending = true;
+      requestAnimationFrame(applyPendingGraphFit);
+    }
   });
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space" && !isSpacePressed && document.activeElement?.tagName !== "INPUT") {
@@ -2018,10 +2446,13 @@
           updateBadge("running");
         }
         stepChip.textContent = `Step ${snapshot.stepNumber}`;
-        explanationText.textContent = snapshot.explanation;
         btnNext.disabled = !canStepNext;
         btnPrev.disabled = !canStepPrev;
         btnRestart.disabled = !canRestart;
+        const warningText = isGraphUpdateStateMessage(msg) && msg.snapshot.warnings?.length ? `
+
+Warnings: ${msg.snapshot.warnings.join(" ")}` : "";
+        explanationText.textContent = `${snapshot.explanation}${warningText}`;
         updateTerminal(snapshot.terminalOutput);
         renderDiagram(snapshot, false);
         break;
