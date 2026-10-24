@@ -161,6 +161,7 @@ export interface LinkedListSnapshot {
   terminalOutput?: string;
   printedInStep?: string;
   isHistorical?: boolean;
+  inspectionWarning?: string;
 }
 
 

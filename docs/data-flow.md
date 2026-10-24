@@ -39,7 +39,7 @@ sequenceDiagram
     Tracker->>Provider: onStopped({ session, threadId: 1, reason: 'entry' })
 
     Provider->>Extractor: extractState(session, threadId, stepNum: 1)
-    Extractor->>Extractor: Scan source AST for pointer declarations, structs & functions
+    Extractor->>Extractor: Discover source declarations, structs & functions (currently regex)
     Extractor->>VSCodeDAP: DAP stackTrace, scopes, variables
     VSCodeDAP->>GDB: Query local variables
     GDB-->>VSCodeDAP: Program at entry of main

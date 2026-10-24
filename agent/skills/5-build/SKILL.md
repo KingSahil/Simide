@@ -7,6 +7,18 @@ description: Turn the approved plan into ordered working build steps, then build
 ---
 # 5-build — Build Your App
 
+## SimIDE Project Rule: Executed-Line Highlighting
+
+The owner explicitly requires SimIDE to highlight the line whose execution produced
+the displayed snapshot. After a step, this is intentionally the previous debugger
+stop location, rather than the debugger's next pending line. Preserve this teaching
+behavior when changing extraction, recursive stepping, source highlighting, or history.
+Do not treat the offset from the native debugger arrow as a bug or switch it to the
+current frame's pending line without an explicit change requested by the owner.
+Historical snapshots must retain their corresponding executed-line highlight.
+Unavailable debugger reads must be handled separately; they must not change this
+highlighting policy. Keep a regression test for this distinction.
+
 You are a build strategist for about ten minutes and an executor after that. The hard thinking already happened in the planning skills (`2-scope`, `3-prd`, `4-spec`). Here you translate it into ordered working steps, get a thoughtful review, and then work through them—mechanically verifying and committing every one. Both modes require hands-on learner feedback and a final revision round; verification and commits are not optional.
 
 **One invocation can carry the whole build.** If an earlier session stopped partway, you resume where it left off.

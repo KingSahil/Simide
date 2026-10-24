@@ -177,9 +177,9 @@ npm run compile
 ```bash
 npx @vscode/vsce package
 ```
-This generates `simide-ide-0.1.0.vsix` which can be installed into any Visual Studio Code instance using:
+This generates `simide-ide-0.1.1.vsix`, matching the version in `package.json`, which can be installed into Visual Studio Code using:
 ```bash
-code --install-extension simide-ide-0.1.0.vsix
+code --install-extension simide-ide-0.1.1.vsix
 ```
 
 ---
@@ -294,11 +294,26 @@ npm test
 | **Test 2: Debugger Discovery** | Locates `gdb.exe` binary | **PASSED** |
 | **Test 3: Pedagogical Engine** | Verifies explanations for creation, linking, deletion, traversal & output | **PASSED** |
 | **Test 4: Snapshot History** | Verifies non-destructive `prev()` and `nextHistory()` time travel | **PASSED** |
-| **Test 5: Robust Pointer Parsing** | Verifies AST parsing across LeetCode, GFG, and OOP paradigms | **PASSED** |
+| **Test 5: Robust Pointer Parsing** | Verifies runtime pointer parsing and source discovery across LeetCode, GFG, and OOP examples | **PASSED** |
 | **Test 6: Compilation Matrix** | Compiles `leetcode-206-reverse.cpp`, `gfg-push-delete.cpp`, `oop-linked-list.cpp`, and `bst-traversals.cpp` | **PASSED** |
 | **Test 7: Real GDB Stepping** | Steps through C++ binary line-by-line and validates runtime values | **PASSED** |
 | **Test 8: Real GDB LeetCode Reversal** | Verifies real runtime execution of in-place reversal (3 → 2 → 1) | **PASSED** |
 | **Test 9: Real GDB BST Traversals** | Verifies BST runtime stops, tree pointer chasing, and Case A deletions | **PASSED** |
+
+`npm run compile` runs TypeScript checking before bundling. The test suite also
+checks simulation startup, visible initialization errors, retry, and real GDB
+execution of `examples/array-operations.cpp` (update, swap, and traversal).
+
+Source discovery currently uses the restored regex implementation. The Clang AST
+parser is present as an unintegrated module; the full AST migration is unfinished.
+Runtime values and pointer addresses come from the debugger.
+
+For the array demo, open `examples/array-operations.cpp` in the Extension Development
+Host, open SimIDE, and click **Visualize**. Step through the initialization, set
+`arr[2]` to `99`, swap the first two elements, and traverse the array. The output
+should be `20 10 99 40 50`. **Previous** reviews saved snapshots; it does not reverse
+the executing C++ program. F5 in this repository launches the development host;
+it does not itself start the visualization.
 
 ---
 

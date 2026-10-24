@@ -16,6 +16,9 @@ import {
   StructureType,
 } from '../visualization/linkedListModel';
 import { ExplanationGenerator } from '../visualization/explanationGenerator';
+import { isExplicitNull, isNodePointerType, resolveObjectHead, RuntimeVariable } from './objectHeadResolver';
+
+class NodeInspectionError extends Error {}
 
 export class StateExtractor {
   private static addressToIdMap = new Map<string, string>();
@@ -335,6 +338,7 @@ export class StateExtractor {
     leftField: string;
     rightField: string;
     structureType: StructureType;
+    nodeType?: string;
   } {
     let dataField = 'data';
     let nextField = 'next';
@@ -342,6 +346,7 @@ export class StateExtractor {
     let rightField = 'right';
     let structureType: StructureType = 'linked_list';
     let hasNodePointer = false;
+    let nodeType: string | undefined;
 
     if (!resolvedPath || !fs.existsSync(resolvedPath)) {
       return { dataField, nextField, leftField, rightField, structureType };
@@ -390,11 +395,13 @@ export class StateExtractor {
         if (hasLeft || hasRight || isTreeNamed) {
           structureType = 'tree';
           hasNodePointer = true;
+          nodeType = structName;
           if (hasLeft) leftField = hasLeft;
           if (hasRight) rightField = hasRight;
         } else if (hasNext) {
           structureType = 'linked_list';
           hasNodePointer = true;
+          nodeType = structName;
           nextField = hasNext;
         }
 
@@ -448,7 +455,7 @@ export class StateExtractor {
     } catch {
       // ignore
     }
-    return { dataField, nextField, leftField, rightField, structureType };
+    return { dataField, nextField, leftField, rightField, structureType, nodeType };
   }
 
   public static getVariableDeclarations(sourceFilePath?: string): Map<string, number[]> {
@@ -456,12 +463,15 @@ export class StateExtractor {
     const map = new Map<string, number[]>();
     try {
       if (fs.existsSync(resolvedPath)) {
-        const content = fs.readFileSync(resolvedPath, 'utf8');
+        const content = fs.readFileSync(resolvedPath, 'utf8').replace(
+          /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g,
+          text => text.replace(/[^\n]/g, ' ')
+        );
         const lines = content.split('\n');
         const nodeTypes = this.discoverNodeTypes(resolvedPath);
         const typePattern = Array.from(nodeTypes).join('|');
         const declRegex = new RegExp(
-          `(?:(?:struct\\s+)?(?:${typePattern})\\s*(?:\\*\\s*&?|&\\s*\\*?)|auto\\s*\\*?|,\\s*(?:\\*\\s*&?|&\\s*\\*?))\\s*([a-zA-Z_][a-zA-Z0-9_]*)`,
+          `(?:(?:struct\\s+)?\\b(?:${typePattern})\\b\\s*(?:\\*\\s*&?|&\\s*\\*?)|\\bauto\\b\\s*\\*?|,\\s*(?:\\*\\s*&?|&\\s*\\*?))\\s*([a-zA-Z_][a-zA-Z0-9_]*)`,
           'g'
         );
 
@@ -1412,102 +1422,58 @@ export class StateExtractor {
       }
     }
 
-    // 2. Discover Index Pointers (i, j, left, right, mid, counter, etc.)
-    const indexVarNames = new Set([
-      'i',
-      'j',
-      'k',
-      'idx',
-      'index',
-      'left',
-      'right',
-      'low',
-      'high',
-      'mid',
-      'start',
-      'end',
-      'p',
-      'ptr',
-      'curr',
-      'counter',
-      'count',
-      'pos',
-    ]);
-
-    for (const [varName, varInfo] of Object.entries(localVars)) {
-      if (discoveredArrays.some((a) => a.name === varName)) {
-        continue;
-      }
-      if (varName.startsWith('__') || varName === 'argc' || varName === 'argv') {
-        continue;
-      }
-
-      if (!varInfo.isArgument) {
-        if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
-          continue;
-        }
-      }
-
-      const typeStr = (varInfo.type || '').toLowerCase();
-      const isInteger =
-        typeStr.includes('int') ||
-        typeStr.includes('size_t') ||
-        typeStr.includes('short') ||
-        typeStr.includes('long') ||
-        indexVarNames.has(varName.toLowerCase());
-
-      if (isInteger) {
-        const parsed = parseInt(varInfo.value.match(/-?\d+/)?.[0] || '', 10);
-        if (!isNaN(parsed)) {
-          for (const arr of discoveredArrays) {
-            if (parsed >= 0 && parsed < arr.size) {
-              indexPointers.push({
-                name: varName,
-                targetIndex: parsed,
-                targetArrayName: arr.name,
-                value: parsed,
-              });
-              if (arr.elements[parsed]) {
-                arr.elements[parsed].isActive = true;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // Probe member counters (e.g. counter, count) on objects or in scope for discovered arrays
+    // 2. Label actual subscript expressions (j, j+1), not every small integer.
+    // This is a bounded hint in the legacy source-discovery path: support a
+    // variable with an optional constant offset, without executing C++ expressions.
+    let sourceHints = '';
+    try {
+      if (resolvedFile) sourceHints = fs.readFileSync(resolvedFile, 'utf8').replace(
+        /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g,
+        text => text.replace(/[^\n]/g, ' ')
+      );
+    } catch { /* Without source hints, do not invent array index roles. */ }
+    const escapePattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     for (const arr of discoveredArrays) {
-      for (const cName of ['counter', 'count', 'idx', 'index', 'i', 'j']) {
-        if (indexPointers.some((p) => p.name === cName && p.targetArrayName === arr.name)) {
-          continue;
+      const sourceName = arr.name.split(/\.|->/).pop()!;
+      const subscriptPattern = new RegExp(`\\b${escapePattern(sourceName)}\\s*\\[([^\\]]+)\\]`, 'g');
+      const seen = new Set<string>();
+      for (const match of sourceHints.matchAll(subscriptPattern)) {
+        const sourceLine = sourceHints.slice(0, match.index!).split('\n').length;
+        if (arrayDeclList.some(decl => decl.name === sourceName && decl.line === sourceLine)) continue;
+        const expression = match[1].match(/^\s*([a-zA-Z_]\w*)\s*(?:([+-])\s*(\d+))?\s*$/);
+        if (!expression) continue;
+        const [, name, operator, amount] = expression;
+        const label = name + (operator ? operator + amount : '');
+        if (seen.has(label)) continue;
+        seen.add(label);
+        const variable = localVars[name];
+        const declarations = Array.from(sourceHints.matchAll(new RegExp(
+          `\\b(?:int|short|long|(?:std::)?size_t|u?int\\d+_t|auto)\\s+${escapePattern(name)}\\s*(?=[=;,{()])`, 'g'
+        )), declaration => sourceHints.slice(0, declaration.index!).split('\n').length);
+        const localDeclarations = declarations.filter(line =>
+          !funcRange || (line >= funcRange.startLine && line <= funcRange.endLine)
+        );
+        if (!variable?.isArgument && localDeclarations.length && !localDeclarations.some(line => line < rawLine)) continue;
+        // A lexical local that is absent from debugger scope must not be probed:
+        // that can resurrect a stale/uninitialized loop variable such as k.
+        if (!variable && localDeclarations.length) continue;
+        let value: string | undefined = variable?.value;
+        if (variable) {
+          if (!variable.isArgument && !localDeclarations.some(line => line < rawLine)) continue;
+          if (!/\b(?:int|short|long|size_t|u?int\d+_t)\b/.test(variable.type || '') || /\*/.test(variable.type || '')) continue;
+        } else {
+          // Preserve support for source-referenced class/member indices only.
+          const parent = arr.name.includes('.') ? arr.name.slice(0, arr.name.lastIndexOf('.')) : null;
+          value = (parent ? await evalExpr(`${parent}.${name}`) || await evalExpr(`${parent}->${name}`) : null)
+            || await evalExpr(`this->${name}`) || undefined;
         }
-        let cValStr: string | null = null;
-        if (arr.name.includes('.')) {
-          const parentObj = arr.name.split('.')[0];
-          cValStr = await evalExpr(`${parentObj}.${cName}`);
-          if (!cValStr) cValStr = await evalExpr(`${parentObj}->${cName}`);
-        }
-        if (!cValStr) {
-          cValStr = await evalExpr(`this->${cName}`);
-        }
-        if (!cValStr && !localVars[cName]) {
-          cValStr = await evalExpr(cName);
-        }
-        if (cValStr) {
-          const parsed = parseInt(cValStr.match(/-?\d+/)?.[0] || '', 10);
-          if (!isNaN(parsed) && parsed >= 0 && parsed < arr.size) {
-            indexPointers.push({
-              name: cName,
-              targetIndex: parsed,
-              targetArrayName: arr.name,
-              value: parsed,
-            });
-            if (arr.elements[parsed]) {
-              arr.elements[parsed].isActive = true;
-            }
-          }
-        }
+        if (!value || !/^[+-]?\d+$/.test(value.trim())) continue;
+        const base = Number(value);
+        const offset = operator ? Number(amount) * (operator === '-' ? -1 : 1) : 0;
+        const index = base + offset;
+        if (!Number.isSafeInteger(index) || index < 0 || index >= arr.size) continue;
+        indexPointers.push({ name: label, targetIndex: index, targetArrayName: arr.name, value: index });
+        if (arr.elements[index]) arr.elements[index].isActive = true;
       }
     }
 
@@ -1969,6 +1935,8 @@ export class StateExtractor {
     stepNumber: number,
     previousSnapshot?: LinkedListSnapshot
   ): Promise<LinkedListSnapshot | null> {
+    let inspectionSource: SourceLocation | undefined;
+    let inspectionStructure: StructureType = 'linked_list';
     try {
       // 1. Get Stack Frames (up to 25 levels)
       const stackResponse = await session.customRequest('stackTrace', {
@@ -2025,6 +1993,7 @@ export class StateExtractor {
         leftField: parsedLeftField,
         rightField: parsedRightField,
         structureType: parsedStructureType,
+        nodeType: parsedNodeType,
       } = this.parseStructMembers(resolvedFile);
 
       if (!this.cachedDataField && parsedDataField) this.cachedDataField = parsedDataField;
@@ -2033,6 +2002,8 @@ export class StateExtractor {
       if (!this.cachedRightField && parsedRightField) this.cachedRightField = parsedRightField;
       if (!this.cachedStructureType && parsedStructureType) this.cachedStructureType = parsedStructureType;
       const structureType = this.cachedStructureType || parsedStructureType || 'linked_list';
+      const nodeType = parsedNodeType || (structureType === 'tree' ? 'TreeNode' : 'Node');
+      inspectionStructure = structureType;
 
       // Check variable declarations across all functions in the file
       const varDecls = this.getVariableDeclarations(resolvedFile);
@@ -2142,9 +2113,12 @@ export class StateExtractor {
 
       const sourceLoc: SourceLocation = {
         file: resolvedFile,
+        // Intentional SimIDE teaching behavior: show the line whose execution
+        // produced this snapshot, not the debugger's next pending instruction.
         line: executedLine,
         functionName: userFrame.name,
       };
+      inspectionSource = { ...sourceLoc };
 
       const lineText = this.getLineText(sourceLoc.file, rawLine);
       const executedLineText = this.getLineText(sourceLoc.file, executedLine);
@@ -2195,10 +2169,42 @@ export class StateExtractor {
             frameId: targetFrameId,
             context: 'watch',
           });
-          return res?.result ?? null;
+          const value = res?.result;
+          if (typeof value !== 'string' || !value.trim() ||
+              /(?:<error|error:|cannot access|no symbol|optimized out|not available|not defined|unable to create|has no member|incomplete type)/i.test(value)) {
+            return null;
+          }
+          return value;
         } catch {
           return null;
         }
+      };
+
+      // Absolute-address heap reads are safe to retry in another user frame.
+      // Do not do this for local expressions: recursive frames can shadow names.
+      const heapFrameIds = Array.from(new Set<number>([
+        frameId,
+        ...frames.filter((f: any) => this.isUserSource(f.source?.path || f.source?.name || ''))
+          .map((f: any) => f.id).reverse(),
+      ]));
+      let heapFrameId = frameId;
+      const evalHeapExpr = async (expression: string): Promise<string | null> => {
+        for (const id of [heapFrameId, ...heapFrameIds.filter(id => id !== heapFrameId)]) {
+          const value = await evalExpr(expression, id);
+          if (value !== null) {
+            heapFrameId = id;
+            return value;
+          }
+        }
+        return null;
+      };
+      const requireNodeValue = (value: string | null, expression: string, pointer = false): string => {
+        const isNullPointer = value !== null &&
+          /(?:\bnullptr\b|\bNULL\b|\(nil\)|\b0x0+\b|^0$)/.test(value.trim());
+        if (value === null || (pointer && !isNullPointer && !this.parsePointer(value))) {
+          throw new NodeInspectionError(`Debugger could not read ${expression} in the available user frames.`);
+        }
+        return value;
       };
 
       // Check if the executed line was a deletion / deallocation (e.g. `delete temp;` or `free(temp);`)
@@ -2292,11 +2298,55 @@ export class StateExtractor {
         'm_root',
       ];
 
+      // Resolve actual node-pointer members from objects in main/caller frames.
+      // An object value may contain an address; that does not make it a Node*.
+      let headResolved = false;
+      const frameVariables = new Map<number, RuntimeVariable[]>();
+      frameVariables.set(frameId, Object.entries(localVars).map(([name, variable]) => ({ name, ...variable })));
+      const mainFrameForObjects = frames.find((frame: any) =>
+        frame.name === 'main' || frame.name?.startsWith('main(')
+      );
+      const objectFrames = [mainFrameForObjects, ...[...frames].reverse()].filter((frame: any, index, all) =>
+        frame && this.isUserSource(frame.source?.path || frame.source?.name || '') &&
+        all.findIndex(candidate => candidate?.id === frame.id) === index
+      );
+      const recordTypes = this.discoverNodeTypes(resolvedFile);
+      const memberNames = headCandidates.filter(candidate => !candidate.includes('->'));
+      for (const frame of objectFrames) {
+        if (!frameVariables.has(frame.id)) {
+          const variables: RuntimeVariable[] = [];
+          try {
+            const response = await session.customRequest('scopes', { frameId: frame.id });
+            for (const scope of response?.scopes || []) {
+              if (!/local|var|arg|param/i.test(scope.name || '') || !scope.variablesReference) continue;
+              const response = await session.customRequest('variables', { variablesReference: scope.variablesReference });
+              variables.push(...(response?.variables || []));
+            }
+          } catch { /* Existing expression-based discovery remains available. */ }
+          frameVariables.set(frame.id, variables);
+        }
+        const result = await resolveObjectHead(
+          frameVariables.get(frame.id)!, nodeType, recordTypes, memberNames,
+          async reference => (await session.customRequest('variables', { variablesReference: reference }))?.variables || [],
+          expression => evalExpr(expression, frame.id), value => this.parsePointer(value)
+        );
+        if (result) {
+          headAddr = result.address;
+          headResolved = true; // A verified nullptr is distinct from a failed read.
+          break;
+        }
+      }
+      const isNonNodeVariable = (name: string, id: number) => {
+        const variable = frameVariables.get(id)?.find(variable => variable.name === name);
+        return !!variable?.type && !isNodePointerType(variable.type, nodeType);
+      };
+
       // A: Try current user frame (only if we're in main — in helper functions like insert()
       // the 'root' parameter may be a by-value nullptr copy, not the actual tree root)
       const isInMain = isInsideMain;
-      if (isInMain) {
+      if (isInMain && !headResolved) {
         for (const cand of headCandidates) {
+          if (isNonNodeVariable(cand, frameId)) continue;
           if (varDecls.has(cand) && !this.isVariableInitialized(cand, rawLine, varDecls, funcRange)) {
             continue;
           }
@@ -2311,6 +2361,7 @@ export class StateExtractor {
             } else {
               headAddr = this.parsePointer(valStr);
             }
+            if (isExplicitNull(valStr)) { headResolved = true; break; }
             if (headAddr && !this.deletedAddresses.has(headAddr)) {
               break;
             } else {
@@ -2323,7 +2374,7 @@ export class StateExtractor {
       // B: Check caller frames — required when inside helper functions (insert, traverse, etc.)
       // Prioritize the 'main' frame where the true root/head pointer lives,
       // avoiding local recursive parameters (e.g. insert's 'root') shadowing the real root.
-      if (!headAddr) {
+      if (!headAddr && !headResolved) {
         const mainFrame = frames.find((f: any) => {
           const name = (f.name || '').toLowerCase();
           const path = f.source?.path || f.source?.name || '';
@@ -2332,6 +2383,7 @@ export class StateExtractor {
 
         if (mainFrame) {
           for (const cand of headCandidates) {
+            if (isNonNodeVariable(cand, mainFrame.id)) continue;
             const valStr = await evalExpr(cand, mainFrame.id);
             if (valStr) {
               let candidate: string | null = null;
@@ -2341,6 +2393,7 @@ export class StateExtractor {
               } else {
                 candidate = this.parsePointer(valStr);
               }
+              if (isExplicitNull(valStr)) { headResolved = true; break; }
               if (candidate && !this.deletedAddresses.has(candidate)) {
                 headAddr = candidate;
                 break;
@@ -2350,12 +2403,13 @@ export class StateExtractor {
         }
 
         // Priority 2: Check caller frames from outermost to innermost
-        if (!headAddr) {
+        if (!headAddr && !headResolved) {
           for (let i = frames.length - 1; i >= 0; i--) {
             const callerFrame = frames[i];
             const callerPath = callerFrame.source?.path || callerFrame.source?.name || '';
             if (!this.isUserSource(callerPath)) continue;
             for (const cand of headCandidates) {
+              if (isNonNodeVariable(cand, callerFrame.id)) continue;
               const valStr = await evalExpr(cand, callerFrame.id);
               if (valStr) {
                 let candidate: string | null = null;
@@ -2365,19 +2419,20 @@ export class StateExtractor {
                 } else {
                   candidate = this.parsePointer(valStr);
                 }
+                if (isExplicitNull(valStr)) { headResolved = true; break; }
                 if (candidate && !this.deletedAddresses.has(candidate)) {
                   headAddr = candidate;
                   break;
                 }
               }
             }
-            if (headAddr) break;
+            if (headAddr || headResolved) break;
           }
         }
       }
 
       // C: Retain previous head address if still valid and not deleted
-      if (!headAddr && previousSnapshot?.headId) {
+      if (!headAddr && !headResolved && previousSnapshot?.headId) {
         const prevHeadNode = previousSnapshot.nodes.find((n) => n.id === previousSnapshot.headId);
         if (prevHeadNode && prevHeadNode.address && !this.deletedAddresses.has(prevHeadNode.address)) {
           headAddr = prevHeadNode.address;
@@ -2389,33 +2444,6 @@ export class StateExtractor {
         this.hasInitializedList = true;
       } else {
         headAddr = null;
-      }
-
-      // Discovered node struct type name
-      // Prefer types actually defined in the source file over hardcoded defaults.
-      // discoverNodeTypes() first adds hardcoded fallbacks, then appends source-file structs.
-      // We want the LAST entry from the source file (the actual struct in this file).
-      let nodeType: string;
-      {
-        // Re-scan source file for struct/class names to find what's actually declared there
-        let sourceDefinedType: string | null = null;
-        try {
-          if (fs.existsSync(resolvedFile)) {
-            const content = fs.readFileSync(resolvedFile, 'utf8');
-            // Match struct/class definitions — pick the one that has pointer members (left/right/next)
-            const structMatches = Array.from(content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\{([^}]*?)\}/gs));
-            for (const sm of structMatches) {
-              const body = sm[2] || '';
-              // Must have at least one pointer member
-              if (body.includes('*')) {
-                sourceDefinedType = sm[1];
-              }
-            }
-          }
-        } catch {
-          // ignore
-        }
-        nodeType = sourceDefinedType || (structureType === 'tree' ? 'TreeNode' : 'Node');
       }
 
       // 4. Graph / Tree / Multi-Chain Sublist Traversal Engine
@@ -2441,11 +2469,11 @@ export class StateExtractor {
           const id = this.getStableId(currAddr);
           const ptrCast = `((${nodeType}*)${currAddr})`;
 
-          const dataField = await this.resolveDataField(evalExpr, ptrCast);
-          const nextField = await this.resolveNextField(evalExpr, ptrCast);
+          const dataField = await this.resolveDataField(evalHeapExpr, ptrCast);
+          const nextField = await this.resolveNextField(evalHeapExpr, ptrCast);
 
-          const dataStr = await evalExpr(`${ptrCast}->${dataField}`);
-          const nextValStr = await evalExpr(`${ptrCast}->${nextField}`);
+          const dataStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${dataField}`), `${ptrCast}->${dataField}`);
+          const nextValStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${nextField}`), `${ptrCast}->${nextField}`, true);
           const nextAddr = this.parsePointer(nextValStr);
 
           const nextId =
@@ -2458,7 +2486,7 @@ export class StateExtractor {
           allDiscoveredNodes.set(currAddr, {
             id,
             address: currAddr,
-            data: this.parseData(dataStr || '0'),
+            data: this.parseData(dataStr),
             nextId,
             nextAddress: nextAddr,
             isHead: isNodeHead,
@@ -2497,13 +2525,13 @@ export class StateExtractor {
           const id = this.getStableId(currAddr);
           const ptrCast = `((${nodeType}*)${currAddr})`;
 
-          const dataField = await this.resolveDataField(evalExpr, ptrCast);
-          const leftField = await this.resolveLeftField(evalExpr, ptrCast);
-          const rightField = await this.resolveRightField(evalExpr, ptrCast);
+          const dataField = await this.resolveDataField(evalHeapExpr, ptrCast);
+          const leftField = await this.resolveLeftField(evalHeapExpr, ptrCast);
+          const rightField = await this.resolveRightField(evalHeapExpr, ptrCast);
 
-          const dataStr = await evalExpr(`${ptrCast}->${dataField}`);
-          const leftValStr = await evalExpr(`${ptrCast}->${leftField}`);
-          const rightValStr = await evalExpr(`${ptrCast}->${rightField}`);
+          const dataStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${dataField}`), `${ptrCast}->${dataField}`);
+          const leftValStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${leftField}`), `${ptrCast}->${leftField}`, true);
+          const rightValStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${rightField}`), `${ptrCast}->${rightField}`, true);
 
           const leftAddr = this.parsePointer(leftValStr);
           const rightAddr = this.parsePointer(rightValStr);
@@ -2518,7 +2546,7 @@ export class StateExtractor {
           allDiscoveredNodes.set(currAddr, {
             id,
             address: currAddr,
-            data: this.parseData(dataStr || '0'),
+            data: this.parseData(dataStr),
             leftId,
             leftAddress: leftAddr,
             rightId,
@@ -2841,6 +2869,30 @@ export class StateExtractor {
 
       return snapshot;
     } catch (err) {
+      if (err instanceof NodeInspectionError) {
+        console.warn('[StateExtractor] Node inspection unavailable:', err.message);
+        return {
+          ...(previousSnapshot || {
+            structureType: inspectionStructure,
+            hasHead: false,
+            headId: null,
+          }),
+          stepNumber,
+          source: inspectionSource,
+          nodes: (previousSnapshot?.nodes || []).map(node => ({
+            ...node, isVisiting: false, isNewlyCreated: false, isNewlyConnected: false,
+          })),
+          pointers: previousSnapshot?.pointers?.map(pointer => ({ ...pointer })),
+          activeVisitingNodeId: null,
+          explanation: previousSnapshot
+            ? 'Debugger inspection is temporarily unavailable. Showing the last verified state; step again to retry.'
+            : 'Debugger inspection is unavailable at this stop. Step again to retry; no verified structure is available yet.',
+          changeType: 'step',
+          inspectionWarning: err.message,
+          printedInStep: undefined,
+          isHistorical: false,
+        };
+      }
       console.error('[StateExtractor] Extraction failed:', err);
       return null;
     }

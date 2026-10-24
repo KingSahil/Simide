@@ -35,10 +35,22 @@ export enum OverviewRulerLane {
   Full = 7,
 }
 
+export enum ConfigurationTarget {
+  Global = 1,
+  Workspace = 2,
+}
+
+export const Uri = {
+  joinPath: (base: { fsPath: string }, ...parts: string[]) => ({
+    fsPath: [base.fsPath, ...parts].join('/'),
+  }),
+};
+
 export const window = {
   activeTextEditor: undefined,
   visibleTextEditors: [] as any[],
   createTextEditorDecorationType: () => ({ dispose: () => {} }),
+  onDidChangeActiveTextEditor: (_listener: unknown) => ({ dispose: () => {} }),
   showWarningMessage: () => {},
   showErrorMessage: () => {},
   showInformationMessage: () => {},
@@ -61,6 +73,10 @@ export const extensions = {
 export const debug = {
   startDebugging: async () => true,
   stopDebugging: async () => {},
+};
+
+export const commands = {
+  executeCommand: async (_command: string) => {},
 };
 
 export default {
