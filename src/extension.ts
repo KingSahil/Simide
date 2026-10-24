@@ -96,6 +96,20 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('debug-mentor.visualizeStack', async () => {
+      await vscode.commands.executeCommand('workbench.action.closePanel');
+      await vscode.commands.executeCommand('debug-mentor.sidebar.focus');
+      const wsFolders = vscode.workspace.workspaceFolders;
+      if (wsFolders && wsFolders.length > 0) {
+        const fullPath = path.join(wsFolders[0].uri.fsPath, 'examples', 'stack-operations.cpp');
+        await provider.startVisualization(fullPath);
+      } else {
+        await provider.startVisualization();
+      }
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('debug-mentor.next', async () => {
       await provider.stepNext();
     })

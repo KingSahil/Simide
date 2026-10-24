@@ -78,6 +78,13 @@ if (btnClearTerminal) {
 
 // Buttons
 const btnInitialVisualize = document.getElementById('btnInitialVisualize') as HTMLButtonElement;
+const btnVisualizeText = document.getElementById('btnVisualizeText') as HTMLElement | null;
+const targetFileName = document.getElementById('targetFileName') as HTMLElement | null;
+const btnExampleStack = document.getElementById('btnExampleStack') as HTMLButtonElement | null;
+const btnExampleArray = document.getElementById('btnExampleArray') as HTMLButtonElement | null;
+const btnExampleLinkedList = document.getElementById('btnExampleLinkedList') as HTMLButtonElement | null;
+const btnExampleTree = document.getElementById('btnExampleTree') as HTMLButtonElement | null;
+
 const btnPrev = document.getElementById('btnPrev') as HTMLButtonElement;
 const btnNext = document.getElementById('btnNext') as HTMLButtonElement;
 const btnRestart = document.getElementById('btnRestart') as HTMLButtonElement;
@@ -1573,6 +1580,20 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
 
 // Event Listeners
 btnInitialVisualize.onclick = () => vscode.postMessage({ command: 'visualize' });
+
+if (btnExampleStack) {
+  btnExampleStack.onclick = () => vscode.postMessage({ command: 'visualizeExample', example: 'stack' });
+}
+if (btnExampleArray) {
+  btnExampleArray.onclick = () => vscode.postMessage({ command: 'visualizeExample', example: 'array' });
+}
+if (btnExampleLinkedList) {
+  btnExampleLinkedList.onclick = () => vscode.postMessage({ command: 'visualizeExample', example: 'linkedlist' });
+}
+if (btnExampleTree) {
+  btnExampleTree.onclick = () => vscode.postMessage({ command: 'visualizeExample', example: 'tree' });
+}
+
 btnPrev.onclick = () => vscode.postMessage({ command: 'prev' });
 btnNext.onclick = () => vscode.postMessage({ command: 'next' });
 btnRestart.onclick = () => vscode.postMessage({ command: 'restart' });
@@ -1737,6 +1758,16 @@ window.addEventListener('message', (event) => {
       break;
     }
 
+    case 'targetFile': {
+      if (targetFileName) {
+        targetFileName.textContent = msg.fileName;
+      }
+      if (btnVisualizeText) {
+        btnVisualizeText.textContent = `Visualize ${msg.fileName}`;
+      }
+      break;
+    }
+
     case 'sessionEnded': {
       updateBadge('terminated');
       btnNext.disabled = true;
@@ -1751,3 +1782,4 @@ window.addEventListener('message', (event) => {
 showView('initial');
 updateBadge('idle');
 vscode.postMessage({ command: 'requestState' });
+vscode.postMessage({ command: 'getTargetFile' });

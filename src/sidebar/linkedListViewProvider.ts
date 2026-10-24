@@ -36,6 +36,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           filePath.endsWith('.hpp')
         ) {
           CppCompiler.setLastActiveSourceFile(filePath);
+          this.sendTargetFileUpdate();
         }
 
         const curr = this.snapshotManager.getCurrentSnapshot();
@@ -162,13 +163,47 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       undefined,
       this.disposables
     );
+
+    this.sendTargetFileUpdate();
+  }
+
+  public sendTargetFileUpdate(): void {
+    const target = CppCompiler.resolveSourceFile();
+    this.postMessage({
+      command: 'targetFile',
+      fileName: target ? path.basename(target) : 'stack-operations.cpp',
+      filePath: target || '',
+    });
   }
 
   private async handleMessage(message: WebviewMessage): Promise<void> {
     switch (message.command) {
       case 'visualize':
       case 'retry':
-        await this.startVisualization();
+        await this.startVisualization(message.filePath);
+        break;
+
+      case 'visualizeExample':
+        if (message.example) {
+          const wsFolders = vscode.workspace.workspaceFolders;
+          if (wsFolders && wsFolders.length > 0) {
+            const map: Record<string, string> = {
+              stack: 'examples/stack-operations.cpp',
+              array: 'examples/array-operations.cpp',
+              linkedlist: 'examples/linked-list.cpp',
+              tree: 'examples/bst-traversals.cpp',
+            };
+            const rel = map[message.example] || 'examples/stack-operations.cpp';
+            const fullPath = path.join(wsFolders[0].uri.fsPath, rel);
+            if (fs.existsSync(fullPath)) {
+              await this.startVisualization(fullPath);
+            }
+          }
+        }
+        break;
+
+      case 'getTargetFile':
+        this.sendTargetFileUpdate();
         break;
 
       case 'next':
@@ -312,7 +347,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  public async startVisualization(): Promise<void> {
+  public async startVisualization(explicitSource?: string): Promise<void> {
     this.reveal();
     await vscode.commands.executeCommand('workbench.action.closePanel');
     if (DebugSessionManager.getActiveSession()) {
@@ -326,17 +361,26 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       step: 'compiling',
     });
 
-    const sourceFile = CppCompiler.resolveSourceFile();
+    const sourceFile = CppCompiler.resolveSourceFile(explicitSource);
     if (!sourceFile) {
       this.postMessage({
         command: 'error',
         message: 'No active C++ file detected',
         details:
-          'Please open a valid C++ file (such as examples/linked-list.cpp) in the editor and try again.',
+          'Please open a valid C++ file (such as examples/stack-operations.cpp) in the editor and try again.',
         canRetry: true,
       });
       return;
     }
+
+    // Ensure source file is opened in editor beside webview
+    try {
+      const doc = await vscode.workspace.openTextDocument(sourceFile);
+      await vscode.window.showTextDocument(doc, { preserveFocus: true, preview: false });
+    } catch {
+      // ignore
+    }
+    this.sendTargetFileUpdate();
 
     // Compile
     this.postMessage({

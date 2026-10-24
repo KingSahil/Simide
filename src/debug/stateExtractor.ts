@@ -1742,6 +1742,24 @@ export class StateExtractor {
             } else {
               hasHead = true;
             }
+          } else if (structureType === 'stack') {
+            const stackVarCandidates = ['s', 'st', 'stack', 's1', 's2', 'myStack'];
+            let declaredCandidate: string | null = null;
+            for (const cand of stackVarCandidates) {
+              const lines = varDecls.get(cand);
+              const inFunc = funcRange
+                ? lines?.filter((l) => l >= funcRange.startLine && l <= funcRange.endLine)
+                : lines;
+              if (inFunc && inFunc.length > 0) {
+                declaredCandidate = cand;
+                break;
+              }
+            }
+            if (declaredCandidate) {
+              hasHead = this.isVariableInitialized(declaredCandidate, rawLine, varDecls, funcRange);
+            } else {
+              hasHead = true;
+            }
           } else {
             const candidates =
               structureType === 'tree'
@@ -1779,6 +1797,8 @@ export class StateExtractor {
             ? 'Program paused at start. Click Next to allocate and initialize tree: TreeNode* root = ...'
             : structureType === 'array'
             ? 'Program paused at start. Click Next to allocate and initialize array.'
+            : structureType === 'stack'
+            ? 'Program paused at start. Click Next to initialize stack.'
             : 'Program paused at start. Click Next to execute: Node* head = ...';
         return {
           stepNumber,

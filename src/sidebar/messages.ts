@@ -1,7 +1,9 @@
 import { LinkedListSnapshot } from '../visualization/linkedListModel';
 
 export type WebviewMessage =
-  | { command: 'visualize' }
+  | { command: 'visualize'; filePath?: string }
+  | { command: 'visualizeExample'; example: 'stack' | 'array' | 'linkedlist' | 'tree' }
+  | { command: 'getTargetFile' }
   | { command: 'next' }
   | { command: 'prev' }
   | { command: 'stepIn' }
@@ -14,6 +16,11 @@ export type WebviewMessage =
   | { command: 'requestState' };
 
 export type ExtensionMessage =
+  | {
+      command: 'targetFile';
+      fileName: string;
+      filePath: string;
+    }
   | {
       command: 'status';
       text: string;

@@ -49,6 +49,12 @@
         "icon": "$(play)"
       },
       {
+        "command": "debug-mentor.visualizeStack",
+        "title": "SimIDE: Visualize Stack (LIFO) Operations",
+        "category": "SimIDE",
+        "icon": "$(layers)"
+      },
+      {
         "command": "debug-mentor.next",
         "title": "SimIDE: Next Step",
         "category": "SimIDE",

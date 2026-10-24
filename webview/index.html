@@ -49,12 +49,36 @@
       </svg>
       <div class="initial-title">SimIDE</div>
       <p class="initial-subtitle">Understand your C++ code visually as you step through execution.</p>
+
+      <div class="target-file-container" id="targetFileContainer">
+        <span class="target-label">Target File:</span>
+        <span class="target-name" id="targetFileName">stack-operations.cpp</span>
+      </div>
+
       <button id="btnInitialVisualize" class="btn btn-primary btn-large">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
           <polygon points="5 3 19 12 5 21 5 3"/>
         </svg>
-        Visualize
+        <span id="btnVisualizeText">Visualize Active Code</span>
       </button>
+
+      <div class="quick-examples-section">
+        <div class="quick-examples-title">Quick-Launch DSA Examples:</div>
+        <div class="example-chips">
+          <button class="example-chip chip-stack" id="btnExampleStack" title="Visualize Stack (LIFO) operations">
+            <span class="chip-icon">🥞</span> Stack (LIFO)
+          </button>
+          <button class="example-chip chip-array" id="btnExampleArray" title="Visualize Array operations">
+            <span class="chip-icon">📊</span> Array
+          </button>
+          <button class="example-chip chip-ll" id="btnExampleLinkedList" title="Visualize Linked List operations">
+            <span class="chip-icon">🔗</span> Linked List
+          </button>
+          <button class="example-chip chip-tree" id="btnExampleTree" title="Visualize BST Tree operations">
+            <span class="chip-icon">🌳</span> BST Tree
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Screen 2: Loading View -->
