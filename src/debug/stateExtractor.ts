@@ -733,6 +733,8 @@ export class StateExtractor {
       s.includes('error') ||
       s.includes('Cannot access') ||
       s.includes('No symbol') ||
+      s.includes('no member') ||
+      s.includes('There is no') ||
       s.includes('not defined') ||
       s.includes('optimized out') ||
       s.includes('incomplete') ||
@@ -740,7 +742,8 @@ export class StateExtractor {
       s.includes('cccccccc') ||
       s.includes('cdcdcdcd') ||
       s.includes('feeefeee') ||
-      s.includes('abababab')
+      s.includes('abababab') ||
+      /<[a-zA-Z0-9_]+>/.test(s)
     ) {
       return null;
     }
@@ -762,6 +765,8 @@ export class StateExtractor {
       valStr.includes('Cannot access') ||
       valStr.includes('No symbol') ||
       valStr.includes('has no member') ||
+      valStr.includes('no member') ||
+      valStr.includes('There is no') ||
       valStr.includes('not defined') ||
       valStr.includes('optimized out') ||
       valStr.includes('incomplete')
@@ -798,6 +803,8 @@ export class StateExtractor {
       lower.includes('unable to create') ||
       lower.includes('-var-create') ||
       lower.includes('has no member') ||
+      lower.includes('no member') ||
+      lower.includes('there is no') ||
       lower.includes('not defined') ||
       lower.includes('optimized out') ||
       lower.includes('incomplete')
@@ -818,6 +825,8 @@ export class StateExtractor {
       if (
         res !== null &&
         !res.includes('has no member') &&
+        !res.includes('no member') &&
+        !res.includes('There is no') &&
         !res.includes('error') &&
         !res.includes('Cannot access') &&
         !res.includes('not defined') &&
@@ -841,6 +850,8 @@ export class StateExtractor {
       if (
         res !== null &&
         !res.includes('has no member') &&
+        !res.includes('no member') &&
+        !res.includes('There is no') &&
         !res.includes('error') &&
         !res.includes('Cannot access') &&
         !res.includes('not defined') &&
@@ -1960,6 +1971,12 @@ export class StateExtractor {
         'first',
         'this->first',
         'start',
+        'list.head',
+        'list->head',
+        'myList.head',
+        'tree.root',
+        'tree->root',
+        'myTree.root',
         'list',
         'dummy',
         'dummyHead',
@@ -1990,6 +2007,22 @@ export class StateExtractor {
             valStr = await evalExpr(cand);
           }
           if (valStr) {
+            // If the evaluated value is a struct object like `{head = 0x...}`, don't treat the object itself as a pointer!
+            const trimmed = valStr.trim();
+            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+              // It's a container class/struct object (e.g. `list`).
+              // Try evaluating its head/root member directly instead of taking the raw struct body.
+              const innerHead = await evalExpr(`${cand}.${structureType === 'tree' ? 'root' : 'head'}`);
+              if (innerHead) {
+                const parsedInner = this.parsePointer(innerHead);
+                if (parsedInner && !this.deletedAddresses.has(parsedInner)) {
+                  headAddr = parsedInner;
+                  break;
+                }
+              }
+              continue;
+            }
+
             if (cand === 'head_ref' || cand === 'root_ref' || valStr.includes('**')) {
               const derefVal = await evalExpr(`*${cand}`);
               headAddr = this.parsePointer(derefVal);
@@ -2077,23 +2110,54 @@ export class StateExtractor {
       }
 
       // Discovered node struct type name
-      // Prefer types actually defined in the source file over hardcoded defaults.
-      // discoverNodeTypes() first adds hardcoded fallbacks, then appends source-file structs.
-      // We want the LAST entry from the source file (the actual struct in this file).
+      // Prefer types actually defined in the source file that are actual node definitions
+      // rather than wrapper container classes (like LinkedList, List, Tree, Stack, Queue).
       let nodeType: string;
       {
-        // Re-scan source file for struct/class names to find what's actually declared there
         let sourceDefinedType: string | null = null;
         try {
           if (fs.existsSync(resolvedFile)) {
             const content = fs.readFileSync(resolvedFile, 'utf8');
-            // Match struct/class definitions — pick the one that has pointer members (left/right/next)
             const structMatches = Array.from(content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\{([^}]*?)\}/gs));
+            
+            // Prioritize structs/classes explicitly named Node, ListNode, TreeNode, BSTNode, or BST_Node
             for (const sm of structMatches) {
-              const body = sm[2] || '';
-              // Must have at least one pointer member
-              if (body.includes('*')) {
-                sourceDefinedType = sm[1];
+              const name = sm[1];
+              if (/^(?:List|Tree|BST)?Node$/i.test(name) || /node/i.test(name)) {
+                sourceDefinedType = name;
+                break;
+              }
+            }
+
+            // If not found by name, pick the struct that has a pointer to its own type or has next/left/right and data
+            if (!sourceDefinedType) {
+              for (const sm of structMatches) {
+                const name = sm[1];
+                const body = sm[2] || '';
+                // Skip common container class names
+                if (/^(?:LinkedList|List|Tree|BinaryTree|BST|Stack|Queue|Solution)$/i.test(name)) {
+                  continue;
+                }
+                const hasPtr = body.includes('*') && (
+                  body.includes('next') || body.includes('left') || body.includes('right') ||
+                  body.includes(`${name}*`) || body.includes(`${name} *`)
+                );
+                if (hasPtr) {
+                  sourceDefinedType = name;
+                  break;
+                }
+              }
+            }
+
+            // Fallback: any struct with a pointer that isn't a container class
+            if (!sourceDefinedType) {
+              for (const sm of structMatches) {
+                const name = sm[1];
+                const body = sm[2] || '';
+                if (!/^(?:LinkedList|List|Tree|BinaryTree|BST|Stack|Queue|Solution)$/i.test(name) && body.includes('*')) {
+                  sourceDefinedType = name;
+                  break;
+                }
               }
             }
           }
@@ -2268,6 +2332,12 @@ export class StateExtractor {
           if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
             continue;
           }
+        }
+
+        // Ignore complex struct objects (e.g. `LinkedList list = {head = ...}`) — they are not pointers
+        const rawVal = (varInfo.value || '').trim();
+        if (rawVal.startsWith('{') && rawVal.endsWith('}')) {
+          continue;
         }
 
         const varAddr = this.parsePointer(varInfo.value);
