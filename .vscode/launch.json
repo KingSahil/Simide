@@ -2,22 +2,6 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Extension (Array Demo)",
-      "type": "extensionHost",
-      "request": "launch",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}",
-        "--disable-extension=google.antigravity",
-        "--disable-extension=google.antigravity-code-executor",
-        "${workspaceFolder}/examples/array-operations.cpp"
-      ],
-      "outFiles": [
-        "${workspaceFolder}/dist/**/*.js"
-      ],
-      "preLaunchTask": "npm: compile",
-      "internalConsoleOptions": "neverOpen"
-    },
-    {
       "name": "Run Extension (Stack Demo)",
       "type": "extensionHost",
       "request": "launch",
@@ -26,6 +10,22 @@
         "--disable-extension=google.antigravity",
         "--disable-extension=google.antigravity-code-executor",
         "${workspaceFolder}/examples/stack-operations.cpp"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile",
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Run Extension (Array Demo)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extension=google.antigravity",
+        "--disable-extension=google.antigravity-code-executor",
+        "${workspaceFolder}/examples/array-operations.cpp"
       ],
       "outFiles": [
         "${workspaceFolder}/dist/**/*.js"
