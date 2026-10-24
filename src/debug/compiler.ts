@@ -45,7 +45,12 @@ export class CppCompiler {
     return null;
   }
 
-  public static resolveSourceFile(): string | null {
+  public static resolveSourceFile(explicitPath?: string): string | null {
+    if (explicitPath && fs.existsSync(explicitPath)) {
+      this.lastActiveSourceFile = explicitPath;
+      return explicitPath;
+    }
+
     // 1. Check active text editor
     const activeEditor = vscode.window.activeTextEditor;
     if (activeEditor) {
@@ -79,14 +84,57 @@ export class CppCompiler {
       }
     }
 
-    // 3. Check tracked last active C++ source file
+    // 3. Check open tabs across all tab groups
+    try {
+      const openCppTabs: string[] = [];
+      for (const group of vscode.window.tabGroups.all) {
+        for (const tab of group.tabs) {
+          const input = tab.input as { uri?: vscode.Uri };
+          if (input?.uri?.fsPath) {
+            const p = input.uri.fsPath;
+            if (
+              (p.endsWith('.cpp') || p.endsWith('.cc') || p.endsWith('.cxx')) &&
+              fs.existsSync(p)
+            ) {
+              if (tab.isActive) {
+                this.lastActiveSourceFile = p;
+                return p;
+              }
+              openCppTabs.push(p);
+            }
+          }
+        }
+      }
+      // If stack-operations.cpp is open in tabs, prefer it!
+      const stackTab = openCppTabs.find((p) => p.includes('stack-operations.cpp'));
+      if (stackTab) {
+        this.lastActiveSourceFile = stackTab;
+        return stackTab;
+      }
+      if (openCppTabs.length > 0) {
+        this.lastActiveSourceFile = openCppTabs[0];
+        return openCppTabs[0];
+      }
+    } catch {
+      // ignore
+    }
+
+    // 4. Check tracked last active C++ source file
     if (this.lastActiveSourceFile && fs.existsSync(this.lastActiveSourceFile)) {
       return this.lastActiveSourceFile;
     }
 
-    // 4. Fallback to workspace example
+    // 5. Fallback to workspace example
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (workspaceFolders && workspaceFolders.length > 0) {
+      const stackExample = path.join(
+        workspaceFolders[0].uri.fsPath,
+        'examples',
+        'stack-operations.cpp'
+      );
+      if (fs.existsSync(stackExample)) {
+        return stackExample;
+      }
       const examplePath = path.join(
         workspaceFolders[0].uri.fsPath,
         'examples',
