@@ -7,9 +7,20 @@ import {
   PointerVariable,
   SourceLocation,
 } from '../visualization/linkedListModel';
+import { GraphSnapshot } from '../visualization/graphModel';
+import {
+  DebuggerPointerVariable,
+  discoverGraphLayout,
+  findGraphVariableDeclaration,
+  GraphStateExtractor,
+  isGraphPointerInitializedAtSource,
+  matchesGraphType,
+  parseGraphPointerValue,
+} from './graphStateExtractor';
 import { ExplanationGenerator } from '../visualization/explanationGenerator';
 
 export class StateExtractor {
+  private static graphStateExtractor = new GraphStateExtractor();
   private static addressToIdMap = new Map<string, string>();
   private static nextIdCounter = 1;
   private static activeSourceFile: string | null = null;
@@ -31,14 +42,16 @@ export class StateExtractor {
     return this.accumulatedTerminalOutput;
   }
 
-  public static appendDapOutput(_text: string): void {
-    // Intentionally no-op: pure cout/printf statements in student code generate terminal output.
-    // This completely cuts off any GDB banner, copyright, thread, or debugger chatter.
+  public static appendDapOutput(text: string, category?: string): boolean {
+    if (!text || (category !== 'stdout' && category !== 'stderr')) return false;
+    this.accumulatedTerminalOutput += text;
+    return true;
   }
 
   public static reset(): void {
     this.addressToIdMap.clear();
     this.nextIdCounter = 1;
+    this.graphStateExtractor.reset();
     this.lastPausedLine = null;
     this.deletedAddresses.clear();
     this.cachedDataField = null;
@@ -849,6 +862,247 @@ export class StateExtractor {
     }
 
     return null;
+  }
+
+  public static async extractGraphState(
+    session: vscode.DebugSession,
+    threadId: number,
+    stepNumber: number
+  ): Promise<GraphSnapshot | null> {
+    try {
+      const stackResponse = await session.customRequest('stackTrace', {
+        threadId,
+        startFrame: 0,
+        levels: 25,
+      });
+      const frames = stackResponse?.stackFrames || [];
+      const userFrames = frames.filter((frame: any) => {
+        const file = frame.source?.path || frame.source?.name || '';
+        const name = (frame.name || '').toLowerCase();
+        return this.isUserSource(file) && !name.includes('crt') && !name.includes('startup');
+      });
+      if (userFrames.length === 0) return null;
+
+      const sourceFile =
+        this.resolveFilePath(userFrames[0].source?.path || userFrames[0].source?.name) ||
+        this.resolveFilePath();
+      if (!sourceFile) return null;
+
+      const sourceText = fs.readFileSync(sourceFile, 'utf8');
+      const layout = discoverGraphLayout(sourceText);
+      if (!layout) return null;
+
+      const frameLocals: Array<{
+        frameId: number;
+        frameName: string;
+        line: number;
+        sourceText: string;
+        variables: Array<{ name: string; type?: string; value: string; scopeName: string }>;
+      }> = [];
+      for (const frame of userFrames) {
+        try {
+          const frameSourceFile =
+            this.resolveFilePath(frame.source?.path || frame.source?.name) || sourceFile;
+          const scopesResponse = await session.customRequest('scopes', { frameId: frame.id });
+          const variables: Array<{
+            name: string;
+            type?: string;
+            value: string;
+            scopeName: string;
+          }> = [];
+          for (const scope of scopesResponse?.scopes || []) {
+            const scopeName = (scope.name || '').toLowerCase();
+            if (
+              (!scopeName.includes('arg') && !scopeName.includes('param') &&
+                !scopeName.includes('local') && !scopeName.includes('var') &&
+                !scopeName.includes('global') && !scopeName.includes('static')) ||
+              scope.variablesReference <= 0
+            ) {
+              continue;
+            }
+            const variablesResponse = await session.customRequest('variables', {
+              variablesReference: scope.variablesReference,
+            });
+            for (const variable of variablesResponse?.variables || []) {
+              variables.push({
+                name: variable.name,
+                type: variable.type,
+                value: variable.value,
+                scopeName,
+              });
+            }
+          }
+          frameLocals.push({
+            frameId: frame.id,
+            frameName: frame.name || '',
+            line: frame.line || 0,
+            sourceText:
+              frameSourceFile === sourceFile
+                ? sourceText
+                : fs.readFileSync(frameSourceFile, 'utf8'),
+            variables,
+          });
+        } catch (err) {
+          console.warn(
+            `[StateExtractor] Could not inspect debugger scopes for frame '${frame.name || frame.id}'.`,
+            err
+          );
+        }
+      }
+
+      const pointerVariables: DebuggerPointerVariable[] = frameLocals.flatMap((locals) =>
+        locals.variables
+          .filter((variable) => {
+            if (
+              !variable.scopeName.includes('local') &&
+              !variable.scopeName.includes('var')
+            ) {
+              return true;
+            }
+            const pointerType = variable.type
+              ?.replace(/\b(?:const|volatile)\b/g, '')
+              .replace(/\s*\*+\s*$/, '')
+              .replace(/^struct\s+/, '')
+              .trim();
+            return !!pointerType && isGraphPointerInitializedAtSource(
+              locals.sourceText,
+              pointerType,
+              variable.name,
+              locals.line
+            );
+          })
+          .map((variable) => ({
+            name: variable.name,
+            type: variable.type,
+            value: variable.value,
+          }))
+      );
+      const createEvaluator = (frameId: number) => async (
+        expression: string
+      ): Promise<string | null> => {
+        try {
+          const response = await session.customRequest('evaluate', {
+            expression,
+            frameId,
+            context: 'watch',
+          });
+          return response?.result ?? null;
+        } catch {
+          return null;
+        }
+      };
+      const extractWithoutRegistry = async (
+        frameId: number,
+        source: SourceLocation,
+        explanation: string
+      ): Promise<GraphSnapshot> => {
+        const snapshot = await this.graphStateExtractor.extract(
+          layout,
+          '',
+          false,
+          stepNumber,
+          createEvaluator(frameId),
+          pointerVariables,
+          source,
+          true
+        );
+        return {
+          ...snapshot,
+          isComplete: false,
+          explanation:
+            snapshot.graph.vertices.length === 0 && snapshot.graph.edges.length === 0 &&
+            explanation !== 'Graph not initialized yet.'
+              ? 'Graph registry unavailable.'
+              : explanation,
+        };
+      };
+
+      let pendingGraph: {
+        name: string;
+        declaration: ReturnType<typeof findGraphVariableDeclaration>;
+        line: number;
+        frameId: number;
+        frameName: string;
+      } | undefined;
+      for (const frame of frameLocals) {
+        const graphVariable = frame.variables.find((variable) =>
+          matchesGraphType(variable.type, layout.graphType)
+        );
+        if (!graphVariable) continue;
+
+        const declaration = findGraphVariableDeclaration(
+          sourceText,
+          layout.graphType,
+          graphVariable.name,
+          frame.line
+        );
+        if (
+          !declaration ||
+          !declaration.initialized ||
+          frame.line <= declaration.line
+        ) {
+          pendingGraph = {
+            name: graphVariable.name,
+            declaration,
+            line: frame.line,
+            frameId: frame.frameId,
+            frameName: frame.frameName,
+          };
+          continue;
+        }
+
+        const graphIsPointer = graphVariable.type?.includes('*') ?? false;
+        const graphPointer = graphIsPointer
+          ? parseGraphPointerValue(graphVariable.value)
+          : { valid: true, address: 'object' };
+        if (!graphPointer.valid) {
+          console.warn(
+            `[StateExtractor] Could not read Graph pointer variable '${graphVariable.name}'.`
+          );
+          continue;
+        }
+
+        const source: SourceLocation = {
+          file: sourceFile,
+          line: userFrames[0].line,
+          functionName: userFrames[0].name || frame.frameName,
+        };
+
+        return this.graphStateExtractor.extract(
+          layout,
+          graphVariable.name,
+          graphIsPointer,
+          stepNumber,
+          createEvaluator(frame.frameId),
+          pointerVariables,
+          source,
+          graphIsPointer && graphPointer.address === null
+        );
+      }
+      if (pendingGraph) {
+        return extractWithoutRegistry(
+          pendingGraph.frameId,
+          {
+            file: sourceFile,
+            line: userFrames[0].line,
+            functionName: userFrames[0].name || pendingGraph.frameName,
+          },
+          'Graph not initialized yet.'
+        );
+      }
+      return extractWithoutRegistry(
+        frameLocals[0]?.frameId ?? userFrames[0].id,
+        {
+          file: sourceFile,
+          line: userFrames[0].line,
+          functionName: userFrames[0].name || frameLocals[0]?.frameName || '',
+        },
+        'Graph registry unavailable; safely readable typed vertices are shown.'
+      );
+    } catch (err) {
+      console.error('[StateExtractor] Graph extraction failed:', err);
+      return null;
+    }
   }
 
   public static async extractState(

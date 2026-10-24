@@ -1,14 +1,23 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { ExtensionMessage, WebviewMessage } from './messages';
+import {
+  createUpdateStateMessage,
+  ExtensionMessage,
+  WebviewMessage,
+} from './messages';
 import { CppCompiler } from '../debug/compiler';
 import { DebugSessionManager } from '../debug/debugSessionManager';
 import { DebugTrackerFactory, DebuggerStopEvent } from '../debug/debugAdapterTracker';
 import { ExecutionController } from '../debug/executionController';
 import { StateExtractor } from '../debug/stateExtractor';
+import {
+  describeGraphSnapshotChange,
+  preservePreviousGraphObjects,
+} from '../debug/graphStateExtractor';
 import { SnapshotManager } from '../visualization/snapshotManager';
-import { LinkedListSnapshot } from '../visualization/linkedListModel';
+import { isGraphSnapshot, VisualizationSnapshot } from '../visualization/graphModel';
+import { selectVisualizationMode } from './visualizationMode';
 
 export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'debug-mentor.sidebar';
@@ -96,18 +105,120 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           // Ignore and continue
         }
 
-        const prev = this.snapshotManager.getLatestSnapshot();
-        const snapshot = await StateExtractor.extractState(
-          event.session,
-          event.threadId,
-          this.stepCounter++,
-          prev
-        );
+        const previousSnapshot = this.snapshotManager.getLatestSnapshot();
+        let snapshot: VisualizationSnapshot | null = null;
+        let mode: 'graph' | 'linked_list' = 'linked_list';
+        const sourceFile = StateExtractor.resolveFilePath();
+
+        if (sourceFile) {
+          try {
+            mode = selectVisualizationMode(fs.readFileSync(sourceFile, 'utf8'));
+          } catch (error) {
+            console.warn(
+              `[LinkedListViewProvider] Could not inspect '${sourceFile}' for graph registry types.`,
+              error
+            );
+          }
+        }
+
+        const stepNumber = this.stepCounter++;
+        if (mode === 'graph') {
+          try {
+            const extractedGraphSnapshot = await StateExtractor.extractGraphState(
+              event.session,
+              event.threadId,
+              stepNumber
+            );
+            if (extractedGraphSnapshot) {
+              const graphSnapshot = preservePreviousGraphObjects(
+                previousSnapshot && isGraphSnapshot(previousSnapshot)
+                  ? previousSnapshot
+                  : undefined,
+                extractedGraphSnapshot
+              );
+              const graphChange = describeGraphSnapshotChange(
+                previousSnapshot && isGraphSnapshot(previousSnapshot)
+                  ? previousSnapshot
+                  : undefined,
+                graphSnapshot
+              );
+              snapshot = {
+                ...graphSnapshot,
+                ...graphChange,
+                terminalOutput: StateExtractor.getAccumulatedTerminalOutput(),
+              };
+            } else {
+              console.warn(
+                '[LinkedListViewProvider] Graph source detected, but no supported graph state was available at this debugger stop.'
+              );
+              if (previousSnapshot && isGraphSnapshot(previousSnapshot)) {
+                try {
+                  const stackResponse = await event.session.customRequest('stackTrace', {
+                    threadId: event.threadId,
+                    startFrame: 0,
+                    levels: 25,
+                  });
+                  const hasUserFrame = (stackResponse?.stackFrames || []).some((frame: any) => {
+                    const framePath = frame.source?.path || frame.source?.name || '';
+                    const frameName = (frame.name || '').toLowerCase();
+                    return (
+                      StateExtractor.isUserSource(framePath) &&
+                      !frameName.includes('crt') &&
+                      !frameName.includes('startup')
+                    );
+                  });
+                  if (!hasUserFrame) {
+                    snapshot = {
+                      ...previousSnapshot,
+                      stepNumber,
+                      explanation: 'Program execution completed. This is the final graph state.',
+                      changeType: 'final',
+                      terminalOutput: StateExtractor.getAccumulatedTerminalOutput(),
+                      isHistorical: false,
+                    };
+                  }
+                } catch (error) {
+                  console.warn(
+                    '[LinkedListViewProvider] Could not determine whether graph execution completed.',
+                    error
+                  );
+                }
+              }
+            }
+          } catch (error) {
+            console.error('[LinkedListViewProvider] Graph snapshot extraction failed.', error);
+          }
+        } else {
+          const previousListSnapshot =
+            previousSnapshot && !isGraphSnapshot(previousSnapshot)
+              ? previousSnapshot
+              : undefined;
+          snapshot = await StateExtractor.extractState(
+            event.session,
+            event.threadId,
+            stepNumber,
+            previousListSnapshot
+          );
+        }
 
         if (snapshot) {
           this.snapshotManager.addSnapshot(snapshot);
           this.broadcastState(snapshot);
         }
+      })
+    );
+
+    this.disposables.push(
+      DebugTrackerFactory.onOutput((session, output, category) => {
+        const activeSession = DebugSessionManager.getActiveSession();
+        if (!activeSession || activeSession.id !== session.id) return;
+        if (!StateExtractor.appendDapOutput(output, category)) return;
+
+        this.postMessage({
+          command: 'terminalOutput',
+          output,
+          fullOutput: StateExtractor.getAccumulatedTerminalOutput(),
+        });
       })
     );
 
@@ -436,7 +547,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   }
 
   private updateEditorActiveLineHighlight(
-    snapshot: LinkedListSnapshot,
+    snapshot: VisualizationSnapshot,
     openIfNotVisible: boolean = false
   ): void {
     const line = snapshot.source?.line;
@@ -485,7 +596,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private broadcastState(snapshot: LinkedListSnapshot): void {
+  private broadcastState(snapshot: VisualizationSnapshot): void {
     this.reveal();
     this.updateEditorActiveLineHighlight(snapshot, true);
     const isHistorical = !!snapshot.isHistorical;
@@ -493,19 +604,22 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     const isPaused = ExecutionController.status.isPaused;
     const isRunning = ExecutionController.status.isRunning;
 
-    this.postMessage({
-      command: 'updateState',
-      snapshot,
-      canStepNext: isHistorical ? true : ((!isFinal || !!DebugSessionManager.getActiveSession()) && isPaused),
-      canStepPrev: this.snapshotManager.canGoPrev(),
-      canContinue: isPaused && !isHistorical && (!isFinal || !!DebugSessionManager.getActiveSession()),
-      canPause: isRunning,
-      canRestart: true,
-      isPaused,
-      isRunning,
-      totalSnapshots: this.snapshotManager.totalSnapshots,
-      currentSnapshotIndex: this.snapshotManager.currentSnapshotIndex,
-    });
+    this.postMessage(
+      createUpdateStateMessage(snapshot, {
+        canStepNext: isHistorical
+          ? true
+          : ((!isFinal || !!DebugSessionManager.getActiveSession()) && isPaused),
+        canStepPrev: this.snapshotManager.canGoPrev(),
+        canContinue:
+          isPaused && !isHistorical && (!isFinal || !!DebugSessionManager.getActiveSession()),
+        canPause: isRunning,
+        canRestart: true,
+        isPaused,
+        isRunning,
+        totalSnapshots: this.snapshotManager.totalSnapshots,
+        currentSnapshotIndex: this.snapshotManager.currentSnapshotIndex,
+      })
+    );
   }
 
   private postMessage(message: ExtensionMessage): void {

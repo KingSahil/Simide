@@ -609,6 +609,77 @@ body.is-canvas-panning * {
   max-width: 38px;
 }
 
+.graph-vertex-card {
+  position: absolute;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 54px;
+  box-sizing: border-box;
+  border: 2px solid #374151;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #1f2937 0%, #111827 100%);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  z-index: 10;
+  user-select: none;
+}
+
+.graph-vertex-card:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 0 16px rgba(59, 130, 246, 0.4);
+}
+
+.graph-vertex-card.dragging {
+  cursor: grabbing !important;
+  z-index: 100 !important;
+  border-color: #60a5fa;
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.6);
+}
+
+.graph-vertex-card.visiting {
+  border-color: #10b981;
+  background: radial-gradient(circle at 35% 35%, #064e3b 0%, #022c22 100%);
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.65);
+}
+
+.graph-vertex-card.new-created {
+  border-color: #36c779;
+  box-shadow: 0 0 16px rgba(54, 199, 121, 0.55);
+}
+
+.graph-vertex-card.detached {
+  border-style: dashed;
+  border-color: #f59e0b;
+}
+
+.graph-vertex-value {
+  max-width: 64px;
+  overflow: hidden;
+  color: #f9fafb;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-edge-label {
+  fill: #c9d1d9;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  paint-order: stroke;
+  stroke: #0d1117;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
 /* Head & Local Pointer Badges (Clean name pill without Node* or port dots) */
 .graph-badge-node {
   position: absolute;
