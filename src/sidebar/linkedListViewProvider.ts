@@ -17,6 +17,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   private snapshotManager = new SnapshotManager();
   private stepCounter = 1;
   private disposables: vscode.Disposable[] = [];
+  private starting = false;
 
   constructor(private readonly extensionUri: vscode.Uri) {
     this.registerDebugListeners();
@@ -300,6 +301,25 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async startVisualization(): Promise<void> {
+    if (this.starting) return;
+    this.starting = true;
+    try {
+      await this.prepareVisualization();
+    } catch (error) {
+      await this.restoreNativeStackFrameHighlight();
+      ExecutionController.setPaused(true);
+      this.postMessage({
+        command: 'error',
+        message: 'Could not start simulation',
+        details: error instanceof Error ? error.message : String(error),
+        canRetry: true,
+      });
+    } finally {
+      this.starting = false;
+    }
+  }
+
+  private async prepareVisualization(): Promise<void> {
     this.reveal();
     await vscode.commands.executeCommand('workbench.action.closePanel');
     if (DebugSessionManager.getActiveSession()) {

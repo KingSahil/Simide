@@ -31,6 +31,34 @@ This guide is specifically designed for **AI coding assistants** and automated t
 
 ## 3. Critical Architecture Gotchas
 
+### Container Classes Are Not Node Records
+
+Keep node identity/type selection tied to the record that supplies the link fields.
+A `LinkedList` object containing `Node* head` must not replace `Node` as the traversal
+cast type merely because it appears later in the file. Resolve object-owned heads
+through DAP member variables (including private access groups) or member evaluation
+in the owning frame. Never interpret a container object's address as a node address.
+A verified null head is different from a failed read and must not revive a prior head.
+`test/oopExtraction.test.ts` and the real GDB lifecycle test cover these cases.
+
+### Intentional Executed-Line Highlighting — Owner Requirement
+
+SimIDE highlights the line whose execution produced the displayed snapshot: after
+stepping, the previous debugger stop location. The native debugger arrow may already
+point at the next pending instruction. This difference is intentional teaching behavior.
+Preserve it in live stepping, recursive returns, and historical snapshots. Do not
+switch the highlight to the next pending line when fixing failed debugger reads.
+The regression in `test/stateExtraction.test.ts` checks this distinction.
+
+### Array Comparison Arrows
+
+For bubble sort, show `j` and `j+1`, the indices of the compared adjacent cells.
+`i` is the pass counter and `temp` stores an element value; neither is an array
+index arrow in that example. Use actual subscript expressions, including supported
+constant offsets, rather than integer magnitude or a whitelist of variable names.
+Keep the original canvas layout; no separate scalar-variable panel was requested.
+`test/arrayIndices.test.ts` checks initialization, bounds, movement, and traversal.
+
 ### Gotcha 1: Dynamic Pointer & Function Discovery
 `StateExtractor` does not hardcode variable names. It reads the C++ source lines and matches pointer declarations and functions:
 - User-defined functions: discovered via `getUserDefinedFunctions()`, allowing stepping into `printList`, `reverseList`, `push`, `deleteNode`, and class methods.

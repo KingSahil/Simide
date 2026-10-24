@@ -21,8 +21,9 @@ async function runTests() {
   assert.ok(compiler, 'Compiler (g++ or clang++) should be detected in PATH');
   console.log(`  ✓ Detected compiler: ${compiler}`);
 
-  const samplePath = path.resolve(process.cwd(), 'examples', 'linked-list.cpp');
-  assert.ok(fs.existsSync(samplePath), 'examples/linked-list.cpp must exist');
+  // A stable fixture: examples/linked-list.cpp is intentionally editable by learners.
+  const samplePath = path.resolve(process.cwd(), 'test', 'fixtures', 'bst-reference.cpp');
+  assert.ok(fs.existsSync(samplePath), 'The BST reference fixture must exist');
 
   const compileResult = await CppCompiler.compile(samplePath);
   assert.strictEqual(compileResult.success, true, `Compilation should succeed: ${compileResult.errorMessage}`);

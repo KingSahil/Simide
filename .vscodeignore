@@ -6,6 +6,7 @@ agent/**
 src/**
 test/**
 docs/**
+devpost/**
 examples/**
 .gitignore
 tsconfig.json
@@ -13,4 +14,9 @@ esbuild.js
 skills-lock.json
 **/*.ts
 **/*.map
+dist/**
+!dist/extension.js
+!dist/webview.js
+!dist/webview.css
+!dist/webview.html
 node_modules/**

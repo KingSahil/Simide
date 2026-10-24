@@ -70,7 +70,8 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "node esbuild.js",
+    "typecheck": "tsc --noEmit",
+    "compile": "npm run typecheck && node esbuild.js",
     "watch": "node esbuild.js --watch",
     "test": "node test/runAll.js"
   },

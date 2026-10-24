@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { execFile, execSync } from 'child_process';
 import { promisify } from 'util';
 import { DebugSessionManager } from '../src/debug/debugSessionManager';
+import { CppCompiler } from '../src/debug/compiler';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,8 +26,8 @@ function getWindowsShortPath(longPath: string): string {
 async function testGdbExecution() {
   console.log('=== Running Real GDB Runtime Stepping & State Extraction Test ===\n');
 
-  const debugMentorDir = getWindowsShortPath(path.resolve(process.cwd(), 'examples/.debug-mentor'));
-  const exeFile = 'linked-list.exe';
+  const debugMentorDir = getWindowsShortPath(path.resolve(process.cwd(), 'test/fixtures/.debug-mentor'));
+  const exeFile = 'bst-reference.exe';
   const exePath = path.join(debugMentorDir, exeFile);
   assert.ok(fs.existsSync(exePath), 'Compiled executable must exist');
 
@@ -254,11 +255,99 @@ async function testArrayOperationsGdb() {
   }
 }
 
+async function testBstRecursiveReturnGdb() {
+  const debugMentorDir = getWindowsShortPath(path.resolve('examples/.debug-mentor'));
+  const source = path.resolve('examples/bst-traversals.cpp');
+  const returnLine = fs.readFileSync(source, 'utf8').split('\n')
+    .findIndex(line => line.trim() === 'return root;') + 1;
+  assert.ok(returnLine > 0);
+  const debuggerInfo = await DebugSessionManager.findDebuggerPath();
+  assert.ok(debuggerInfo);
+  const scriptPath = path.join(debugMentorDir, 'test_bst_return_gdb.txt');
+  const fields = 'root->data, root->left->data, root->left->right->data, root->right->data, root->right->left->data';
+  fs.writeFileSync(scriptPath, [
+    `break bst-traversals.cpp:${returnLine} if root != 0 && root->data == 50`,
+    'ignore 1 3', // Stop at the outer return of the final insertion (60).
+    'run',
+    `printf "BEFORE_RETURN:%d,%d,%d,%d,%d\\n", ${fields}`,
+    'finish',
+    `printf "AFTER_RETURN:%d,%d,%d,%d,%d\\n", ${fields}`,
+    'quit',
+  ].join('\n'));
+  try {
+    const { stdout } = await execFileAsync(debuggerInfo.path,
+      ['-batch', '-x', path.basename(scriptPath), 'bst-traversals.exe'],
+      { cwd: debugMentorDir, timeout: 30000 });
+    assert.ok(stdout.includes('BEFORE_RETURN:50,30,40,70,60'), stdout);
+    assert.ok(stdout.includes('AFTER_RETURN:50,30,40,70,60'), stdout);
+    console.log('✓ Real GDB verified all five BST values and child links before and after recursive return');
+  } finally {
+    // Windows may briefly retain the script handle after GDB exits.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        fs.unlinkSync(scriptPath);
+        break;
+      } catch (error: any) {
+        if (!['EBUSY', 'EPERM'].includes(error.code) || attempt >= 4) throw error;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+  }
+}
+
+async function testOopLifecycleGdb() {
+  const source = path.resolve('test/fixtures/oop-list-lifecycle.cpp');
+  const compiled = await CppCompiler.compile(source);
+  assert.ok(compiled.success, compiled.errorMessage);
+  const exe = compiled.executablePath!;
+  const directory = getWindowsShortPath(path.dirname(exe));
+  const debuggerInfo = await DebugSessionManager.findDebuggerPath();
+  assert.ok(debuggerInfo);
+  const scriptPath = path.join(directory, 'test_oop_lifecycle.txt');
+  fs.writeFileSync(scriptPath, [
+    'break LinkedList::printList',
+    'run',
+    'up',
+    'printf "PRIVATE_HEAD:%d\\n", list.head->data',
+    'down',
+    'printf "APPENDED:%d,%d,%d\\n", this->head->data, this->head->next->data, this->head->next->next->data',
+    'continue',
+    'printf "INSERTED:%d,%d,%d,%d\\n", this->head->data, this->head->next->data, this->head->next->next->data, this->head->next->next->next->data',
+    'continue',
+    'printf "DELETED:%d,%d,%d\\n", this->head->data, this->head->next->data, this->head->next->next->data',
+    'break LinkedList::~LinkedList',
+    'continue',
+    'set $owner = this',
+    'finish',
+    'printf "CLEANED:%d\\n", ($owner->head == 0)',
+    'quit',
+  ].join('\n'));
+  try {
+    const { stdout } = await execFileAsync(debuggerInfo.path,
+      ['-batch', '-x', path.basename(scriptPath), path.basename(exe)],
+      { cwd: directory, timeout: 30000 });
+    for (const marker of ['PRIVATE_HEAD:10', 'APPENDED:10,20,30', 'INSERTED:5,10,20,30', 'DELETED:5,10,30', 'CLEANED:1']) {
+      assert.ok(stdout.includes(marker), `${marker}\n${stdout}`);
+    }
+    console.log('✓ Real GDB verified private class head, append, insertion, deletion, and destructor cleanup');
+  } finally {
+    for (let attempt = 0; ; attempt++) {
+      try { fs.unlinkSync(scriptPath); break; }
+      catch (error: any) {
+        if (!['EBUSY', 'EPERM'].includes(error.code) || attempt >= 4) throw error;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+  }
+}
+
 async function runAllGdbTests() {
   await testGdbExecution();
   await testLeetcodeReverseGdb();
   await testBstTraversalsGdb();
   await testArrayOperationsGdb();
+  await testBstRecursiveReturnGdb();
+  await testOopLifecycleGdb();
 }
 
 runAllGdbTests().catch((err) => {
