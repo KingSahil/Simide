@@ -1986,7 +1986,7 @@ export class StateExtractor {
       }
 
       // 5. Track Active Pointer Variables & Traverse any Disconnected Chains
-      const activePointers: PointerVariable[] = [];
+      activePointers = [];
 
       // Collect root / head pointer
       if (hasHead) {
@@ -2022,48 +2022,28 @@ export class StateExtractor {
           }
         }
 
-        const varAddr = this.parsePointer(varInfo.value);
+        const isDeclaredPointer = varDecls.has(varName);
+        // A pointer/reference to an ostream, buffer, or container is not a Node*.
+        // In particular, debugger return values after cout must not be traversed.
+        const pointedType = (varInfo.type || '')
+          .replace(/\b(?:const|volatile|struct|class)\b|[*&]/g, '').trim();
+        const isPointerType = varInfo.type?.trim()
+          ? varInfo.type.includes('*') && (pointedType === nodeType || pointedType.endsWith('::' + nodeType))
+          : isDeclaredPointer;
+        let varAddr = this.parsePointer(varInfo.value);
+        if (isPointerType && varInfo.type) {
+          const depth = (varInfo.type.match(/\*/g) || []).length;
+          if (depth > 1) {
+            // Node** stores a pointer slot, not a node. Resolve the slot first.
+            if (!/^[a-zA-Z_]\w*$/.test(varName) || depth > 3) continue;
+            const value = await evalExpr(`${'*'.repeat(depth - 1)}${varName}`);
+            if (value === null) continue;
+            varAddr = this.parsePointer(value);
+          }
+        }
         const isFreed = varAddr ? this.deletedAddresses.has(varAddr) : false;
         const targetId = varAddr && !isFreed ? this.getStableId(varAddr) : null;
-
         const isTargetingKnownNode = varAddr ? allDiscoveredNodes.has(varAddr) : false;
-        const isDeclaredPointer = varDecls.has(varName);
-        const isPointerType =
-          isDeclaredPointer ||
-          (varInfo.type && (varInfo.type.includes('*') || varInfo.type.includes('&'))) ||
-          varName === 'temp' ||
-          varName === 'prev' ||
-          varName === 'curr' ||
-          varName === 'current' ||
-          varName === 'forward' ||
-          varName === 'next' ||
-          varName === 'node' ||
-          varName === 'first' ||
-          varName === 'second' ||
-          varName === 'third' ||
-          varName === 'tail' ||
-          varName === 'last' ||
-          varName === 'p' ||
-          varName === 'q' ||
-          varName === 'l1' ||
-          varName === 'l2' ||
-          varName === 'dummy' ||
-          varName === 'fast' ||
-          varName === 'slow' ||
-          varName === 'loc' ||
-          varName === 'par' ||
-          varName === 'parent' ||
-          varName === 'child' ||
-          varName === 'successor' ||
-          varName === 'parSuccessor' ||
-          varName === 'pred' ||
-          varName === 'predecessor' ||
-          varName === 'succ' ||
-          varName === 'newNode' ||
-          varName === 'new_node' ||
-          varName === 'target' ||
-          varName === 'ptr' ||
-          varName === 'cur';
 
         if (isPointerType || isTargetingKnownNode) {
           activePointers.push({
@@ -2159,7 +2139,7 @@ export class StateExtractor {
       }
 
       // Check active visiting node during traversals (e.g. inorder, preorder, postorder)
-      let activeVisitingNodeId: string | null = null;
+      activeVisitingNodeId = null;
       const activeVar =
         localVars['root'] ||
         localVars['node'] ||
