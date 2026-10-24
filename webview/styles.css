@@ -977,6 +977,13 @@ body.is-canvas-panning * {
   box-shadow: 0 2px 8px rgba(218, 54, 51, 0.5);
 }
 
+.array-pointer-pill.ptr-top {
+  background: linear-gradient(135deg, #0066ff, #00d2ff);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 4px 14px rgba(0, 210, 255, 0.55), 0 0 8px rgba(0, 102, 255, 0.4);
+}
+
 .ptr-arrow {
   font-size: 9px;
   font-weight: 800;

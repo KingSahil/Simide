@@ -270,6 +270,19 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       let callsUserFunction = false;
       if (!isDefHeader) {
         for (const fnName of userFunctions) {
+          // Skip trivial 1-line getter/predicate checks so execution stays inside the main algorithm/method
+          const isTrivialHelper = [
+            'isfull',
+            'isempty',
+            'peek',
+            'top',
+            'size',
+          ].includes(fnName.toLowerCase());
+
+          if (isTrivialHelper) {
+            continue;
+          }
+
           const regex = new RegExp(`\\b${fnName}\\s*\\(`);
           if (regex.test(lineText)) {
             callsUserFunction = true;

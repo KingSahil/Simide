@@ -9,6 +9,7 @@ import {
   IndexPointer,
   LinkedListSnapshot,
   ListNode,
+  StackModel,
 } from '../src/visualization/linkedListModel';
 import { DebugSessionManager } from '../src/debug/debugSessionManager';
 
@@ -450,6 +451,90 @@ async function runTests() {
   assert.ok(arrayPtrRes.explanation.includes("Index pointer 'i' moved to index 3"));
   console.log(`  ✓ Array Pointer Moved state: "${arrayPtrRes.explanation}"`);
 
+  // State 17 (Stack): Initialization
+  const stackModelInit: StackModel = {
+    name: 's',
+    elements: [],
+    topIndex: -1,
+    capacity: 6,
+    activeMethod: 'init',
+  };
+  const stackInitRes = ExplanationGenerator.generate(
+    [], null, undefined, true, [], null, '', 'stack', null, undefined, undefined, undefined,
+    stackModelInit
+  );
+  assert.strictEqual(stackInitRes.changeType, 'stack_initialized');
+  assert.ok(stackInitRes.explanation.includes('initialized to empty'));
+  console.log(`  ✓ Stack Initialized state: "${stackInitRes.explanation}"`);
+
+  // State 18 (Stack): Push 10
+  const stackSnap1: LinkedListSnapshot = {
+    stepNumber: 1,
+    structureType: 'stack',
+    hasHead: true,
+    headId: null,
+    nodes: [],
+    stack: stackModelInit,
+    explanation: stackInitRes.explanation,
+    changeType: 'stack_initialized',
+  };
+  const stackModelPush: StackModel = {
+    name: 's',
+    elements: [{ id: 'elem_0', index: 0, value: 10, isTop: true, isPushing: true }],
+    topIndex: 0,
+    capacity: 6,
+    activeMethod: 'push',
+    methodParam: 10,
+  };
+  const stackPushRes = ExplanationGenerator.generate(
+    [], null, stackSnap1, true, [], null, '', 'stack', null, undefined, undefined, undefined,
+    stackModelPush
+  );
+  assert.strictEqual(stackPushRes.changeType, 'stack_push');
+  assert.ok(stackPushRes.explanation.includes('Pushed value 10'));
+  console.log(`  ✓ Stack Push state: "${stackPushRes.explanation}"`);
+
+  // State 19 (Stack): Peek
+  const stackSnap2: LinkedListSnapshot = {
+    stepNumber: 2,
+    structureType: 'stack',
+    hasHead: true,
+    headId: null,
+    nodes: [],
+    stack: stackModelPush,
+    explanation: stackPushRes.explanation,
+    changeType: 'stack_push',
+  };
+  const stackModelPeek: StackModel = {
+    ...stackModelPush,
+    activeMethod: 'peek',
+    methodReturnValue: 10,
+  };
+  const stackPeekRes = ExplanationGenerator.generate(
+    [], null, stackSnap2, true, [], null, '', 'stack', null, undefined, undefined, undefined,
+    stackModelPeek
+  );
+  assert.strictEqual(stackPeekRes.changeType, 'stack_peek');
+  assert.ok(stackPeekRes.explanation.includes('Peeked at top'));
+  console.log(`  ✓ Stack Peek state: "${stackPeekRes.explanation}"`);
+
+  // State 20 (Stack): Pop
+  const stackModelPop: StackModel = {
+    name: 's',
+    elements: [],
+    topIndex: -1,
+    capacity: 6,
+    activeMethod: 'pop',
+    methodReturnValue: 10,
+  };
+  const stackPopRes = ExplanationGenerator.generate(
+    [], null, stackSnap2, true, [], null, '', 'stack', null, undefined, undefined, undefined,
+    stackModelPop
+  );
+  assert.strictEqual(stackPopRes.changeType, 'stack_pop');
+  assert.ok(stackPopRes.explanation.includes('Popped value 10'));
+  console.log(`  ✓ Stack Pop state: "${stackPopRes.explanation}"`);
+
   // Test 4: SnapshotManager historical navigation
   console.log('\n[Test 4] Testing SnapshotManager Non-Destructive History...');
   const manager = new SnapshotManager();
@@ -540,6 +625,11 @@ async function runTests() {
   assert.strictEqual(arrDecls[0].size, 5);
   console.log('  ✓ Verified array structure discovery & declaration parsing for array-operations.cpp');
 
+  const stackOpsPath = path.resolve(process.cwd(), 'examples', 'stack-operations.cpp');
+  const structInfoStack = StateExtractor.parseStructMembers(stackOpsPath);
+  assert.strictEqual(structInfoStack.structureType, 'stack');
+  console.log('  ✓ Verified stack structure discovery for stack-operations.cpp');
+
   // User defined functions discovery (including free functions and class member methods)
   const leetcodeFns = StateExtractor.getUserDefinedFunctions(leetcodePath);
   assert.ok(leetcodeFns.has('reverseList'), 'Must detect reverseList');
@@ -589,8 +679,8 @@ async function runTests() {
   console.log('  ✓ Verified multi-pointer parameters (loc, par, child, successor) and initialization checks');
 
   // Test 6: Compiling all internet examples
-  console.log('\n[Test 6] Testing Compilation of All Internet Examples, BST & Arrays...');
-  for (const file of [leetcodePath, gfgPath, oopPath, bstPath, arrayOpsPath]) {
+  console.log('\n[Test 6] Testing Compilation of All Internet Examples, BST, Arrays & Stack...');
+  for (const file of [leetcodePath, gfgPath, oopPath, bstPath, arrayOpsPath, stackOpsPath]) {
     const res = await CppCompiler.compile(file);
     assert.strictEqual(res.success, true, `Should compile ${path.basename(file)}: ${res.errorMessage}`);
     console.log(`  ✓ Successfully compiled ${path.basename(file)}`);

@@ -4,6 +4,7 @@ import {
   LinkedListSnapshot,
   ListNode,
   PointerVariable,
+  StackModel,
   StructureType,
 } from './linkedListModel';
 
@@ -20,8 +21,108 @@ export class ExplanationGenerator {
     activeVisitingNodeId?: string | null,
     currentFuncName?: string,
     arrays: ArrayVariable[] = [],
-    indexPointers: IndexPointer[] = []
+    indexPointers: IndexPointer[] = [],
+    stack?: StackModel
   ): { explanation: string; changeType: LinkedListSnapshot['changeType'] } {
+    if (structureType === 'stack') {
+      if (!hasHead || !stack) {
+        return {
+          explanation: 'Program paused at main(). Click Next to initialize the stack.',
+          changeType: 'init',
+        };
+      }
+
+      if (printedInStep) {
+        const cleanPrint = printedInStep.replace(/\n$/, '');
+        const totalClean = (accumulatedOutput || '').trim();
+        const summaryText = totalClean.length > 0 ? ` Program output: ${totalClean}` : '';
+        return {
+          explanation: `Printed to terminal: "${cleanPrint}".${summaryText}`,
+          changeType: 'print',
+        };
+      }
+
+      if (stack.isOverflow) {
+        return {
+          explanation: `Stack Overflow! Cannot push: stack '${stack.name}' is full (${stack.elements.length}/${stack.capacity}).`,
+          changeType: 'step',
+        };
+      }
+
+      if (stack.isUnderflow) {
+        return {
+          explanation: `Stack Underflow! Cannot ${stack.activeMethod || 'pop'}: stack '${stack.name}' is empty.`,
+          changeType: 'step',
+        };
+      }
+
+      if (stack.activeMethod === 'push') {
+        const pVal = stack.methodParam !== undefined ? stack.methodParam : (stack.elements[stack.topIndex]?.value ?? '');
+        return {
+          explanation: `Pushed value ${pVal} onto the stack. Top pointer incremented to index ${stack.topIndex} (${stack.elements.length}/${stack.capacity} elements).`,
+          changeType: 'stack_push',
+        };
+      }
+
+      if (stack.activeMethod === 'pop') {
+        const retVal =
+          stack.methodReturnValue !== undefined
+            ? stack.methodReturnValue
+            : (previousSnapshot?.stack?.elements[previousSnapshot.stack.topIndex]?.value ?? '');
+        const topDesc = stack.topIndex >= 0 ? `Top pointer moved to index ${stack.topIndex}.` : 'The stack is now empty (top: -1).';
+        return {
+          explanation: `Popped value ${retVal} from top of the stack. ${topDesc}`,
+          changeType: 'stack_pop',
+        };
+      }
+
+      if (stack.activeMethod === 'peek') {
+        const topVal =
+          stack.methodReturnValue !== undefined
+            ? stack.methodReturnValue
+            : (stack.elements[stack.topIndex]?.value ?? 'empty');
+        return {
+          explanation: `Peeked at top of the stack: value is ${topVal} (top index: ${stack.topIndex}). Stack remains unchanged.`,
+          changeType: 'stack_peek',
+        };
+      }
+
+      const prevStack = previousSnapshot?.stack;
+      if (!prevStack || previousSnapshot?.structureType !== 'stack') {
+        if (stack.elements.length === 0) {
+          return {
+            explanation: `Stack '${stack.name}' initialized to empty (top: -1, capacity: ${stack.capacity}).`,
+            changeType: 'stack_initialized',
+          };
+        }
+        return {
+          explanation: `Initialized stack '${stack.name}' with ${stack.elements.length} element(s). Top index: ${stack.topIndex}.`,
+          changeType: 'stack_initialized',
+        };
+      }
+
+      if (stack.elements.length > prevStack.elements.length) {
+        const topElem = stack.elements[stack.topIndex];
+        return {
+          explanation: `Pushed value ${topElem?.value ?? ''} onto the stack. Top pointer incremented to index ${stack.topIndex}.`,
+          changeType: 'stack_push',
+        };
+      }
+
+      if (stack.elements.length < prevStack.elements.length) {
+        const poppedVal = prevStack.elements[prevStack.topIndex]?.value ?? '';
+        const topDesc = stack.topIndex >= 0 ? `Top pointer moved to index ${stack.topIndex}.` : 'The stack is now empty (top: -1).';
+        return {
+          explanation: `Popped value ${poppedVal} from top of the stack. ${topDesc}`,
+          changeType: 'stack_pop',
+        };
+      }
+
+      return {
+        explanation: `Stack '${stack.name}' has ${stack.elements.length} element(s). Top is at index ${stack.topIndex}.`,
+        changeType: 'step',
+      };
+    }
     if (structureType === 'array') {
       if (!hasHead || arrays.length === 0) {
         return {
