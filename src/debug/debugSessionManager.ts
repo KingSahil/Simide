@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { execFile } from 'child_process';
+import { execFile, execSync } from 'child_process';
 import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
@@ -9,6 +9,21 @@ const execFileAsync = promisify(execFile);
 export class DebugSessionManager {
   private static activeSession: vscode.DebugSession | null = null;
   private static cachedGdbPath: string | null = null;
+
+  public static getWindowsShortPath(longPath: string): string {
+    if (process.platform !== 'win32' || !longPath) {
+      return longPath;
+    }
+    try {
+      const shortPath = execSync(`cmd.exe /c for %I in ("${longPath}") do @echo %~sI`, { encoding: 'utf8' }).trim();
+      if (shortPath && fs.existsSync(shortPath)) {
+        return shortPath;
+      }
+    } catch {
+      // fallback
+    }
+    return longPath;
+  }
 
   public static getActiveSession(): vscode.DebugSession | null {
     return this.activeSession;
@@ -84,10 +99,15 @@ export class DebugSessionManager {
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
     const folder = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0] : undefined;
-    const cwd = folder ? folder.uri.fsPath : path.dirname(sourcePath);
+    const rawCwd = folder ? folder.uri.fsPath : path.dirname(sourcePath);
+    const cwd = this.getWindowsShortPath(rawCwd);
+    const prog = this.getWindowsShortPath(executablePath);
+    const dbgPath = this.getWindowsShortPath(debuggerInfo.path);
 
-    // Ensure C/C++ extension is installed
-    const cppExtension = vscode.extensions.getExtension('ms-vscode.cpptools');
+    // Ensure C/C++ extension is installed (support both ms-vscode.cpptools and Antigravity's kylinideteam.cppdebug)
+    const cppExtension =
+      vscode.extensions.getExtension('ms-vscode.cpptools') ||
+      vscode.extensions.getExtension('kylinideteam.cppdebug');
     if (!cppExtension) {
       vscode.window.showWarningMessage(
         'The C/C++ extension (ms-vscode.cpptools) is recommended for best debugger support.'
@@ -98,7 +118,7 @@ export class DebugSessionManager {
       name: 'SimIDE (C++)',
       type: 'cppdbg',
       request: 'launch',
-      program: executablePath,
+      program: prog,
       args: [],
       stopAtEntry: true,
       cwd: cwd,
@@ -107,7 +127,7 @@ export class DebugSessionManager {
       avoidWindowsConsoleRedirection: true,
       internalConsoleOptions: 'neverOpen',
       MIMode: debuggerInfo.miMode,
-      miDebuggerPath: debuggerInfo.path,
+      miDebuggerPath: dbgPath,
       setupCommands: [
         {
           description: 'Enable pretty-printing for gdb',
@@ -118,7 +138,7 @@ export class DebugSessionManager {
     };
 
     try {
-      const started = await vscode.debug.startDebugging(folder, debugConfig, {
+      const started = await vscode.debug.startDebugging(undefined, debugConfig, {
         suppressDebugView: true,
       });
       if (!started) {
