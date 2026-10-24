@@ -8,6 +8,8 @@ This documentation is written in clear, plain language to provide human develope
 
 ## Documentation Map
 
+- [Graph visualization](./graph-visualization.md) Map
+
 | Document | Purpose | Audience |
 | :--- | :--- | :--- |
 | **[System Architecture](file:///c:/Projects/vscode-extension/docs/architecture.md)** | High-level system overview, 4 core subsystems, physics canvas, technology stack, and state machine. | All Developers & AI Agents |
