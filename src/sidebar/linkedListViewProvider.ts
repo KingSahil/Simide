@@ -180,8 +180,11 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   private async handleMessage(message: WebviewMessage): Promise<void> {
     switch (message.command) {
       case 'visualize':
-      case 'retry':
         await this.startVisualization(message.filePath);
+        break;
+
+      case 'retry':
+        await this.startVisualization();
         break;
 
       case 'visualizeExample':

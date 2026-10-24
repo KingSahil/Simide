@@ -420,6 +420,64 @@ async function testStackOperationsGdb() {
   }
 }
 
+async function runGdbScenario(sourceFile: string, commands: string[]): Promise<string> {
+  const compiled = await CppCompiler.compile(path.resolve('examples', sourceFile));
+  assert.ok(compiled.success, compiled.errorMessage);
+  const executable = compiled.executablePath!;
+  const directory = getWindowsShortPath(path.dirname(executable));
+  const debuggerInfo = await DebugSessionManager.findDebuggerPath();
+  assert.ok(debuggerInfo);
+  const scriptPath = path.join(directory, `test_${path.basename(sourceFile, '.cpp')}_${process.pid}.txt`);
+  fs.writeFileSync(scriptPath, commands.concat('quit').join('\n'));
+  try {
+    return (await execFileAsync(debuggerInfo.path,
+      ['-batch', '-x', path.basename(scriptPath), path.basename(executable)],
+      { cwd: directory, timeout: 30000 })).stdout;
+  } finally {
+    for (let attempt = 0; ; attempt++) {
+      try { fs.unlinkSync(scriptPath); break; }
+      catch (error: any) {
+        if (!['EBUSY', 'EPERM'].includes(error.code) || attempt >= 4) throw error;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+  }
+}
+
+async function testGfgPointerSlotGdb() {
+  const output = await runGdbScenario('gfg-push-delete.cpp', [
+    'break deleteNode', 'run',
+    'printf "GFG_BEFORE:%d,%d,%d,%d\\n", (*head_ref)->data, (*head_ref)->next->data, (*head_ref)->next->next->data, (*head_ref)->next->next->next->data',
+    'printf "POINTER_SLOT:%d\\n", ((void*)head_ref != (void*)*head_ref)',
+    'finish',
+    'printf "GFG_AFTER:%d,%d,%d,NULL=%d\\n", head->data, head->next->data, head->next->next->data, (head->next->next->next == 0)',
+  ]);
+  assert.ok(output.includes('GFG_BEFORE:2,3,1,7'), output);
+  assert.ok(output.includes('POINTER_SLOT:1'), output);
+  assert.ok(output.includes('GFG_AFTER:2,3,7,NULL=1'), output);
+  console.log('✓ Real GDB verified GFG Node** slot identity and exact 2→3→1→7 to 2→3→7 deletion');
+}
+
+async function testCircularQueueGdb() {
+  const lines = fs.readFileSync(path.resolve('examples/circular-queue.cpp'), 'utf8').split('\n');
+  const firstDequeue = lines.findIndex(line => line.includes('int first = q.dequeue()')) + 1;
+  assert.ok(firstDequeue > 0);
+  const output = await runGdbScenario('circular-queue.cpp', [
+    `break circular-queue.cpp:${firstDequeue}`, 'run',
+    'printf "QUEUE_FILLED:%d,%d,%d\\n", q.front, q.rear, q.count',
+    'next',
+    'printf "QUEUE_FIRST:%d,%d,%d\\n", first, q.front, q.count',
+    'next',
+    'printf "QUEUE_SECOND:%d,%d,%d\\n", second, q.front, q.count',
+    'next', 'next',
+    'printf "QUEUE_WRAPPED:%d,%d,%d,%d,%d\\n", q.front, q.rear, q.count, q.arr[q.front], q.arr[q.rear]',
+  ]);
+  for (const expected of ['QUEUE_FILLED:0,3,4', 'QUEUE_FIRST:10,1,3', 'QUEUE_SECOND:20,2,2', 'QUEUE_WRAPPED:2,0,4,30,60']) {
+    assert.ok(output.includes(expected), `${expected}\n${output}`);
+  }
+  console.log('✓ Real GDB verified queue enqueue/dequeue, wrap-around, front=30, rear=60');
+}
+
 async function runAllGdbTests() {
   await testGdbExecution();
   await testLeetcodeReverseGdb();
@@ -428,6 +486,8 @@ async function runAllGdbTests() {
   await testBstRecursiveReturnGdb();
   await testOopLifecycleGdb();
   await testStackOperationsGdb();
+  await testGfgPointerSlotGdb();
+  await testCircularQueueGdb();
 }
 
 runAllGdbTests().catch((err) => {

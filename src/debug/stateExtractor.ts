@@ -41,9 +41,6 @@ export class StateExtractor {
   private static cachedQueueCapExpr: string | null = null;
   private static cachedQueueCountExpr: string | null = null;
   private static cachedQueueArrExpr: string | null = null;
-  private static cachedStackTopExpr: string | null = null;
-  private static cachedStackCapExpr: string | null = null;
-  private static cachedStackArrExpr: string | null = null;
 
   public static setActiveSourceFile(filePath: string): void {
     this.activeSourceFile = filePath;
@@ -78,9 +75,6 @@ export class StateExtractor {
     this.cachedQueueCapExpr = null;
     this.cachedQueueCountExpr = null;
     this.cachedQueueArrExpr = null;
-    this.cachedStackTopExpr = null;
-    this.cachedStackCapExpr = null;
-    this.cachedStackArrExpr = null;
   }
 
   public static resolveFilePath(sourceFilePath?: string): string | null {
@@ -840,25 +834,6 @@ export class StateExtractor {
       return n;
     }
     return valStr.trim();
-  }
-
-  public static isValidEvalNumber(res: string | null): boolean {
-    if (!res) return false;
-    const lower = res.toLowerCase();
-    if (
-      lower.includes('error') ||
-      lower.includes('no symbol') ||
-      lower.includes('cannot access') ||
-      lower.includes('unable to create') ||
-      lower.includes('-var-create') ||
-      lower.includes('has no member') ||
-      lower.includes('not defined') ||
-      lower.includes('optimized out') ||
-      lower.includes('incomplete')
-    ) {
-      return false;
-    }
-    return /-?\d+/.test(res);
   }
 
   private static async resolveDataField(

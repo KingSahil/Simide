@@ -31,6 +31,16 @@ This guide is specifically designed for **AI coding assistants** and automated t
 
 ## 3. Critical Architecture Gotchas
 
+### Node Pointers Versus Pointer Slots and Library References
+
+For GFG-style helpers, `Node** head_ref` is a pointer to a slot containing the real
+head. Resolve that indirection before following links. Do not traverse stream-return
+references, character buffers, or container objects merely because their type contains
+`*` or `&`. Preserve published `curr`/`temp` node pointers without inventing extra nodes.
+`test/gfgExtraction.test.ts` checks exact node counts before/after deletion and excludes
+pointer-slot, uninitialized-local, and stream addresses. See `integration-verification.md`
+for the combined branch/stash verification record.
+
 ### Container Classes Are Not Node Records
 
 Keep node identity/type selection tied to the record that supplies the link fields.
