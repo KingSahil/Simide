@@ -1049,7 +1049,62 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Lin
   nodesLayer.appendChild(container);
 }
 
-// Render Stack in Debugger Canvas (deterministic horizontal array layout with floating TOP badge)
+/**
+ * Enables smooth pointer-dragging on a stack element card with an elastic spring
+ * bounce-back to its slot inside the stack container when released.
+ */
+function makeStackElementDraggable(blockEl: HTMLElement, isTop: boolean) {
+  blockEl.onpointerdown = (e: PointerEvent) => {
+    if (e.button !== 0 || isSpacePressed) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    blockEl.style.animation = 'none';
+    (blockEl.style as any).webkitAnimation = 'none';
+    blockEl.setPointerCapture(e.pointerId);
+    blockEl.classList.add('dragging');
+    blockEl.style.zIndex = '1000';
+    blockEl.style.transition = 'none';
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+
+    const onPointerMove = (moveEv: PointerEvent) => {
+      moveEv.preventDefault();
+      const dx = (moveEv.clientX - startX) / cameraZoom;
+      const dy = (moveEv.clientY - startY) / cameraZoom;
+      blockEl.style.transform = `translate(${dx}px, ${dy}px) scale(1.05)`;
+    };
+
+    const onPointerUp = (upEv: PointerEvent) => {
+      try {
+        blockEl.releasePointerCapture(upEv.pointerId);
+      } catch {}
+
+      blockEl.classList.remove('dragging');
+      blockEl.style.transition = 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease';
+      blockEl.style.transform = 'translate(0px, 0px) scale(1)';
+
+      setTimeout(() => {
+        if (!blockEl.classList.contains('dragging')) {
+          blockEl.style.zIndex = '';
+          blockEl.style.transition = '';
+          blockEl.style.transform = '';
+        }
+      }, 550);
+
+      blockEl.removeEventListener('pointermove', onPointerMove);
+      blockEl.removeEventListener('pointerup', onPointerUp);
+      blockEl.removeEventListener('pointercancel', onPointerUp);
+    };
+
+    blockEl.addEventListener('pointermove', onPointerMove);
+    blockEl.addEventListener('pointerup', onPointerUp);
+    blockEl.addEventListener('pointercancel', onPointerUp);
+  };
+}
+
+// Render Stack in Debugger Canvas (Vertical bottom-to-top beaker/well view with floating TOP badge)
 function renderDebuggerStackDiagram(snapshot: LinkedListSnapshot) {
   if (simulation) {
     simulation.stop();
@@ -1077,81 +1132,211 @@ function renderDebuggerStackDiagram(snapshot: LinkedListSnapshot) {
   }
 
   const container = document.createElement('div');
-  container.className = 'array-board-container';
+  container.className = 'stack-board-container';
 
-  const board = document.createElement('div');
-  board.className = 'array-board';
+  // 1. Header bar with variable name, LIFO badge, size, and method status
+  const headerBar = document.createElement('div');
+  headerBar.className = 'stack-header-bar';
 
-  // Horizontal strip wrapper
-  const stripWrapper = document.createElement('div');
-  stripWrapper.className = 'array-strip-wrapper';
+  const titleTag = document.createElement('div');
+  titleTag.className = 'stack-title-tag';
+  titleTag.innerHTML = `
+    <span class="stack-icon-symbol">☷</span>
+    <span class="stack-var-name">${stack.name}</span>
+    <span class="stack-badge-lifo">STACK (LIFO)</span>
+  `;
+  headerBar.appendChild(titleTag);
 
-  const strip = document.createElement('div');
-  strip.className = 'array-strip';
+  const metaChips = document.createElement('div');
+  metaChips.className = 'stack-meta-chips';
 
-  for (let i = 0; i < stack.capacity; i++) {
-    const elem = stack.elements.find((e) => e.index === i);
-    const col = document.createElement('div');
-    col.className = 'array-column';
+  const sizeChip = document.createElement('span');
+  sizeChip.className = 'stack-meta-chip';
+  const currentCount = Math.max(0, stack.topIndex + 1);
+  sizeChip.innerHTML = `Size: <strong>${currentCount} / ${stack.capacity}</strong>`;
+  metaChips.appendChild(sizeChip);
 
-    const isTop = i === stack.topIndex && stack.topIndex >= 0;
-    const isOccupied = elem !== undefined && elem.value !== null && elem.value !== undefined;
-    const isElevated: boolean = Boolean(isOccupied && (isTop || elem?.isHighlighted || elem?.isPushing));
-
-    // Index Pointer Badge pointing to TOP cell
-    if (isTop) {
-      col.classList.add('has-active-pointer');
-      const ptrContainer = document.createElement('div');
-      ptrContainer.className = 'array-pointer-container';
-
-      const topPill = document.createElement('div');
-      topPill.className = 'array-pointer-pill ptr-top';
-      topPill.innerHTML = `<span>TOP</span><span class="ptr-arrow">↓</span>`;
-      ptrContainer.appendChild(topPill);
-      col.appendChild(ptrContainer);
+  if (stack.activeMethod) {
+    const methodChip = document.createElement('span');
+    methodChip.className = `stack-method-chip ${stack.activeMethod}`;
+    if (stack.activeMethod === 'push') {
+      const pVal = stack.methodParam !== undefined ? stack.methodParam : '';
+      methodChip.textContent = `PUSH(${pVal})`;
+    } else if (stack.activeMethod === 'pop') {
+      const ret = stack.methodReturnValue !== undefined ? ` → ${stack.methodReturnValue}` : '';
+      methodChip.textContent = `POP()${ret}`;
+    } else if (stack.activeMethod === 'peek') {
+      methodChip.textContent = `PEEK()`;
     }
-
-    // Cell
-    const cell = document.createElement('div');
-    cell.className = 'array-cell';
-
-    if (!isOccupied) {
-      cell.classList.add('capacity-slot');
-    }
-    if (elem && (elem.isHighlighted || elem.isPushing)) {
-      cell.classList.add('active');
-    }
-    if (isTop) {
-      cell.classList.add('active');
-    }
-    if (isElevated) {
-      cell.classList.add('cell-thrust');
-      col.classList.add('has-thrust');
-    }
-
-    // Make cell draggable with bouncy spring release
-    makeArrayElementDraggable(cell, isElevated);
-
-    // Index label
-    const indexSpan = document.createElement('span');
-    indexSpan.className = 'array-cell-index';
-    indexSpan.textContent = `[${i}]`;
-
-    // Value label
-    const valSpan = document.createElement('span');
-    valSpan.className = 'array-cell-val';
-    valSpan.textContent = isOccupied ? String(elem.value) : '—';
-
-    cell.appendChild(indexSpan);
-    cell.appendChild(valSpan);
-
-    col.appendChild(cell);
-    strip.appendChild(col);
+    metaChips.appendChild(methodChip);
   }
 
-  stripWrapper.appendChild(strip);
-  board.appendChild(stripWrapper);
-  container.appendChild(board);
+  if (stack.isOverflow) {
+    const overflowChip = document.createElement('span');
+    overflowChip.className = 'stack-method-chip overflow';
+    overflowChip.textContent = 'OVERFLOW';
+    metaChips.appendChild(overflowChip);
+  }
+
+  if (stack.isUnderflow) {
+    const underflowChip = document.createElement('span');
+    underflowChip.className = 'stack-method-chip underflow';
+    underflowChip.textContent = 'UNDERFLOW';
+    metaChips.appendChild(underflowChip);
+  }
+
+  headerBar.appendChild(metaChips);
+  container.appendChild(headerBar);
+
+  // 2. Stage: Indices Column + Bucket Container + Pointers Column
+  const stage = document.createElement('div');
+  stage.className = 'stack-visual-stage';
+
+  // Compute responsive slot height
+  const slotHeight = stack.capacity > 8 ? Math.max(26, Math.floor(260 / stack.capacity)) : 42;
+  const slotGap = stack.capacity > 8 ? 4 : 6;
+  stage.style.setProperty('--slot-height', `${slotHeight}px`);
+  stage.style.setProperty('--slot-gap', `${slotGap}px`);
+
+  // Left column: index labels [0], [1], ... [capacity - 1]
+  const indicesCol = document.createElement('div');
+  indicesCol.className = 'stack-indices-column';
+
+  // Center column wrapper: Rim indicator + Bucket + Base plate
+  const bucketWrapper = document.createElement('div');
+  bucketWrapper.className = 'stack-bucket-wrapper';
+
+  const rimIndicator = document.createElement('div');
+  rimIndicator.className = 'stack-rim-indicator';
+  rimIndicator.innerHTML = `
+    <span class="stack-rim-text">OPEN TOP</span>
+    <span class="stack-rim-arrow">↓ PUSH &nbsp;|&nbsp; POP ↑</span>
+  `;
+  bucketWrapper.appendChild(rimIndicator);
+
+  const bucket = document.createElement('div');
+  bucket.className = 'stack-bucket';
+
+  // Right column: TOP pointer indicators
+  const pointersCol = document.createElement('div');
+  pointersCol.className = 'stack-pointers-column';
+
+  // Render rows from 0 to capacity - 1
+  // With flex-direction: column-reverse, index 0 appears at the bottom!
+  for (let i = 0; i < stack.capacity; i++) {
+    const elem = stack.elements.find((e) => e.index === i);
+    const isTop = i === stack.topIndex && stack.topIndex >= 0;
+    const isOccupied = elem !== undefined && elem.value !== null && elem.value !== undefined && i <= stack.topIndex;
+
+    // A. Left column: Index label
+    const idxLabel = document.createElement('div');
+    idxLabel.className = 'stack-index-label';
+    if (isTop) idxLabel.classList.add('is-top-index');
+    idxLabel.textContent = `[${i}]`;
+    indicesCol.appendChild(idxLabel);
+
+    // B. Center column: Element Block inside Bucket
+    const block = document.createElement('div');
+    block.className = 'stack-element-block';
+
+    if (isOccupied) {
+      block.classList.add('occupied');
+      if (isTop) {
+        block.classList.add('is-top');
+      }
+      if (elem?.isPushing || (isTop && stack.activeMethod === 'push')) {
+        block.classList.add('is-pushing');
+      }
+      if (isTop && stack.activeMethod === 'peek') {
+        block.classList.add('is-peeked');
+      }
+
+      // Small index subscript
+      const sub = document.createElement('span');
+      sub.className = 'stack-elem-subscript';
+      sub.textContent = `[${i}]`;
+
+      // Value text
+      const val = document.createElement('span');
+      val.className = 'stack-elem-value';
+      val.textContent = String(elem.value);
+
+      // Spacer on right for visual balance
+      const rightSpacer = document.createElement('span');
+      rightSpacer.className = 'stack-elem-subscript';
+      rightSpacer.style.opacity = '0';
+      rightSpacer.textContent = `[${i}]`;
+
+      block.appendChild(sub);
+      block.appendChild(val);
+      block.appendChild(rightSpacer);
+
+      makeStackElementDraggable(block, isTop);
+    } else {
+      block.classList.add('capacity-slot');
+
+      const sub = document.createElement('span');
+      sub.className = 'stack-elem-subscript';
+      sub.textContent = `[${i}]`;
+
+      const emptyText = document.createElement('span');
+      emptyText.className = 'stack-elem-val-empty';
+      emptyText.textContent = '—';
+
+      const rightSpacer = document.createElement('span');
+      rightSpacer.className = 'stack-elem-subscript';
+      rightSpacer.style.opacity = '0';
+      rightSpacer.textContent = `[${i}]`;
+
+      block.appendChild(sub);
+      block.appendChild(emptyText);
+      block.appendChild(rightSpacer);
+    }
+
+    bucket.appendChild(block);
+
+    // C. Right column: Pointer Pill or Spacer
+    const ptrCell = document.createElement('div');
+    ptrCell.className = 'stack-pointer-spacer';
+
+    if (isTop) {
+      const topPill = document.createElement('div');
+      topPill.className = 'stack-top-pointer-pill';
+      topPill.innerHTML = `<span class="stack-pointer-arrow">◀</span><span>TOP</span>`;
+      ptrCell.appendChild(topPill);
+    }
+
+    pointersCol.appendChild(ptrCell);
+  }
+
+  bucketWrapper.appendChild(bucket);
+
+  // Sturdy base foot underneath the bucket
+  const baseStand = document.createElement('div');
+  baseStand.className = 'stack-base-stand';
+  bucketWrapper.appendChild(baseStand);
+
+  const baseText = document.createElement('div');
+  baseText.className = 'stack-base-text';
+  baseText.textContent = 'STACK BASE [0]';
+  bucketWrapper.appendChild(baseText);
+
+  // If stack is completely empty (topIndex == -1), show indicator at the base level
+  if (stack.topIndex === -1) {
+    const emptyTopPill = document.createElement('div');
+    emptyTopPill.className = 'stack-top-pointer-pill is-empty';
+    emptyTopPill.innerHTML = `<span class="stack-pointer-arrow">◀</span><span>TOP = -1</span>`;
+    emptyTopPill.style.position = 'absolute';
+    emptyTopPill.style.bottom = '18px';
+    pointersCol.style.position = 'relative';
+    pointersCol.appendChild(emptyTopPill);
+  }
+
+  stage.appendChild(indicesCol);
+  stage.appendChild(bucketWrapper);
+  stage.appendChild(pointersCol);
+
+  container.appendChild(stage);
   nodesLayer.appendChild(container);
 }
 
