@@ -17,7 +17,7 @@ async function run() {
   (provider as any).view = { webview: { postMessage: (message: any) => messages.push(message) } };
   try {
     (vscode.workspace as any).workspaceFolders = [{ uri: vscode.Uri.file(root) }];
-    for (const [example, file] of Object.entries({ stack: 'stack-operations.cpp', array: 'array-operations.cpp', linkedlist: 'linked-list.cpp', tree: 'bst-traversals.cpp' })) {
+    for (const [example, file] of Object.entries({ stack: 'stack-operations.cpp', array: 'array-operations.cpp', linkedlist: 'linked-list.cpp', tree: 'bst-traversals.cpp', graph: 'graph-registry.cpp' })) {
       await (provider as any).handleMessage({ command: 'visualizeExample', example });
       const expected = path.join(root, 'examples', file);
       assert.ok(fs.existsSync(expected));

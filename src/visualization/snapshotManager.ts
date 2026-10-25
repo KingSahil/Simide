@@ -1,7 +1,7 @@
-import { LinkedListSnapshot } from './linkedListModel';
+import { VisualizationSnapshot } from './graphModel';
 
 export class SnapshotManager {
-  private snapshots: LinkedListSnapshot[] = [];
+  private snapshots: VisualizationSnapshot[] = [];
   private currentIndex: number = -1;
 
   public reset(): void {
@@ -9,14 +9,14 @@ export class SnapshotManager {
     this.currentIndex = -1;
   }
 
-  public addSnapshot(snapshot: LinkedListSnapshot): void {
+  public addSnapshot(snapshot: VisualizationSnapshot): void {
     // If we are currently browsing history and new live execution occurs,
     // we jump back to latest or append.
     this.snapshots.push(snapshot);
     this.currentIndex = this.snapshots.length - 1;
   }
 
-  public getCurrentSnapshot(): LinkedListSnapshot | undefined {
+  public getCurrentSnapshot(): VisualizationSnapshot | undefined {
     if (this.currentIndex >= 0 && this.currentIndex < this.snapshots.length) {
       const snap = this.snapshots[this.currentIndex];
       return {
@@ -27,7 +27,7 @@ export class SnapshotManager {
     return undefined;
   }
 
-  public getLatestSnapshot(): LinkedListSnapshot | undefined {
+  public getLatestSnapshot(): VisualizationSnapshot | undefined {
     if (this.snapshots.length > 0) {
       return this.snapshots[this.snapshots.length - 1];
     }
@@ -42,7 +42,7 @@ export class SnapshotManager {
     return this.currentIndex < this.snapshots.length - 1;
   }
 
-  public prev(): LinkedListSnapshot | undefined {
+  public prev(): VisualizationSnapshot | undefined {
     if (this.canGoPrev()) {
       this.currentIndex--;
       return this.getCurrentSnapshot();
@@ -50,7 +50,7 @@ export class SnapshotManager {
     return undefined;
   }
 
-  public nextHistory(): LinkedListSnapshot | undefined {
+  public nextHistory(): VisualizationSnapshot | undefined {
     if (this.canGoNextHistory()) {
       this.currentIndex++;
       return this.getCurrentSnapshot();

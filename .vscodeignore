@@ -12,6 +12,7 @@ examples/**
 !examples/array-operations.cpp
 !examples/linked-list.cpp
 !examples/bst-traversals.cpp
+!examples/graph-registry.cpp
 .gitignore
 tsconfig.json
 esbuild.js
