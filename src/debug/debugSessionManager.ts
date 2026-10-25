@@ -104,19 +104,11 @@ export class DebugSessionManager {
     const prog = this.getWindowsShortPath(executablePath);
     const dbgPath = this.getWindowsShortPath(debuggerInfo.path);
 
-    // Ensure C/C++ extension is installed (support both ms-vscode.cpptools and Antigravity's kylinideteam.cppdebug)
-    const cppExtension =
-      vscode.extensions.getExtension('ms-vscode.cpptools') ||
-      vscode.extensions.getExtension('kylinideteam.cppdebug');
-    if (!cppExtension) {
-      vscode.window.showWarningMessage(
-        'The C/C++ extension (ms-vscode.cpptools) is recommended for best debugger support.'
-      );
-    }
+    const debugType = debuggerInfo.miMode === 'lldb' ? 'lldb' : 'gdb';
 
     const debugConfig: vscode.DebugConfiguration = {
       name: 'SimIDE (C++)',
-      type: 'cppdbg',
+      type: debugType,
       request: 'launch',
       program: prog,
       args: [],
@@ -124,17 +116,23 @@ export class DebugSessionManager {
       cwd: cwd,
       environment: [],
       externalConsole: false,
-      avoidWindowsConsoleRedirection: true,
       internalConsoleOptions: 'neverOpen',
-      MIMode: debuggerInfo.miMode,
-      miDebuggerPath: dbgPath,
-      setupCommands: [
-        {
-          description: 'Enable pretty-printing for gdb',
-          text: '-enable-pretty-printing',
-          ignoreFailures: true,
-        },
-      ],
+      // GDB/LLDB native adapter options
+      ...(debugType === 'gdb'
+        ? {
+            gdbpath: dbgPath,
+            setupCommands: [
+              {
+                description: 'Enable pretty-printing for gdb',
+                text: '-enable-pretty-printing',
+                ignoreFailures: true,
+              },
+            ],
+          }
+        : {
+            // LLDB options
+            sourceLanguages: ['cpp'],
+          }),
     };
 
     try {

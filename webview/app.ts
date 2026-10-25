@@ -507,10 +507,11 @@ function makeDraggable(el: HTMLElement, id: string, onTap?: (id: string) => void
 
     const onPointerUp = (upEv: PointerEvent) => {
       // A tap (press + release without meaningful drag) selects the node in Link Mode.
+      // Use a generous threshold (12px) so slight finger/mouse jitter doesn't cancel the tap.
       const wasTap =
         upEv.button === 0 &&
-        Math.abs(upEv.clientX - startMouseX) <= 4 &&
-        Math.abs(upEv.clientY - startMouseY) <= 4;
+        Math.abs(upEv.clientX - startMouseX) <= 12 &&
+        Math.abs(upEv.clientY - startMouseY) <= 12;
 
       try {
         el.releasePointerCapture(upEv.pointerId);

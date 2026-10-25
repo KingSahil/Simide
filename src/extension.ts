@@ -60,7 +60,8 @@ export function activate(context: vscode.ExtensionContext) {
       if (
         session.name.includes('SimIDE') ||
         session.name.includes('Debug Mentor') ||
-        session.type === 'cppdbg'
+        session.type === 'gdb' ||
+        session.type === 'lldb'
       ) {
         DebugSessionManager.setActiveSession(session);
         provider.reveal();
@@ -79,7 +80,8 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.onDidOpenTerminal((terminal) => {
       if (
         DebugSessionManager.getActiveSession() ||
-        terminal.name.toLowerCase().includes('cppdbg') ||
+        terminal.name.toLowerCase().includes('gdb') ||
+        terminal.name.toLowerCase().includes('lldb') ||
         terminal.name.toLowerCase().includes('simide')
       ) {
         vscode.commands.executeCommand('workbench.action.closePanel');
