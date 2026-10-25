@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { LinkedListViewProvider } from './sidebar/linkedListViewProvider';
 import { DebugTrackerFactory } from './debug/debugAdapterTracker';
 import { DebugSessionManager } from './debug/debugSessionManager';
@@ -26,7 +27,7 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // Register Webview Provider for the sidebar view
-  const provider = new LinkedListViewProvider(context.extensionUri);
+  const provider = new LinkedListViewProvider(context.extensionUri, context.globalStorageUri);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       LinkedListViewProvider.viewType,

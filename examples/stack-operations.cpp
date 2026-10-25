@@ -69,6 +69,7 @@ int main() {
     // Push another element
     s.push(40);
 
-    std::cout << "Final stack top value: " << s.peek() << "\n";
+    int finalTop = s.peek();
+    std::cout << "Final stack top value: " << finalTop << "\n";
     return 0;
 }

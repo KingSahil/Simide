@@ -35,7 +35,7 @@ export class CppCompiler {
     const candidates = ['g++', 'clang++', 'gcc'];
     for (const cmd of candidates) {
       try {
-        await execFileAsync(cmd, ['--version']);
+        await execFileAsync(cmd, ['--version'], { timeout: 5000 });
         this.cachedCompiler = cmd;
         return cmd;
       } catch {
@@ -188,7 +188,7 @@ export class CppCompiler {
     const args = ['-g', '-O0', '-std=c++17', relSource, '-o', relOut];
 
     try {
-      await execFileAsync(compiler, args, { cwd: dir });
+      await execFileAsync(compiler, args, { cwd: dir, timeout: 60000 });
       return {
         success: true,
         executablePath,

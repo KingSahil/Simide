@@ -10,6 +10,7 @@ import {
   LinkedListSnapshot,
   ListNode,
   StackModel,
+  QueueModel,
 } from '../src/visualization/linkedListModel';
 import { DebugSessionManager } from '../src/debug/debugSessionManager';
 
@@ -22,8 +23,9 @@ async function runTests() {
   assert.ok(compiler, 'Compiler (g++ or clang++) should be detected in PATH');
   console.log(`  ✓ Detected compiler: ${compiler}`);
 
-  const samplePath = path.resolve(process.cwd(), 'examples', 'linked-list.cpp');
-  assert.ok(fs.existsSync(samplePath), 'examples/linked-list.cpp must exist');
+  // A stable fixture: examples/linked-list.cpp is intentionally editable by learners.
+  const samplePath = path.resolve(process.cwd(), 'test', 'fixtures', 'bst-reference.cpp');
+  assert.ok(fs.existsSync(samplePath), 'The BST reference fixture must exist');
 
   const compileResult = await CppCompiler.compile(samplePath);
   assert.strictEqual(compileResult.success, true, `Compilation should succeed: ${compileResult.errorMessage}`);
@@ -535,6 +537,108 @@ async function runTests() {
   assert.ok(stackPopRes.explanation.includes('Popped value 10'));
   console.log(`  ✓ Stack Pop state: "${stackPopRes.explanation}"`);
 
+  // State 21 (Queue): Initialization
+  const queueModelInit: QueueModel = {
+    name: 'q',
+    slots: [
+      { index: 0, value: null, hasValue: false },
+      { index: 1, value: null, hasValue: false },
+      { index: 2, value: null, hasValue: false },
+      { index: 3, value: null, hasValue: false },
+      { index: 4, value: null, hasValue: false },
+    ],
+    front: -1,
+    rear: -1,
+    capacity: 5,
+    size: 0,
+    isCircular: true,
+    activeMethod: 'init',
+  };
+  const queueInitRes = ExplanationGenerator.generate(
+    [], null, undefined, true, [], null, '', 'queue', null, undefined, undefined, undefined,
+    undefined, queueModelInit
+  );
+  assert.strictEqual(queueInitRes.changeType, 'queue_initialized');
+  assert.ok(queueInitRes.explanation.includes('initialized to empty'));
+  console.log(`  ✓ Queue Initialized state: "${queueInitRes.explanation}"`);
+
+  // State 22 (Queue): Enqueue 10
+  const queueSnap1: LinkedListSnapshot = {
+    stepNumber: 1,
+    structureType: 'queue',
+    hasHead: true,
+    headId: null,
+    nodes: [],
+    queue: queueModelInit,
+    explanation: queueInitRes.explanation,
+    changeType: 'queue_initialized',
+  };
+  const queueModelEnq: QueueModel = {
+    ...queueModelInit,
+    slots: [
+      { index: 0, value: 10, hasValue: true, isFront: true, isRear: true, isEnqueuing: true },
+      { index: 1, value: null, hasValue: false },
+      { index: 2, value: null, hasValue: false },
+      { index: 3, value: null, hasValue: false },
+      { index: 4, value: null, hasValue: false },
+    ],
+    front: 0,
+    rear: 0,
+    size: 1,
+    activeMethod: 'enqueue',
+    methodParam: 10,
+  };
+  const queueEnqRes = ExplanationGenerator.generate(
+    [], null, queueSnap1, true, [], null, '', 'queue', null, undefined, undefined, undefined,
+    undefined, queueModelEnq
+  );
+  assert.strictEqual(queueEnqRes.changeType, 'queue_enqueue');
+  assert.ok(queueEnqRes.explanation.includes('Enqueued value 10'));
+  console.log(`  ✓ Queue Enqueue state: "${queueEnqRes.explanation}"`);
+
+  // State 23 (Queue): Wrap-Around Enqueue
+  const queueModelWrap: QueueModel = {
+    ...queueModelInit,
+    slots: [
+      { index: 0, value: 60, hasValue: true, isRear: true, isEnqueuing: true },
+      { index: 1, value: null, hasValue: false },
+      { index: 2, value: 30, hasValue: true, isFront: true },
+      { index: 3, value: 40, hasValue: true },
+      { index: 4, value: 50, hasValue: true },
+    ],
+    front: 2,
+    rear: 0,
+    size: 4,
+    justWrapped: true,
+    status: 'wrapped',
+    activeMethod: 'enqueue',
+    methodParam: 60,
+  };
+  const queueWrapRes = ExplanationGenerator.generate(
+    [], null, queueSnap1, true, [], null, '', 'queue', null, undefined, undefined, undefined,
+    undefined, queueModelWrap
+  );
+  assert.strictEqual(queueWrapRes.changeType, 'queue_wrap');
+  assert.ok(queueWrapRes.explanation.includes('Wrap-Around'));
+  console.log(`  ✓ Queue Circular Wrap-Around state: "${queueWrapRes.explanation}"`);
+
+  // State 24 (Queue): Dequeue
+  const queueModelDeq: QueueModel = {
+    ...queueModelInit,
+    front: 3,
+    rear: 0,
+    size: 3,
+    activeMethod: 'dequeue',
+    methodReturnValue: 30,
+  };
+  const queueDeqRes = ExplanationGenerator.generate(
+    [], null, queueSnap1, true, [], null, '', 'queue', null, undefined, undefined, undefined,
+    undefined, queueModelDeq
+  );
+  assert.strictEqual(queueDeqRes.changeType, 'queue_dequeue');
+  assert.ok(queueDeqRes.explanation.includes('Dequeued value 30'));
+  console.log(`  ✓ Queue Dequeue state: "${queueDeqRes.explanation}"`);
+
   // Test 4: SnapshotManager historical navigation
   console.log('\n[Test 4] Testing SnapshotManager Non-Destructive History...');
   const manager = new SnapshotManager();
@@ -628,7 +732,11 @@ async function runTests() {
   const stackOpsPath = path.resolve(process.cwd(), 'examples', 'stack-operations.cpp');
   const structInfoStack = StateExtractor.parseStructMembers(stackOpsPath);
   assert.strictEqual(structInfoStack.structureType, 'stack');
-  console.log('  ✓ Verified stack structure discovery for stack-operations.cpp');
+
+  const circularQueuePath = path.resolve(process.cwd(), 'examples', 'circular-queue.cpp');
+  const structInfoQueue = StateExtractor.parseStructMembers(circularQueuePath);
+  assert.strictEqual(structInfoQueue.structureType, 'queue');
+  console.log('  ✓ Verified stack and circular queue structure discovery for stack-operations.cpp & circular-queue.cpp');
 
   // User defined functions discovery (including free functions and class member methods)
   const leetcodeFns = StateExtractor.getUserDefinedFunctions(leetcodePath);
@@ -679,8 +787,8 @@ async function runTests() {
   console.log('  ✓ Verified multi-pointer parameters (loc, par, child, successor) and initialization checks');
 
   // Test 6: Compiling all internet examples
-  console.log('\n[Test 6] Testing Compilation of All Internet Examples, BST, Arrays & Stack...');
-  for (const file of [leetcodePath, gfgPath, oopPath, bstPath, arrayOpsPath, stackOpsPath]) {
+  console.log('\n[Test 6] Testing Compilation of All Internet Examples, BST, Arrays, Stack & Circular Queue...');
+  for (const file of [leetcodePath, gfgPath, oopPath, bstPath, arrayOpsPath, stackOpsPath, circularQueuePath]) {
     const res = await CppCompiler.compile(file);
     assert.strictEqual(res.success, true, `Should compile ${path.basename(file)}: ${res.errorMessage}`);
     console.log(`  ✓ Successfully compiled ${path.basename(file)}`);

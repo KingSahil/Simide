@@ -39,7 +39,7 @@ sequenceDiagram
     Tracker->>Provider: onStopped({ session, threadId: 1, reason: 'entry' })
 
     Provider->>Extractor: extractState(session, threadId, stepNum: 1)
-    Extractor->>Extractor: Scan source AST for pointer declarations, structs & functions
+    Extractor->>Extractor: Discover source declarations, structs & functions (currently regex)
     Extractor->>VSCodeDAP: DAP stackTrace, scopes, variables
     VSCodeDAP->>GDB: Query local variables
     GDB-->>VSCodeDAP: Program at entry of main
@@ -217,9 +217,38 @@ sequenceDiagram
 
 ---
 
-## 7. Multi-File Switching Lifecycle
+## 7. Circular Queue Multi-Frame Stepping & Wrap-Around Lifecycle
 
-When switching between different C++ source files (e.g. from `linked-list.cpp` to `bst-traversals.cpp`):
+When executing circular queue operations (`enqueue`, `dequeue`, `wrap-around`) across member functions:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant ExecCtrl as ExecutionController
+    participant GDB as Native GDB / LLDB
+    participant Extractor as StateExtractor
+    participant Explainer as ExplanationGenerator
+    participant Webview as Webview (app.ts)
+
+    User->>ExecCtrl: Clicks [ Next ]
+    ExecCtrl->>GDB: Step into q.enqueue(60)
+    GDB-->>Extractor: Paused inside CircularQueue::enqueue(val=60)
+    Extractor->>Extractor: Evaluates front, rear across call stack frames (this->rear, q.rear)
+    Extractor->>Extractor: Rear advances: rear = (4 + 1) % 5 = 0
+    Extractor->>Extractor: Detects wrap event (rear wrapped from 4 to 0)
+    Extractor->>Explainer: changeType: 'queue_wrap'
+    Explainer-->>Extractor: "↺ Circular Queue Wrap-Around! Rear wrapped around... Enqueued 60 at front index 0!"
+    Extractor-->>Webview: Snapshot with structureType: 'queue', front: 2, rear: 0, capacity: 5
+    Webview->>Webview: Renders FRONT pill at [2] and REAR pill at [0]
+    Webview-->>User: Displays real-time wrap-around with persistent pointer pills!
+```
+
+---
+
+## 8. Multi-File Switching Lifecycle
+
+When switching between different C++ source files (e.g. from `linked-list.cpp` to `circular-queue.cpp`):
 
 ```mermaid
 sequenceDiagram
@@ -230,17 +259,17 @@ sequenceDiagram
     participant Compiler as CppCompiler
     participant Webview as Webview UI
 
-    User->>VSCode: Clicks tab: bst-traversals.cpp
+    User->>VSCode: Clicks tab: circular-queue.cpp
     VSCode->>Provider: onDidChangeActiveTextEditor(editor)
-    Provider->>Compiler: setLastActiveSourceFile(bst-traversals.cpp)
+    Provider->>Compiler: setLastActiveSourceFile(circular-queue.cpp)
     Note over Provider: Deliberately does NOT call showTextDocument<br/>(avoids redirect loop back to previous tab!)
     
     User->>Webview: Clicks [ Visualize ]
     Webview->>Provider: postMessage({ command: 'visualize' })
-    Provider->>Compiler: resolveSourceFile() -> bst-traversals.cpp
+    Provider->>Compiler: resolveSourceFile() -> circular-queue.cpp
     Provider->>VSCode: vscode.commands.executeCommand('workbench.action.closePanel')
     Note over VSCode: Dismisses bottom terminal panel for clean canvas
-    Provider->>Compiler: compile(bst-traversals.cpp)
-    Compiler-->>Provider: .debug-mentor/bst-traversals.exe
-    Provider->>Webview: Starts BST visualization session cleanly!
+    Provider->>Compiler: compile(circular-queue.cpp)
+    Compiler-->>Provider: .debug-mentor/circular-queue.exe
+    Provider->>Webview: Starts Circular Queue visualization session cleanly!
 ```

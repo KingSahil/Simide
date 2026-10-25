@@ -3,7 +3,7 @@ using namespace std;
 
 // Bubble Sort demonstration in SimIDE
 // Step through with "Next" to watch:
-// 1. Index pointers (i, j) traverse the contiguous array
+// 1. Index pointers (j, j+1) mark the adjacent elements being compared
 // 2. Elements compare and glow
 // 3. Adjacent out-of-order elements swap with hop animations
 // 4. Drag any card anywhere across the canvas - release to bounce back!

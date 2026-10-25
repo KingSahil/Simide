@@ -8,14 +8,31 @@ import {
   LinkedListSnapshot,
   ListNode,
   PointerVariable,
+  QueueModel,
+  QueueSlot,
   SourceLocation,
   StackElement,
   StackModel,
   StructureType,
 } from '../visualization/linkedListModel';
+import { GraphSnapshot } from '../visualization/graphModel';
+import {
+  DebuggerPointerVariable,
+  discoverGraphLayout,
+  findGraphVariableDeclaration,
+  GraphStateExtractor,
+  isGraphPointerInitializedAtSource,
+  matchesGraphType,
+  parseGraphPointerValue,
+} from './graphStateExtractor';
 import { ExplanationGenerator } from '../visualization/explanationGenerator';
+import { isExplicitNull, isNodePointerType, resolveObjectHead, RuntimeVariable } from './objectHeadResolver';
+
+class NodeInspectionError extends Error {}
 
 export class StateExtractor {
+  private static graphStateExtractor = new GraphStateExtractor();
+  private static lastGraphStop: SourceLocation | undefined;
   private static addressToIdMap = new Map<string, string>();
   private static nextIdCounter = 1;
   private static activeSourceFile: string | null = null;
@@ -31,6 +48,11 @@ export class StateExtractor {
   private static cachedStackArrExpr: string | null = null;
   private static accumulatedTerminalOutput: string = '';
   private static hasInitializedList: boolean = false;
+  private static cachedQueueFrontExpr: string | null = null;
+  private static cachedQueueRearExpr: string | null = null;
+  private static cachedQueueCapExpr: string | null = null;
+  private static cachedQueueCountExpr: string | null = null;
+  private static cachedQueueArrExpr: string | null = null;
 
   public static setActiveSourceFile(filePath: string): void {
     this.activeSourceFile = filePath;
@@ -40,14 +62,17 @@ export class StateExtractor {
     return this.accumulatedTerminalOutput;
   }
 
-  public static appendDapOutput(_text: string): void {
-    // Intentionally no-op: pure cout/printf statements in student code generate terminal output.
-    // This completely cuts off any GDB banner, copyright, thread, or debugger chatter.
+  public static appendDapOutput(text: string, category?: string): boolean {
+    if (!text || (category !== 'stdout' && category !== 'stderr')) return false;
+    this.accumulatedTerminalOutput += text;
+    return true;
   }
 
   public static reset(): void {
     this.addressToIdMap.clear();
     this.nextIdCounter = 1;
+    this.graphStateExtractor.reset();
+    this.lastGraphStop = undefined;
     this.lastPausedLine = null;
     this.deletedAddresses.clear();
     this.cachedDataField = null;
@@ -60,6 +85,11 @@ export class StateExtractor {
     this.cachedStackArrExpr = null;
     this.accumulatedTerminalOutput = '';
     this.hasInitializedList = false;
+    this.cachedQueueFrontExpr = null;
+    this.cachedQueueRearExpr = null;
+    this.cachedQueueCapExpr = null;
+    this.cachedQueueCountExpr = null;
+    this.cachedQueueArrExpr = null;
   }
 
   public static resolveFilePath(sourceFilePath?: string): string | null {
@@ -317,6 +347,7 @@ export class StateExtractor {
     leftField: string;
     rightField: string;
     structureType: StructureType;
+    nodeType?: string;
   } {
     let dataField = 'data';
     let nextField = 'next';
@@ -324,6 +355,7 @@ export class StateExtractor {
     let rightField = 'right';
     let structureType: StructureType = 'linked_list';
     let hasNodePointer = false;
+    let nodeType: string | undefined;
 
     if (!resolvedPath || !fs.existsSync(resolvedPath)) {
       return { dataField, nextField, leftField, rightField, structureType };
@@ -372,11 +404,13 @@ export class StateExtractor {
         if (hasLeft || hasRight || isTreeNamed) {
           structureType = 'tree';
           hasNodePointer = true;
+          nodeType = structName;
           if (hasLeft) leftField = hasLeft;
           if (hasRight) rightField = hasRight;
         } else if (hasNext) {
           structureType = 'linked_list';
           hasNodePointer = true;
+          nodeType = structName;
           nextField = hasNext;
         }
 
@@ -402,16 +436,23 @@ export class StateExtractor {
         }
       }
 
-      // If no linked list or tree struct was found, check if this is a stack or array file
+      // If no linked list or tree struct was found, check for queue, stack, or array
       if (!hasNodePointer) {
-        const content = fs.readFileSync(resolvedPath, 'utf8');
+        const isQueue =
+          content.includes('<queue>') ||
+          /(?:class|struct)\s+(?:Circular)?Queue/i.test(content) ||
+          /\bqueue\s*<\s*[^>]+\s*>/i.test(content) ||
+          (/\bfront\b/i.test(content) && /\brear\b/i.test(content) && (/\benqueue\b/i.test(content) || /\bdequeue\b/i.test(content)));
+
         const isStack =
           content.includes('<stack>') ||
           /(?:class|struct)\s+(?:Array)?Stack/i.test(content) ||
           /\bstack\s*<\s*[^>]+\s*>/i.test(content) ||
-          (/\btop\b/i.test(content) && (/\bpush\b/i.test(content) || /\bpop\b/i.test(content)));
+          (/\btop\b/i.test(content) && (/\bpush\b/i.test(content) || /\bpop\b/i.test(content)) && !/\bfront\b/i.test(content));
 
-        if (isStack) {
+        if (isQueue) {
+          structureType = 'queue';
+        } else if (isStack) {
           structureType = 'stack';
         } else {
           const arrayDecls = this.discoverArrayDeclarations(resolvedPath);
@@ -423,7 +464,7 @@ export class StateExtractor {
     } catch {
       // ignore
     }
-    return { dataField, nextField, leftField, rightField, structureType };
+    return { dataField, nextField, leftField, rightField, structureType, nodeType };
   }
 
   public static getVariableDeclarations(sourceFilePath?: string): Map<string, number[]> {
@@ -431,12 +472,15 @@ export class StateExtractor {
     const map = new Map<string, number[]>();
     try {
       if (fs.existsSync(resolvedPath)) {
-        const content = fs.readFileSync(resolvedPath, 'utf8');
+        const content = fs.readFileSync(resolvedPath, 'utf8').replace(
+          /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g,
+          text => text.replace(/[^\n]/g, ' ')
+        );
         const lines = content.split('\n');
         const nodeTypes = this.discoverNodeTypes(resolvedPath);
         const typePattern = Array.from(nodeTypes).join('|');
         const declRegex = new RegExp(
-          `(?:(?:struct\\s+)?(?:${typePattern})\\s*(?:\\*\\s*&?|&\\s*\\*?)|auto\\s*\\*?|,\\s*(?:\\*\\s*&?|&\\s*\\*?))\\s*([a-zA-Z_][a-zA-Z0-9_]*)`,
+          `(?:(?:struct\\s+)?\\b(?:${typePattern})\\b\\s*(?:\\*\\s*&?|&\\s*\\*?)|\\bauto\\b\\s*\\*?|,\\s*(?:\\*\\s*&?|&\\s*\\*?))\\s*([a-zA-Z_][a-zA-Z0-9_]*)`,
           'g'
         );
 
@@ -751,6 +795,25 @@ export class StateExtractor {
     return null;
   }
 
+  public static isValidEvalNumber(res: string | null): boolean {
+    if (!res) return false;
+    const lower = res.toLowerCase();
+    if (
+      lower.includes('error') ||
+      lower.includes('no symbol') ||
+      lower.includes('cannot access') ||
+      lower.includes('unable to create') ||
+      lower.includes('-var-create') ||
+      lower.includes('has no member') ||
+      lower.includes('not defined') ||
+      lower.includes('optimized out') ||
+      lower.includes('incomplete')
+    ) {
+      return false;
+    }
+    return /-?\d+/.test(res);
+  }
+
   private static parseData(valStr?: string | null): number | string {
     if (!valStr) return 0;
     // Reject GDB error strings — they must never appear as node data
@@ -786,25 +849,6 @@ export class StateExtractor {
       return n;
     }
     return valStr.trim();
-  }
-
-  public static isValidEvalNumber(res: string | null): boolean {
-    if (!res) return false;
-    const lower = res.toLowerCase();
-    if (
-      lower.includes('error') ||
-      lower.includes('no symbol') ||
-      lower.includes('cannot access') ||
-      lower.includes('unable to create') ||
-      lower.includes('-var-create') ||
-      lower.includes('has no member') ||
-      lower.includes('not defined') ||
-      lower.includes('optimized out') ||
-      lower.includes('incomplete')
-    ) {
-      return false;
-    }
-    return /-?\d+/.test(res);
   }
 
   private static async resolveDataField(
@@ -1368,102 +1412,58 @@ export class StateExtractor {
       }
     }
 
-    // 2. Discover Index Pointers (i, j, left, right, mid, counter, etc.)
-    const indexVarNames = new Set([
-      'i',
-      'j',
-      'k',
-      'idx',
-      'index',
-      'left',
-      'right',
-      'low',
-      'high',
-      'mid',
-      'start',
-      'end',
-      'p',
-      'ptr',
-      'curr',
-      'counter',
-      'count',
-      'pos',
-    ]);
-
-    for (const [varName, varInfo] of Object.entries(localVars)) {
-      if (discoveredArrays.some((a) => a.name === varName)) {
-        continue;
-      }
-      if (varName.startsWith('__') || varName === 'argc' || varName === 'argv') {
-        continue;
-      }
-
-      if (!varInfo.isArgument) {
-        if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
-          continue;
-        }
-      }
-
-      const typeStr = (varInfo.type || '').toLowerCase();
-      const isInteger =
-        typeStr.includes('int') ||
-        typeStr.includes('size_t') ||
-        typeStr.includes('short') ||
-        typeStr.includes('long') ||
-        indexVarNames.has(varName.toLowerCase());
-
-      if (isInteger) {
-        const parsed = parseInt(varInfo.value.match(/-?\d+/)?.[0] || '', 10);
-        if (!isNaN(parsed)) {
-          for (const arr of discoveredArrays) {
-            if (parsed >= 0 && parsed < arr.size) {
-              indexPointers.push({
-                name: varName,
-                targetIndex: parsed,
-                targetArrayName: arr.name,
-                value: parsed,
-              });
-              if (arr.elements[parsed]) {
-                arr.elements[parsed].isActive = true;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // Probe member counters (e.g. counter, count) on objects or in scope for discovered arrays
+    // 2. Label actual subscript expressions (j, j+1), not every small integer.
+    // This is a bounded hint in the legacy source-discovery path: support a
+    // variable with an optional constant offset, without executing C++ expressions.
+    let sourceHints = '';
+    try {
+      if (resolvedFile) sourceHints = fs.readFileSync(resolvedFile, 'utf8').replace(
+        /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g,
+        text => text.replace(/[^\n]/g, ' ')
+      );
+    } catch { /* Without source hints, do not invent array index roles. */ }
+    const escapePattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     for (const arr of discoveredArrays) {
-      for (const cName of ['counter', 'count', 'idx', 'index', 'i', 'j']) {
-        if (indexPointers.some((p) => p.name === cName && p.targetArrayName === arr.name)) {
-          continue;
+      const sourceName = arr.name.split(/\.|->/).pop()!;
+      const subscriptPattern = new RegExp(`\\b${escapePattern(sourceName)}\\s*\\[([^\\]]+)\\]`, 'g');
+      const seen = new Set<string>();
+      for (const match of sourceHints.matchAll(subscriptPattern)) {
+        const sourceLine = sourceHints.slice(0, match.index!).split('\n').length;
+        if (arrayDeclList.some(decl => decl.name === sourceName && decl.line === sourceLine)) continue;
+        const expression = match[1].match(/^\s*([a-zA-Z_]\w*)\s*(?:([+-])\s*(\d+))?\s*$/);
+        if (!expression) continue;
+        const [, name, operator, amount] = expression;
+        const label = name + (operator ? operator + amount : '');
+        if (seen.has(label)) continue;
+        seen.add(label);
+        const variable = localVars[name];
+        const declarations = Array.from(sourceHints.matchAll(new RegExp(
+          `\\b(?:int|short|long|(?:std::)?size_t|u?int\\d+_t|auto)\\s+${escapePattern(name)}\\s*(?=[=;,{()])`, 'g'
+        )), declaration => sourceHints.slice(0, declaration.index!).split('\n').length);
+        const localDeclarations = declarations.filter(line =>
+          !funcRange || (line >= funcRange.startLine && line <= funcRange.endLine)
+        );
+        if (!variable?.isArgument && localDeclarations.length && !localDeclarations.some(line => line < rawLine)) continue;
+        // A lexical local that is absent from debugger scope must not be probed:
+        // that can resurrect a stale/uninitialized loop variable such as k.
+        if (!variable && localDeclarations.length) continue;
+        let value: string | undefined = variable?.value;
+        if (variable) {
+          if (!variable.isArgument && !localDeclarations.some(line => line < rawLine)) continue;
+          if (!/\b(?:int|short|long|size_t|u?int\d+_t)\b/.test(variable.type || '') || /\*/.test(variable.type || '')) continue;
+        } else {
+          // Preserve support for source-referenced class/member indices only.
+          const parent = arr.name.includes('.') ? arr.name.slice(0, arr.name.lastIndexOf('.')) : null;
+          value = (parent ? await evalExpr(`${parent}.${name}`) || await evalExpr(`${parent}->${name}`) : null)
+            || await evalExpr(`this->${name}`) || undefined;
         }
-        let cValStr: string | null = null;
-        if (arr.name.includes('.')) {
-          const parentObj = arr.name.split('.')[0];
-          cValStr = await evalExpr(`${parentObj}.${cName}`);
-          if (!cValStr) cValStr = await evalExpr(`${parentObj}->${cName}`);
-        }
-        if (!cValStr) {
-          cValStr = await evalExpr(`this->${cName}`);
-        }
-        if (!cValStr && !localVars[cName]) {
-          cValStr = await evalExpr(cName);
-        }
-        if (cValStr) {
-          const parsed = parseInt(cValStr.match(/-?\d+/)?.[0] || '', 10);
-          if (!isNaN(parsed) && parsed >= 0 && parsed < arr.size) {
-            indexPointers.push({
-              name: cName,
-              targetIndex: parsed,
-              targetArrayName: arr.name,
-              value: parsed,
-            });
-            if (arr.elements[parsed]) {
-              arr.elements[parsed].isActive = true;
-            }
-          }
-        }
+        if (!value || !/^[+-]?\d+$/.test(value.trim())) continue;
+        const base = Number(value);
+        const offset = operator ? Number(amount) * (operator === '-' ? -1 : 1) : 0;
+        const index = base + offset;
+        if (!Number.isSafeInteger(index) || index < 0 || index >= arr.size) continue;
+        indexPointers.push({ name: label, targetIndex: index, targetArrayName: arr.name, value: index });
+        if (arr.elements[index]) arr.elements[index].isActive = true;
       }
     }
 
@@ -1648,12 +1648,529 @@ export class StateExtractor {
     };
   }
 
+  public static async extractQueueState(
+    evalExpr: (expr: string, targetFrameId?: number) => Promise<string | null>,
+    localVars: Record<string, any>,
+    executedLineText: string,
+    previousSnapshot?: LinkedListSnapshot,
+    frames?: any[]
+  ): Promise<QueueModel | undefined> {
+    let queueName = 'q';
+    let frontVal = -1;
+    let rearVal = -1;
+    let capacity = 5;
+
+    for (const k of Object.keys(localVars)) {
+      if (k.toLowerCase().includes('queue') || k.toLowerCase().startsWith('q')) {
+        queueName = k;
+        break;
+      }
+    }
+
+    const frameIdsToTry = frames && frames.length > 0 ? frames.map((f) => f.id) : [undefined];
+
+    const evaluateAcrossFrames = async (exprs: string[]): Promise<string | null> => {
+      for (const fId of frameIdsToTry) {
+        for (const expr of exprs) {
+          const res = await evalExpr(expr, fId);
+          if (res && this.isValidEvalNumber(res)) {
+            return res;
+          }
+        }
+      }
+      return null;
+    };
+
+    const frontCands = [
+      'this->front',
+      'this->m_front',
+      `${queueName}.front`,
+      `${queueName}.m_front`,
+      'q.front',
+      'queue.front',
+      'front',
+      'm_front',
+    ];
+    if (this.cachedQueueFrontExpr) {
+      frontCands.unshift(this.cachedQueueFrontExpr);
+    }
+    const frontRes = await evaluateAcrossFrames(frontCands);
+    if (frontRes) {
+      const parsed = parseInt(frontRes.match(/-?\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
+        frontVal = parsed;
+      }
+    }
+
+    const rearCands = [
+      'this->rear',
+      'this->m_rear',
+      `${queueName}.rear`,
+      `${queueName}.m_rear`,
+      'q.rear',
+      'queue.rear',
+      'rear',
+      'm_rear',
+    ];
+    if (this.cachedQueueRearExpr) {
+      rearCands.unshift(this.cachedQueueRearExpr);
+    }
+    const rearRes = await evaluateAcrossFrames(rearCands);
+    if (rearRes) {
+      const parsed = parseInt(rearRes.match(/-?\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= -1 && parsed <= 128) {
+        rearVal = parsed;
+      }
+    }
+
+    const capCands = [
+      'this->capacity',
+      'this->MAX',
+      'this->CAPACITY',
+      `${queueName}.capacity`,
+      `${queueName}.MAX`,
+      `${queueName}.CAPACITY`,
+      'q.capacity',
+      'queue.capacity',
+      'capacity',
+      'MAX',
+      'CAPACITY',
+    ];
+    if (this.cachedQueueCapExpr) {
+      capCands.unshift(this.cachedQueueCapExpr);
+    }
+    const capRes = await evaluateAcrossFrames(capCands);
+    if (capRes) {
+      const parsed = parseInt(capRes.match(/\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= 2 && parsed <= 128) {
+        capacity = parsed;
+      }
+    }
+
+    let countVal: number | null = null;
+    const countCands = [
+      'this->count',
+      'this->size',
+      'this->m_count',
+      `${queueName}.count`,
+      `${queueName}.size`,
+      'q.count',
+      'queue.count',
+      'count',
+      'size',
+    ];
+    if (this.cachedQueueCountExpr) {
+      countCands.unshift(this.cachedQueueCountExpr);
+    }
+    const countRes = await evaluateAcrossFrames(countCands);
+    if (countRes) {
+      const parsed = parseInt(countRes.match(/\d+/)?.[0] || '', 10);
+      if (!isNaN(parsed) && parsed >= 0 && parsed <= 128) {
+        countVal = parsed;
+      }
+    }
+
+    // If unresolved in current step, preserve previous pointers if valid
+    if (frontVal === -1 && previousSnapshot?.queue?.front !== undefined && previousSnapshot.queue.front >= 0) {
+      frontVal = previousSnapshot.queue.front;
+    }
+    if (rearVal === -1 && previousSnapshot?.queue?.rear !== undefined && previousSnapshot.queue.rear >= 0) {
+      rearVal = previousSnapshot.queue.rear;
+    }
+
+    let activeMethod: 'enqueue' | 'dequeue' | 'front' | 'rear' | null = null;
+    let methodParam: number | string | undefined = undefined;
+    const cleanLine = executedLineText.toLowerCase();
+    if (cleanLine.includes('enqueue(') || cleanLine.includes('push(')) {
+      activeMethod = 'enqueue';
+      const m = executedLineText.match(/(?:enqueue|push)\s*\(\s*([^)]+)\s*\)/i);
+      if (m) {
+        const valRes = await evalExpr(m[1].trim());
+        methodParam = valRes && this.isValidEvalNumber(valRes) ? this.parseData(valRes) : m[1].trim();
+      }
+    } else if (cleanLine.includes('dequeue(') || cleanLine.includes('pop(')) {
+      activeMethod = 'dequeue';
+    } else if (cleanLine.includes('front(') || cleanLine.includes('getfront(')) {
+      activeMethod = 'front';
+    } else if (cleanLine.includes('rear(') || cleanLine.includes('getrear(')) {
+      activeMethod = 'rear';
+    }
+
+    const slots: QueueSlot[] = [];
+    let foundArrName: string | null = null;
+    let foundArrFrameId: number | undefined = undefined;
+
+    const arrNames = [
+      'this->arr',
+      'this->items',
+      'this->data',
+      'this->elements',
+      `${queueName}.arr`,
+      `${queueName}.items`,
+      `${queueName}.data`,
+      `${queueName}.elements`,
+      'q.arr',
+      'queue.arr',
+      'arr',
+      'items',
+      'data',
+      'elements',
+    ];
+    if (this.cachedQueueArrExpr) {
+      arrNames.unshift(this.cachedQueueArrExpr);
+    }
+
+    for (const fId of frameIdsToTry) {
+      for (const aName of arrNames) {
+        const test = await evalExpr(`${aName}[0]`, fId);
+        if (this.isValidEvalNumber(test)) {
+          foundArrName = aName;
+          foundArrFrameId = fId;
+          this.cachedQueueArrExpr = aName;
+          break;
+        }
+      }
+      if (foundArrName) break;
+    }
+
+    let size = 0;
+    if (countVal !== null) {
+      size = countVal;
+    } else if (frontVal !== -1 && rearVal !== -1) {
+      if (rearVal >= frontVal) {
+        size = rearVal - frontVal + 1;
+      } else {
+        size = capacity - frontVal + rearVal + 1;
+      }
+    }
+
+    // Only if BOTH frontVal and rearVal are explicitly -1 (and count is 0 or null) do we consider the queue completely uninitialized/empty
+    if (frontVal === -1 && rearVal === -1) {
+      size = 0;
+    }
+
+    if (foundArrName) {
+      for (let i = 0; i < capacity; i++) {
+        const elRes = await evalExpr(`${foundArrName}[${i}]`, foundArrFrameId);
+        const val = this.isValidEvalNumber(elRes) ? this.parseData(elRes) : null;
+        let hasVal = false;
+        if (size > 0 && frontVal !== -1 && rearVal !== -1) {
+          if (countVal !== null) {
+            const offsetFromFront = (i - frontVal + capacity) % capacity;
+            hasVal = offsetFromFront < countVal;
+          } else if (frontVal <= rearVal) {
+            hasVal = i >= frontVal && i <= rearVal;
+          } else {
+            hasVal = i >= frontVal || i <= rearVal;
+          }
+        }
+        slots.push({
+          index: i,
+          value: hasVal ? val : null,
+          hasValue: hasVal,
+          isFront: frontVal >= 0 && i === frontVal,
+          isRear: rearVal >= 0 && i === rearVal,
+          isHighlighted:
+            (activeMethod === 'enqueue' && i === rearVal) ||
+            (activeMethod === 'dequeue' && i === frontVal),
+        });
+      }
+    } else {
+      for (let i = 0; i < capacity; i++) {
+        let hasVal = false;
+        if (size > 0 && frontVal !== -1 && rearVal !== -1) {
+          if (countVal !== null) {
+            const offsetFromFront = (i - frontVal + capacity) % capacity;
+            hasVal = offsetFromFront < countVal;
+          } else if (frontVal <= rearVal) {
+            hasVal = i >= frontVal && i <= rearVal;
+          } else {
+            hasVal = i >= frontVal || i <= rearVal;
+          }
+        }
+        const prevVal = previousSnapshot?.queue?.slots[i]?.value ?? null;
+        slots.push({
+          index: i,
+          value: hasVal ? prevVal : null,
+          hasValue: hasVal,
+          isFront: frontVal >= 0 && i === frontVal,
+          isRear: rearVal >= 0 && i === rearVal,
+        });
+      }
+    }
+
+    const justWrapped =
+      (activeMethod === 'enqueue' && rearVal === 0 && (previousSnapshot?.queue?.rear === capacity - 1)) ||
+      (frontVal > rearVal && previousSnapshot?.queue?.front !== undefined && previousSnapshot.queue.front <= previousSnapshot.queue.rear);
+
+    return {
+      name: queueName,
+      slots,
+      front: frontVal,
+      rear: rearVal,
+      capacity,
+      size,
+      isCircular: true,
+      justWrapped,
+      activeMethod,
+      methodParam,
+      isOverflow: size >= capacity && activeMethod === 'enqueue',
+      isUnderflow: size === 0 && activeMethod === 'dequeue',
+    };
+  }
+
+  public static async extractGraphState(
+    session: vscode.DebugSession,
+    threadId: number,
+    stepNumber: number
+  ): Promise<GraphSnapshot | null> {
+    try {
+      const stackResponse = await session.customRequest('stackTrace', {
+        threadId,
+        startFrame: 0,
+        levels: 25,
+      });
+      const frames = stackResponse?.stackFrames || [];
+      const userFrames = frames.filter((frame: any) => {
+        const file = frame.source?.path || frame.source?.name || '';
+        const name = (frame.name || '').toLowerCase();
+        return this.isUserSource(file) && !name.includes('crt') && !name.includes('startup');
+      });
+      if (userFrames.length === 0) return null;
+
+      const sourceFile =
+        this.resolveFilePath(userFrames[0].source?.path || userFrames[0].source?.name) ||
+        this.resolveFilePath();
+      if (!sourceFile) return null;
+
+      const sourceText = fs.readFileSync(sourceFile, 'utf8');
+      const layout = discoverGraphLayout(sourceText);
+      if (!layout) return null;
+
+      const currentStop: SourceLocation = {
+        file: sourceFile,
+        line: userFrames[0].line,
+        functionName: userFrames[0].name || '',
+      };
+      // Match the executed-line policy used by every other visualization.
+      const executedSource = this.lastGraphStop || currentStop;
+      this.lastGraphStop = currentStop;
+
+      const frameLocals: Array<{
+        frameId: number;
+        frameName: string;
+        line: number;
+        sourceText: string;
+        variables: Array<{ name: string; type?: string; value: string; scopeName: string }>;
+      }> = [];
+      for (const frame of userFrames) {
+        try {
+          const frameSourceFile =
+            this.resolveFilePath(frame.source?.path || frame.source?.name) || sourceFile;
+          const scopesResponse = await session.customRequest('scopes', { frameId: frame.id });
+          const variables: Array<{
+            name: string;
+            type?: string;
+            value: string;
+            scopeName: string;
+          }> = [];
+          for (const scope of scopesResponse?.scopes || []) {
+            const scopeName = (scope.name || '').toLowerCase();
+            if (
+              (!scopeName.includes('arg') && !scopeName.includes('param') &&
+                !scopeName.includes('local') && !scopeName.includes('var') &&
+                !scopeName.includes('global') && !scopeName.includes('static')) ||
+              scope.variablesReference <= 0
+            ) {
+              continue;
+            }
+            const variablesResponse = await session.customRequest('variables', {
+              variablesReference: scope.variablesReference,
+            });
+            for (const variable of variablesResponse?.variables || []) {
+              variables.push({
+                name: variable.name,
+                type: variable.type,
+                value: variable.value,
+                scopeName,
+              });
+            }
+          }
+          frameLocals.push({
+            frameId: frame.id,
+            frameName: frame.name || '',
+            line: frame.line || 0,
+            sourceText:
+              frameSourceFile === sourceFile
+                ? sourceText
+                : fs.readFileSync(frameSourceFile, 'utf8'),
+            variables,
+          });
+        } catch (err) {
+          console.warn(
+            `[StateExtractor] Could not inspect debugger scopes for frame '${frame.name || frame.id}'.`,
+            err
+          );
+        }
+      }
+
+      const pointerVariables: DebuggerPointerVariable[] = frameLocals.flatMap((locals) =>
+        locals.variables
+          .filter((variable) => {
+            if (
+              !variable.scopeName.includes('local') &&
+              !variable.scopeName.includes('var')
+            ) {
+              return true;
+            }
+            const pointerType = variable.type
+              ?.replace(/\b(?:const|volatile)\b/g, '')
+              .replace(/\s*\*+\s*$/, '')
+              .replace(/^struct\s+/, '')
+              .trim();
+            return !!pointerType && isGraphPointerInitializedAtSource(
+              locals.sourceText,
+              pointerType,
+              variable.name,
+              locals.line
+            );
+          })
+          .map((variable) => ({
+            name: variable.name,
+            type: variable.type,
+            value: variable.value,
+          }))
+      );
+      const createEvaluator = (frameId: number) => async (
+        expression: string
+      ): Promise<string | null> => {
+        try {
+          const response = await session.customRequest('evaluate', {
+            expression,
+            frameId,
+            context: 'watch',
+          });
+          return response?.result ?? null;
+        } catch {
+          return null;
+        }
+      };
+      const extractWithoutRegistry = async (
+        frameId: number,
+        source: SourceLocation,
+        explanation: string
+      ): Promise<GraphSnapshot> => {
+        const snapshot = await this.graphStateExtractor.extract(
+          layout,
+          '',
+          false,
+          stepNumber,
+          createEvaluator(frameId),
+          pointerVariables,
+          source,
+          true
+        );
+        return {
+          ...snapshot,
+          isComplete: false,
+          explanation:
+            snapshot.graph.vertices.length === 0 && snapshot.graph.edges.length === 0 &&
+            explanation !== 'Graph not initialized yet.'
+              ? 'Graph registry unavailable.'
+              : explanation,
+        };
+      };
+
+      let pendingGraph: {
+        name: string;
+        declaration: ReturnType<typeof findGraphVariableDeclaration>;
+        line: number;
+        frameId: number;
+        frameName: string;
+      } | undefined;
+      for (const frame of frameLocals) {
+        const graphVariable = frame.variables.find((variable) =>
+          matchesGraphType(variable.type, layout.graphType)
+        );
+        if (!graphVariable) continue;
+
+        const declaration = findGraphVariableDeclaration(
+          sourceText,
+          layout.graphType,
+          graphVariable.name,
+          frame.line
+        );
+        if (
+          !declaration ||
+          !declaration.initialized ||
+          frame.line <= declaration.line
+        ) {
+          pendingGraph = {
+            name: graphVariable.name,
+            declaration,
+            line: frame.line,
+            frameId: frame.frameId,
+            frameName: frame.frameName,
+          };
+          continue;
+        }
+
+        const graphIsPointer = graphVariable.type?.includes('*') ?? false;
+        const graphPointer = graphIsPointer
+          ? parseGraphPointerValue(graphVariable.value)
+          : { valid: true, address: 'object' };
+        if (!graphPointer.valid) {
+          console.warn(
+            `[StateExtractor] Could not read Graph pointer variable '${graphVariable.name}'.`
+          );
+          continue;
+        }
+
+        const source: SourceLocation = {
+          ...executedSource,
+        };
+
+        return this.graphStateExtractor.extract(
+          layout,
+          graphVariable.name,
+          graphIsPointer,
+          stepNumber,
+          createEvaluator(frame.frameId),
+          pointerVariables,
+          source,
+          graphIsPointer && graphPointer.address === null
+        );
+      }
+      if (pendingGraph) {
+        return extractWithoutRegistry(
+          pendingGraph.frameId,
+          {
+            ...executedSource,
+          },
+          'Graph not initialized yet.'
+        );
+      }
+      return extractWithoutRegistry(
+        frameLocals[0]?.frameId ?? userFrames[0].id,
+        {
+          ...executedSource,
+        },
+        'Graph registry unavailable; safely readable typed vertices are shown.'
+      );
+    } catch (err) {
+      console.error('[StateExtractor] Graph extraction failed:', err);
+      return null;
+    }
+  }
+
   public static async extractState(
     session: vscode.DebugSession,
     threadId: number,
     stepNumber: number,
     previousSnapshot?: LinkedListSnapshot
   ): Promise<LinkedListSnapshot | null> {
+    let inspectionSource: SourceLocation | undefined;
+    let inspectionStructure: StructureType = 'linked_list';
     try {
       // 1. Get Stack Frames (up to 25 levels)
       const stackResponse = await session.customRequest('stackTrace', {
@@ -1710,6 +2227,7 @@ export class StateExtractor {
         leftField: parsedLeftField,
         rightField: parsedRightField,
         structureType: parsedStructureType,
+        nodeType: parsedNodeType,
       } = this.parseStructMembers(resolvedFile);
 
       if (!this.cachedDataField && parsedDataField) this.cachedDataField = parsedDataField;
@@ -1718,6 +2236,8 @@ export class StateExtractor {
       if (!this.cachedRightField && parsedRightField) this.cachedRightField = parsedRightField;
       if (!this.cachedStructureType && parsedStructureType) this.cachedStructureType = parsedStructureType;
       const structureType = this.cachedStructureType || parsedStructureType || 'linked_list';
+      const nodeType = parsedNodeType || (structureType === 'tree' ? 'TreeNode' : 'Node');
+      inspectionStructure = structureType;
 
       // Check variable declarations across all functions in the file
       const varDecls = this.getVariableDeclarations(resolvedFile);
@@ -1827,9 +2347,12 @@ export class StateExtractor {
 
       const sourceLoc: SourceLocation = {
         file: resolvedFile,
+        // Intentional SimIDE teaching behavior: show the line whose execution
+        // produced this snapshot, not the debugger's next pending instruction.
         line: executedLine,
         functionName: userFrame.name,
       };
+      inspectionSource = { ...sourceLoc };
 
       const lineText = this.getLineText(sourceLoc.file, rawLine);
       const executedLineText = this.getLineText(sourceLoc.file, executedLine);
@@ -1880,10 +2403,42 @@ export class StateExtractor {
             frameId: targetFrameId,
             context: 'watch',
           });
-          return res?.result ?? null;
+          const value = res?.result;
+          if (typeof value !== 'string' || !value.trim() ||
+              /(?:<error|error:|cannot access|no symbol|optimized out|not available|not defined|unable to create|has no member|incomplete type)/i.test(value)) {
+            return null;
+          }
+          return value;
         } catch {
           return null;
         }
+      };
+
+      // Absolute-address heap reads are safe to retry in another user frame.
+      // Do not do this for local expressions: recursive frames can shadow names.
+      const heapFrameIds = Array.from(new Set<number>([
+        frameId,
+        ...frames.filter((f: any) => this.isUserSource(f.source?.path || f.source?.name || ''))
+          .map((f: any) => f.id).reverse(),
+      ]));
+      let heapFrameId = frameId;
+      const evalHeapExpr = async (expression: string): Promise<string | null> => {
+        for (const id of [heapFrameId, ...heapFrameIds.filter(id => id !== heapFrameId)]) {
+          const value = await evalExpr(expression, id);
+          if (value !== null) {
+            heapFrameId = id;
+            return value;
+          }
+        }
+        return null;
+      };
+      const requireNodeValue = (value: string | null, expression: string, pointer = false): string => {
+        const isNullPointer = value !== null &&
+          /(?:\bnullptr\b|\bNULL\b|\(nil\)|\b0x0+\b|^0$)/.test(value.trim());
+        if (value === null || (pointer && !isNullPointer && !this.parsePointer(value))) {
+          throw new NodeInspectionError(`Debugger could not read ${expression} in the available user frames.`);
+        }
+        return value;
       };
 
       // Check if the executed line was a deletion / deallocation (e.g. `delete temp;` or `free(temp);`)
@@ -1936,9 +2491,9 @@ export class StateExtractor {
         if (arrays.length > 0) {
           this.hasInitializedList = true;
         }
-      } else if (structureType === 'stack') {
-        // Stack models are linear array/buffer structures.
-        // We do not chase linked list / tree pointers.
+      } else if (structureType === 'stack' || structureType === 'queue') {
+        // Stack and queue models are linear/circular array/buffer structures.
+        // Skip linked-list and binary-tree pointer chasing to eliminate 30+ redundant GDB roundtrips.
         this.hasInitializedList = true;
       } else {
         // 3. Inspect 'head' / 'root' across current frame and caller frames
@@ -1977,11 +2532,55 @@ export class StateExtractor {
         'm_root',
       ];
 
+      // Resolve actual node-pointer members from objects in main/caller frames.
+      // An object value may contain an address; that does not make it a Node*.
+      let headResolved = false;
+      const frameVariables = new Map<number, RuntimeVariable[]>();
+      frameVariables.set(frameId, Object.entries(localVars).map(([name, variable]) => ({ name, ...variable })));
+      const mainFrameForObjects = frames.find((frame: any) =>
+        frame.name === 'main' || frame.name?.startsWith('main(')
+      );
+      const objectFrames = [mainFrameForObjects, ...[...frames].reverse()].filter((frame: any, index, all) =>
+        frame && this.isUserSource(frame.source?.path || frame.source?.name || '') &&
+        all.findIndex(candidate => candidate?.id === frame.id) === index
+      );
+      const recordTypes = this.discoverNodeTypes(resolvedFile);
+      const memberNames = headCandidates.filter(candidate => !candidate.includes('->'));
+      for (const frame of objectFrames) {
+        if (!frameVariables.has(frame.id)) {
+          const variables: RuntimeVariable[] = [];
+          try {
+            const response = await session.customRequest('scopes', { frameId: frame.id });
+            for (const scope of response?.scopes || []) {
+              if (!/local|var|arg|param/i.test(scope.name || '') || !scope.variablesReference) continue;
+              const response = await session.customRequest('variables', { variablesReference: scope.variablesReference });
+              variables.push(...(response?.variables || []));
+            }
+          } catch { /* Existing expression-based discovery remains available. */ }
+          frameVariables.set(frame.id, variables);
+        }
+        const result = await resolveObjectHead(
+          frameVariables.get(frame.id)!, nodeType, recordTypes, memberNames,
+          async reference => (await session.customRequest('variables', { variablesReference: reference }))?.variables || [],
+          expression => evalExpr(expression, frame.id), value => this.parsePointer(value)
+        );
+        if (result) {
+          headAddr = result.address;
+          headResolved = true; // A verified nullptr is distinct from a failed read.
+          break;
+        }
+      }
+      const isNonNodeVariable = (name: string, id: number) => {
+        const variable = frameVariables.get(id)?.find(variable => variable.name === name);
+        return !!variable?.type && !isNodePointerType(variable.type, nodeType);
+      };
+
       // A: Try current user frame (only if we're in main — in helper functions like insert()
       // the 'root' parameter may be a by-value nullptr copy, not the actual tree root)
       const isInMain = isInsideMain;
-      if (isInMain) {
+      if (isInMain && !headResolved) {
         for (const cand of headCandidates) {
+          if (isNonNodeVariable(cand, frameId)) continue;
           if (varDecls.has(cand) && !this.isVariableInitialized(cand, rawLine, varDecls, funcRange)) {
             continue;
           }
@@ -1996,6 +2595,7 @@ export class StateExtractor {
             } else {
               headAddr = this.parsePointer(valStr);
             }
+            if (isExplicitNull(valStr)) { headResolved = true; break; }
             if (headAddr && !this.deletedAddresses.has(headAddr)) {
               break;
             } else {
@@ -2008,7 +2608,7 @@ export class StateExtractor {
       // B: Check caller frames — required when inside helper functions (insert, traverse, etc.)
       // Prioritize the 'main' frame where the true root/head pointer lives,
       // avoiding local recursive parameters (e.g. insert's 'root') shadowing the real root.
-      if (!headAddr) {
+      if (!headAddr && !headResolved) {
         const mainFrame = frames.find((f: any) => {
           const name = (f.name || '').toLowerCase();
           const path = f.source?.path || f.source?.name || '';
@@ -2017,6 +2617,7 @@ export class StateExtractor {
 
         if (mainFrame) {
           for (const cand of headCandidates) {
+            if (isNonNodeVariable(cand, mainFrame.id)) continue;
             const valStr = await evalExpr(cand, mainFrame.id);
             if (valStr) {
               let candidate: string | null = null;
@@ -2026,6 +2627,7 @@ export class StateExtractor {
               } else {
                 candidate = this.parsePointer(valStr);
               }
+              if (isExplicitNull(valStr)) { headResolved = true; break; }
               if (candidate && !this.deletedAddresses.has(candidate)) {
                 headAddr = candidate;
                 break;
@@ -2035,12 +2637,13 @@ export class StateExtractor {
         }
 
         // Priority 2: Check caller frames from outermost to innermost
-        if (!headAddr) {
+        if (!headAddr && !headResolved) {
           for (let i = frames.length - 1; i >= 0; i--) {
             const callerFrame = frames[i];
             const callerPath = callerFrame.source?.path || callerFrame.source?.name || '';
             if (!this.isUserSource(callerPath)) continue;
             for (const cand of headCandidates) {
+              if (isNonNodeVariable(cand, callerFrame.id)) continue;
               const valStr = await evalExpr(cand, callerFrame.id);
               if (valStr) {
                 let candidate: string | null = null;
@@ -2050,19 +2653,20 @@ export class StateExtractor {
                 } else {
                   candidate = this.parsePointer(valStr);
                 }
+                if (isExplicitNull(valStr)) { headResolved = true; break; }
                 if (candidate && !this.deletedAddresses.has(candidate)) {
                   headAddr = candidate;
                   break;
                 }
               }
             }
-            if (headAddr) break;
+            if (headAddr || headResolved) break;
           }
         }
       }
 
       // C: Retain previous head address if still valid and not deleted
-      if (!headAddr && previousSnapshot?.headId) {
+      if (!headAddr && !headResolved && previousSnapshot?.headId) {
         const prevHeadNode = previousSnapshot.nodes.find((n) => n.id === previousSnapshot.headId);
         if (prevHeadNode && prevHeadNode.address && !this.deletedAddresses.has(prevHeadNode.address)) {
           headAddr = prevHeadNode.address;
@@ -2074,33 +2678,6 @@ export class StateExtractor {
         this.hasInitializedList = true;
       } else {
         headAddr = null;
-      }
-
-      // Discovered node struct type name
-      // Prefer types actually defined in the source file over hardcoded defaults.
-      // discoverNodeTypes() first adds hardcoded fallbacks, then appends source-file structs.
-      // We want the LAST entry from the source file (the actual struct in this file).
-      let nodeType: string;
-      {
-        // Re-scan source file for struct/class names to find what's actually declared there
-        let sourceDefinedType: string | null = null;
-        try {
-          if (fs.existsSync(resolvedFile)) {
-            const content = fs.readFileSync(resolvedFile, 'utf8');
-            // Match struct/class definitions — pick the one that has pointer members (left/right/next)
-            const structMatches = Array.from(content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\{([^}]*?)\}/gs));
-            for (const sm of structMatches) {
-              const body = sm[2] || '';
-              // Must have at least one pointer member
-              if (body.includes('*')) {
-                sourceDefinedType = sm[1];
-              }
-            }
-          }
-        } catch {
-          // ignore
-        }
-        nodeType = sourceDefinedType || (structureType === 'tree' ? 'TreeNode' : 'Node');
       }
 
       // 4. Graph / Tree / Multi-Chain Sublist Traversal Engine
@@ -2126,11 +2703,11 @@ export class StateExtractor {
           const id = this.getStableId(currAddr);
           const ptrCast = `((${nodeType}*)${currAddr})`;
 
-          const dataField = await this.resolveDataField(evalExpr, ptrCast);
-          const nextField = await this.resolveNextField(evalExpr, ptrCast);
+          const dataField = await this.resolveDataField(evalHeapExpr, ptrCast);
+          const nextField = await this.resolveNextField(evalHeapExpr, ptrCast);
 
-          const dataStr = await evalExpr(`${ptrCast}->${dataField}`);
-          const nextValStr = await evalExpr(`${ptrCast}->${nextField}`);
+          const dataStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${dataField}`), `${ptrCast}->${dataField}`);
+          const nextValStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${nextField}`), `${ptrCast}->${nextField}`, true);
           const nextAddr = this.parsePointer(nextValStr);
 
           const nextId =
@@ -2143,7 +2720,7 @@ export class StateExtractor {
           allDiscoveredNodes.set(currAddr, {
             id,
             address: currAddr,
-            data: this.parseData(dataStr || '0'),
+            data: this.parseData(dataStr),
             nextId,
             nextAddress: nextAddr,
             isHead: isNodeHead,
@@ -2182,13 +2759,13 @@ export class StateExtractor {
           const id = this.getStableId(currAddr);
           const ptrCast = `((${nodeType}*)${currAddr})`;
 
-          const dataField = await this.resolveDataField(evalExpr, ptrCast);
-          const leftField = await this.resolveLeftField(evalExpr, ptrCast);
-          const rightField = await this.resolveRightField(evalExpr, ptrCast);
+          const dataField = await this.resolveDataField(evalHeapExpr, ptrCast);
+          const leftField = await this.resolveLeftField(evalHeapExpr, ptrCast);
+          const rightField = await this.resolveRightField(evalHeapExpr, ptrCast);
 
-          const dataStr = await evalExpr(`${ptrCast}->${dataField}`);
-          const leftValStr = await evalExpr(`${ptrCast}->${leftField}`);
-          const rightValStr = await evalExpr(`${ptrCast}->${rightField}`);
+          const dataStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${dataField}`), `${ptrCast}->${dataField}`);
+          const leftValStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${leftField}`), `${ptrCast}->${leftField}`, true);
+          const rightValStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${rightField}`), `${ptrCast}->${rightField}`, true);
 
           const leftAddr = this.parsePointer(leftValStr);
           const rightAddr = this.parsePointer(rightValStr);
@@ -2203,7 +2780,7 @@ export class StateExtractor {
           allDiscoveredNodes.set(currAddr, {
             id,
             address: currAddr,
-            data: this.parseData(dataStr || '0'),
+            data: this.parseData(dataStr),
             leftId,
             leftAddress: leftAddr,
             rightId,
@@ -2234,7 +2811,7 @@ export class StateExtractor {
       }
 
       // 5. Track Active Pointer Variables & Traverse any Disconnected Chains
-      const activePointers: PointerVariable[] = [];
+      activePointers = [];
 
       // Collect root / head pointer
       if (hasHead) {
@@ -2270,48 +2847,28 @@ export class StateExtractor {
           }
         }
 
-        const varAddr = this.parsePointer(varInfo.value);
+        const isDeclaredPointer = varDecls.has(varName);
+        // A pointer/reference to an ostream, buffer, or container is not a Node*.
+        // In particular, debugger return values after cout must not be traversed.
+        const pointedType = (varInfo.type || '')
+          .replace(/\b(?:const|volatile|struct|class)\b|[*&]/g, '').trim();
+        const isPointerType = varInfo.type?.trim()
+          ? varInfo.type.includes('*') && (pointedType === nodeType || pointedType.endsWith('::' + nodeType))
+          : isDeclaredPointer;
+        let varAddr = this.parsePointer(varInfo.value);
+        if (isPointerType && varInfo.type) {
+          const depth = (varInfo.type.match(/\*/g) || []).length;
+          if (depth > 1) {
+            // Node** stores a pointer slot, not a node. Resolve the slot first.
+            if (!/^[a-zA-Z_]\w*$/.test(varName) || depth > 3) continue;
+            const value = await evalExpr(`${'*'.repeat(depth - 1)}${varName}`);
+            if (value === null) continue;
+            varAddr = this.parsePointer(value);
+          }
+        }
         const isFreed = varAddr ? this.deletedAddresses.has(varAddr) : false;
         const targetId = varAddr && !isFreed ? this.getStableId(varAddr) : null;
-
         const isTargetingKnownNode = varAddr ? allDiscoveredNodes.has(varAddr) : false;
-        const isDeclaredPointer = varDecls.has(varName);
-        const isPointerType =
-          isDeclaredPointer ||
-          (varInfo.type && (varInfo.type.includes('*') || varInfo.type.includes('&'))) ||
-          varName === 'temp' ||
-          varName === 'prev' ||
-          varName === 'curr' ||
-          varName === 'current' ||
-          varName === 'forward' ||
-          varName === 'next' ||
-          varName === 'node' ||
-          varName === 'first' ||
-          varName === 'second' ||
-          varName === 'third' ||
-          varName === 'tail' ||
-          varName === 'last' ||
-          varName === 'p' ||
-          varName === 'q' ||
-          varName === 'l1' ||
-          varName === 'l2' ||
-          varName === 'dummy' ||
-          varName === 'fast' ||
-          varName === 'slow' ||
-          varName === 'loc' ||
-          varName === 'par' ||
-          varName === 'parent' ||
-          varName === 'child' ||
-          varName === 'successor' ||
-          varName === 'parSuccessor' ||
-          varName === 'pred' ||
-          varName === 'predecessor' ||
-          varName === 'succ' ||
-          varName === 'newNode' ||
-          varName === 'new_node' ||
-          varName === 'target' ||
-          varName === 'ptr' ||
-          varName === 'cur';
 
         if (isPointerType || isTargetingKnownNode) {
           activePointers.push({
@@ -2407,7 +2964,7 @@ export class StateExtractor {
       }
 
       // Check active visiting node during traversals (e.g. inorder, preorder, postorder)
-      let activeVisitingNodeId: string | null = null;
+      activeVisitingNodeId = null;
       const activeVar =
         localVars['root'] ||
         localVars['node'] ||
@@ -2451,10 +3008,13 @@ export class StateExtractor {
         this.accumulatedTerminalOutput += printedInStep;
       }
 
-      // 7. Extract Stack State if applicable
+      // 7. Extract Stack or Queue State if applicable
       let stackData: StackModel | undefined = undefined;
+      let queueData: QueueModel | undefined = undefined;
       if (structureType === 'stack') {
         stackData = await this.extractStackState(evalExpr, localVars, executedLineText, previousSnapshot, frames);
+      } else if (structureType === 'queue') {
+        queueData = await this.extractQueueState(evalExpr, localVars, executedLineText, previousSnapshot, frames);
       }
 
       // 8. Generate Pedagogical Explanation
@@ -2471,7 +3031,8 @@ export class StateExtractor {
         funcName,
         arrays,
         indexPointers,
-        stackData
+        stackData,
+        queueData
       );
 
       // If execution reached the return statement or end of main, mark as final
@@ -2488,6 +3049,8 @@ export class StateExtractor {
           }
         } else if (structureType === 'stack') {
           explanation = `Stack execution complete. Program execution finished.`;
+        } else if (structureType === 'queue') {
+          explanation = `Circular queue execution complete. Program execution finished.`;
         } else {
           const chainNodes = allNodes.filter((n) => !n.isDetached);
           if (chainNodes.length > 0) {
@@ -2510,6 +3073,7 @@ export class StateExtractor {
         arrays,
         indexPointers,
         stack: stackData,
+        queue: queueData,
         explanation,
         changeType,
         terminalOutput: this.accumulatedTerminalOutput,
@@ -2519,6 +3083,30 @@ export class StateExtractor {
 
       return snapshot;
     } catch (err) {
+      if (err instanceof NodeInspectionError) {
+        console.warn('[StateExtractor] Node inspection unavailable:', err.message);
+        return {
+          ...(previousSnapshot || {
+            structureType: inspectionStructure,
+            hasHead: false,
+            headId: null,
+          }),
+          stepNumber,
+          source: inspectionSource,
+          nodes: (previousSnapshot?.nodes || []).map(node => ({
+            ...node, isVisiting: false, isNewlyCreated: false, isNewlyConnected: false,
+          })),
+          pointers: previousSnapshot?.pointers?.map(pointer => ({ ...pointer })),
+          activeVisitingNodeId: null,
+          explanation: previousSnapshot
+            ? 'Debugger inspection is temporarily unavailable. Showing the last verified state; step again to retry.'
+            : 'Debugger inspection is unavailable at this stop. Step again to retry; no verified structure is available yet.',
+          changeType: 'step',
+          inspectionWarning: err.message,
+          printedInStep: undefined,
+          isHistorical: false,
+        };
+      }
       console.error('[StateExtractor] Extraction failed:', err);
       return null;
     }
