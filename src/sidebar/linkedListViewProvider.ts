@@ -18,6 +18,7 @@ import {
 import { SnapshotManager } from '../visualization/snapshotManager';
 import { isGraphSnapshot, VisualizationSnapshot } from '../visualization/graphModel';
 import { selectVisualizationMode } from './visualizationMode';
+import { SourceAnalysisCache } from '../debug/sourceAnalysisCache';
 
 export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'debug-mentor.sidebar';
@@ -117,13 +118,14 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         const sourceFile = StateExtractor.resolveFilePath();
 
         if (sourceFile) {
-          try {
-            mode = selectVisualizationMode(fs.readFileSync(sourceFile, 'utf8'));
-          } catch (error) {
-            console.warn(
-              `[LinkedListViewProvider] Could not inspect '${sourceFile}' for graph registry types.`,
-              error
-            );
+          const cached = SourceAnalysisCache.get(sourceFile);
+          if (cached) {
+            mode = cached.visualizationMode;
+          } else {
+            const raw = SourceAnalysisCache.getRawContent(sourceFile);
+            if (raw) {
+              mode = selectVisualizationMode(raw);
+            }
           }
         }
 
@@ -573,7 +575,12 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     this.snapshotManager.reset();
     StateExtractor.reset();
     StateExtractor.setActiveSourceFile(sourceFile);
-    this.visualizationMode = selectVisualizationMode(fs.readFileSync(sourceFile, 'utf8'));
+    const cachedAnalysis = SourceAnalysisCache.get(sourceFile);
+    this.visualizationMode = cachedAnalysis
+      ? cachedAnalysis.visualizationMode
+      : (SourceAnalysisCache.getRawContent(sourceFile)
+          ? selectVisualizationMode(SourceAnalysisCache.getRawContent(sourceFile))
+          : 'linked_list');
     this.stepCounter = 1;
 
     // Launch Debugger

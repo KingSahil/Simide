@@ -27,6 +27,7 @@ import {
 } from './graphStateExtractor';
 import { ExplanationGenerator } from '../visualization/explanationGenerator';
 import { isExplicitNull, isNodePointerType, resolveObjectHead, RuntimeVariable } from './objectHeadResolver';
+import { SourceAnalysisCache } from './sourceAnalysisCache';
 
 class NodeInspectionError extends Error {}
 
@@ -90,6 +91,7 @@ export class StateExtractor {
     this.cachedQueueCapExpr = null;
     this.cachedQueueCountExpr = null;
     this.cachedQueueArrExpr = null;
+    SourceAnalysisCache.clear();
   }
 
   public static resolveFilePath(sourceFilePath?: string): string | null {
@@ -157,20 +159,11 @@ export class StateExtractor {
   public static getLineText(filePath: string, lineNum: number): string {
     const resolved = this.resolveFilePath(filePath);
     if (!resolved) return '';
-    try {
-      const content = fs.readFileSync(resolved, 'utf8');
-      const lines = content.split('\n');
-      if (lineNum >= 1 && lineNum <= lines.length) {
-        return lines[lineNum - 1].trim();
-      }
-    } catch {
-      // ignore
-    }
-    return '';
+    return SourceAnalysisCache.getLineText(resolved, lineNum);
   }
 
   public static discoverNodeTypes(resolvedPath?: string): Set<string> {
-    const types = new Set<string>([
+    const defaultTypes = new Set<string>([
       'Node',
       'ListNode',
       'LinkNode',
@@ -188,19 +181,10 @@ export class StateExtractor {
       'node',
       'listnode',
     ]);
-    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
-      return types;
-    }
-    try {
-      const content = fs.readFileSync(resolvedPath, 'utf8');
-      const structMatches = content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g);
-      for (const m of structMatches) {
-        types.add(m[1]);
-      }
-    } catch {
-      // ignore
-    }
-    return types;
+    if (!resolvedPath) return defaultTypes;
+    const cached = SourceAnalysisCache.get(resolvedPath);
+    if (cached) return cached.nodeTypes;
+    return defaultTypes;
   }
 
   public static discoverArrayDeclarations(resolvedPath?: string): Array<{
@@ -210,135 +194,22 @@ export class StateExtractor {
     type: string;
     isDynamic: boolean;
   }> {
-    const arrays: Array<{
-      name: string;
-      line: number;
-      size?: number;
-      type: string;
-      isDynamic: boolean;
-    }> = [];
-    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
-      return arrays;
+    if (!resolvedPath) return [];
+    const cached = SourceAnalysisCache.get(resolvedPath);
+    if (cached) {
+      return cached.arrayDeclarations;
     }
-    try {
-      const content = fs.readFileSync(resolvedPath, 'utf8');
-      const lines = content.split('\n');
-
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        const lineNum = i + 1;
-        if (line.startsWith('//') || line.startsWith('/*') || line.startsWith('#')) {
-          continue;
-        }
-
-        // 1. Stack array: int arr[5] or int arr[] = {1, 2, 3};
-        const stackMatch = line.match(
-          /(?:(?:const\s+)?(?:int|long|short|char|double|float|string|bool|uint\d+_t|int\d+_t))\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\[\s*([^\]]*)\s*\]/
-        );
-        if (stackMatch) {
-          const name = stackMatch[1];
-          const sizeStr = stackMatch[2]?.trim();
-          let parsedSize = sizeStr ? parseInt(sizeStr, 10) : undefined;
-          if (parsedSize === undefined || isNaN(parsedSize)) {
-            const initMatch = line.match(/=\s*\{([^}]+)\}/);
-            if (initMatch) {
-              const elements = initMatch[1].split(',').filter((s) => s.trim().length > 0);
-              parsedSize = elements.length;
-            }
-          }
-          arrays.push({
-            name,
-            line: lineNum,
-            size: parsedSize && !isNaN(parsedSize) ? parsedSize : undefined,
-            type: 'stack_array',
-            isDynamic: false,
-          });
-          continue;
-        }
-
-        // 2. Dynamic array: int* arr = new int[5];
-        const dynMatch = line.match(
-          /(?:int|long|short|char|double|float|string|bool)\s*\*\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*new\s+(?:int|long|short|char|double|float|string|bool)\s*\[\s*([^\]]+)\s*\]/
-        );
-        if (dynMatch) {
-          const name = dynMatch[1];
-          const sizeExpr = dynMatch[2].trim();
-          const parsedSize = parseInt(sizeExpr, 10);
-          arrays.push({
-            name,
-            line: lineNum,
-            size: !isNaN(parsedSize) ? parsedSize : undefined,
-            type: 'dynamic_array',
-            isDynamic: true,
-          });
-          continue;
-        }
-
-        // 3. Vector: vector<int> arr; or std::vector<int> arr = {...};
-        const vecMatch = line.match(
-          /(?:std::)?vector\s*<\s*[^>]+\s*>\s*([a-zA-Z_][a-zA-Z0-9_]*)/
-        );
-        if (vecMatch) {
-          const name = vecMatch[1];
-          arrays.push({
-            name,
-            line: lineNum,
-            type: 'vector',
-            isDynamic: true,
-          });
-          continue;
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return arrays;
+    return [];
   }
 
   public static getUserDefinedFunctions(sourceFilePath?: string): Set<string> {
     const resolvedPath = this.resolveFilePath(sourceFilePath) || sourceFilePath || '';
-    const funcNames = new Set<string>();
-    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
-      return funcNames;
+    if (!resolvedPath) return new Set();
+    const cached = SourceAnalysisCache.get(resolvedPath);
+    if (cached) {
+      return cached.userDefinedFunctions;
     }
-    try {
-      const content = fs.readFileSync(resolvedPath, 'utf8');
-      const lines = content.split('\n');
-      const nodeTypes = this.discoverNodeTypes(resolvedPath);
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('#') || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
-          continue;
-        }
-
-        // Match free functions or class member functions:
-        // [return_type] [func_name]([args]) [{ or : or newline]
-        const fnMatch = trimmed.match(
-          /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]*\)\s*(?:const\s*)?(?:\{|:\s*|;|$)/
-        );
-        if (fnMatch) {
-          const name = fnMatch[1];
-          if (
-            name !== 'main' &&
-            name !== 'if' &&
-            name !== 'while' &&
-            name !== 'for' &&
-            name !== 'switch' &&
-            name !== 'catch' &&
-            name !== 'return' &&
-            name !== 'sizeof' &&
-            name !== 'void' &&
-            !nodeTypes.has(name)
-          ) {
-            funcNames.add(name);
-          }
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return funcNames;
+    return new Set();
   }
 
   public static parseStructMembers(resolvedPath?: string): {
@@ -349,333 +220,35 @@ export class StateExtractor {
     structureType: StructureType;
     nodeType?: string;
   } {
-    let dataField = 'data';
-    let nextField = 'next';
-    let leftField = 'left';
-    let rightField = 'right';
-    let structureType: StructureType = 'linked_list';
-    let hasNodePointer = false;
-    let nodeType: string | undefined;
-
-    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
-      return { dataField, nextField, leftField, rightField, structureType };
+    if (!resolvedPath) {
+      return { dataField: 'data', nextField: 'next', leftField: 'left', rightField: 'right', structureType: 'linked_list' };
     }
-    try {
-      const content = fs.readFileSync(resolvedPath, 'utf8');
-      const structMatches = content.matchAll(/(?:struct|class)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g);
-      for (const sm of structMatches) {
-        const structName = sm[1];
-        const isTreeNamed = /tree|bst/i.test(structName);
-
-        const structIdx = sm.index ?? content.indexOf(sm[0]);
-        const startBrace = content.indexOf('{', structIdx);
-        if (startBrace === -1) continue;
-
-        let depth = 1;
-        let endBrace = -1;
-        for (let i = startBrace + 1; i < content.length; i++) {
-          if (content[i] === '{') depth++;
-          else if (content[i] === '}') {
-            depth--;
-            if (depth === 0) {
-              endBrace = i;
-              break;
-            }
-          }
-        }
-        if (endBrace === -1) continue;
-
-        const body = content.substring(startBrace + 1, endBrace);
-        // Find all pointer members: e.g. TreeNode* left; Node *right;
-        const ptrMatches = Array.from(
-          body.matchAll(/(?:(?:struct\s+)?(?:[a-zA-Z_][a-zA-Z0-9_]*|<[a-zA-Z0-9_,\s]+>)\s*\*+|\*+\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*;/g)
-        ).map((m) => m[1]);
-
-        const hasLeft = ptrMatches.find((p) =>
-          ['left', 'lchild', 'left_node', 'lc', 'pleft', 'l'].includes(p.toLowerCase())
-        );
-        const hasRight = ptrMatches.find((p) =>
-          ['right', 'rchild', 'right_node', 'rc', 'pright', 'r'].includes(p.toLowerCase())
-        );
-        const hasNext = ptrMatches.find((p) =>
-          ['next', 'next_node', 'link', 'ptr', 'pnext', 'nxt'].includes(p.toLowerCase())
-        );
-
-        if (hasLeft || hasRight || isTreeNamed) {
-          structureType = 'tree';
-          hasNodePointer = true;
-          nodeType = structName;
-          if (hasLeft) leftField = hasLeft;
-          if (hasRight) rightField = hasRight;
-        } else if (hasNext) {
-          structureType = 'linked_list';
-          hasNodePointer = true;
-          nodeType = structName;
-          nextField = hasNext;
-        }
-
-        const dataMatches = body.matchAll(
-          /(?:int|long|short|char|string|double|float|T|uint[0-9]+_t|int[0-9]+_t|auto)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;/g
-        );
-        for (const dm of dataMatches) {
-          const fn = dm[1];
-          if (
-            fn !== nextField &&
-            fn !== leftField &&
-            fn !== rightField &&
-            fn !== 'prev' &&
-            fn !== 'previous'
-          ) {
-            dataField = fn;
-            break;
-          }
-        }
-
-        if (dataField && (hasLeft || hasRight || hasNext)) {
-          break;
-        }
-      }
-
-      // If no linked list or tree struct was found, check for queue, stack, or array
-      if (!hasNodePointer) {
-        const isQueue =
-          content.includes('<queue>') ||
-          /(?:class|struct)\s+(?:Circular)?Queue/i.test(content) ||
-          /\bqueue\s*<\s*[^>]+\s*>/i.test(content) ||
-          (/\bfront\b/i.test(content) && /\brear\b/i.test(content) && (/\benqueue\b/i.test(content) || /\bdequeue\b/i.test(content)));
-
-        const isStack =
-          content.includes('<stack>') ||
-          /(?:class|struct)\s+(?:Array)?Stack/i.test(content) ||
-          /\bstack\s*<\s*[^>]+\s*>/i.test(content) ||
-          (/\btop\b/i.test(content) && (/\bpush\b/i.test(content) || /\bpop\b/i.test(content)) && !/\bfront\b/i.test(content));
-
-        if (isQueue) {
-          structureType = 'queue';
-        } else if (isStack) {
-          structureType = 'stack';
-        } else {
-          const arrayDecls = this.discoverArrayDeclarations(resolvedPath);
-          if (arrayDecls.length > 0) {
-            structureType = 'array';
-          }
-        }
-      }
-    } catch {
-      // ignore
+    const cached = SourceAnalysisCache.get(resolvedPath);
+    if (cached) {
+      return cached.structMembers;
     }
-    return { dataField, nextField, leftField, rightField, structureType, nodeType };
+    return { dataField: 'data', nextField: 'next', leftField: 'left', rightField: 'right', structureType: 'linked_list' };
   }
 
   public static getVariableDeclarations(sourceFilePath?: string): Map<string, number[]> {
     const resolvedPath = this.resolveFilePath(sourceFilePath) || sourceFilePath || '';
-    const map = new Map<string, number[]>();
-    try {
-      if (fs.existsSync(resolvedPath)) {
-        const content = fs.readFileSync(resolvedPath, 'utf8').replace(
-          /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g,
-          text => text.replace(/[^\n]/g, ' ')
-        );
-        const lines = content.split('\n');
-        const nodeTypes = this.discoverNodeTypes(resolvedPath);
-        const typePattern = Array.from(nodeTypes).join('|');
-        const declRegex = new RegExp(
-          `(?:(?:struct\\s+)?\\b(?:${typePattern})\\b\\s*(?:\\*\\s*&?|&\\s*\\*?)|\\bauto\\b\\s*\\*?|,\\s*(?:\\*\\s*&?|&\\s*\\*?))\\s*([a-zA-Z_][a-zA-Z0-9_]*)`,
-          'g'
-        );
-
-        let inStructDef = false;
-        let braceDepth = 0;
-
-        for (let i = 0; i < lines.length; i++) {
-          const lineText = lines[i].trim();
-          const lineNum = i + 1;
-
-          // Ignore struct / class bodies so struct member pointers aren't treated as local variables
-          if (lineText.match(/^(?:struct|class)\s+[a-zA-Z_]/)) {
-            inStructDef = true;
-          }
-          if (inStructDef) {
-            if (lineText.includes('{')) braceDepth++;
-            if (lineText.includes('}')) {
-              braceDepth--;
-              if (braceDepth <= 0) {
-                inStructDef = false;
-                braceDepth = 0;
-              }
-            }
-            continue;
-          }
-
-          // Skip pure member assignments without declarations (e.g. first->next = second;)
-          if (
-            (lineText.startsWith('.') || /^[a-zA-Z_][a-zA-Z0-9_]*->/.test(lineText)) &&
-            !lineText.includes('auto') &&
-            !Array.from(nodeTypes).some((t) => lineText.startsWith(t))
-          ) {
-            continue;
-          }
-
-          const matches = lineText.matchAll(declRegex);
-          for (const match of matches) {
-            const varName = match[1];
-            if (
-              varName === 'nullptr' ||
-              varName === 'NULL' ||
-              varName === 'return' ||
-              varName === 'new'
-            ) {
-              continue;
-            }
-            if (!map.has(varName)) {
-              map.set(varName, []);
-            }
-            map.get(varName)!.push(lineNum);
-          }
-        }
-      }
-    } catch {
-      // ignore
+    if (!resolvedPath) return new Map();
+    const cached = SourceAnalysisCache.get(resolvedPath);
+    if (cached) {
+      return cached.declaredVariables;
     }
-    return map;
+    return new Map();
   }
 
   public static getFunctionRanges(
     resolvedPath?: string
   ): Array<{ name: string; startLine: number; endLine: number; params?: string[] }> {
-    const ranges: Array<{ name: string; startLine: number; endLine: number; params?: string[] }> = [];
-    if (!resolvedPath || !fs.existsSync(resolvedPath)) return ranges;
-
-    try {
-      const content = fs.readFileSync(resolvedPath, 'utf8');
-      const lines = content.split('\n');
-
-      let currentFunc: { name: string; startLine: number; params?: string[] } | null = null;
-      let depth = 0;
-      let inStruct = false;
-
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const trimmed = line.trim();
-        const lineNum = i + 1;
-
-        if (trimmed.startsWith('#') || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
-          continue;
-        }
-
-        if (trimmed.match(/^(?:struct|class)\s+[a-zA-Z_]/)) {
-          inStruct = true;
-        }
-        if (inStruct) {
-          if (trimmed.includes('{')) depth++;
-          if (trimmed.includes('}')) {
-            depth--;
-            if (depth <= 0) {
-              inStruct = false;
-              depth = 0;
-            }
-          }
-          continue;
-        }
-
-        if (!currentFunc) {
-          const fnMatch = trimmed.match(
-            /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)\s*(?:const\s*)?\{?/
-          );
-          if (fnMatch) {
-            const name = fnMatch[1];
-            if (
-              name !== 'if' &&
-              name !== 'while' &&
-              name !== 'for' &&
-              name !== 'switch' &&
-              name !== 'catch' &&
-              name !== 'sizeof'
-            ) {
-              const paramStr = fnMatch[2] || '';
-              const params: string[] = [];
-              if (paramStr.trim()) {
-                const parts = paramStr.split(',');
-                for (const part of parts) {
-                  const pMatch = part.trim().match(/([a-zA-Z_][a-zA-Z0-9_]*)\s*$/);
-                  if (pMatch) {
-                    params.push(pMatch[1]);
-                  }
-                }
-              }
-              currentFunc = { name, startLine: lineNum, params };
-              depth = 0;
-            }
-          } else {
-            // Check for multi-line function declaration header starting on this line
-            const multiLineMatch = trimmed.match(
-              /^(?:[a-zA-Z_][a-zA-Z0-9_:*&<>\s]+\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)$/
-            );
-            if (multiLineMatch) {
-              const name = multiLineMatch[1];
-              if (
-                name !== 'if' &&
-                name !== 'while' &&
-                name !== 'for' &&
-                name !== 'switch' &&
-                name !== 'catch' &&
-                name !== 'sizeof'
-              ) {
-                let paramStr = multiLineMatch[2] || '';
-                let j = i + 1;
-                while (j < lines.length) {
-                  const nextLine = lines[j].trim();
-                  const closeParenIdx = nextLine.indexOf(')');
-                  if (closeParenIdx !== -1) {
-                    paramStr += ' ' + nextLine.substring(0, closeParenIdx);
-                    break;
-                  } else {
-                    paramStr += ' ' + nextLine;
-                  }
-                  j++;
-                }
-                const params: string[] = [];
-                if (paramStr.trim()) {
-                  const parts = paramStr.split(',');
-                  for (const part of parts) {
-                    const pMatch = part.trim().match(/([a-zA-Z_][a-zA-Z0-9_]*)\s*$/);
-                    if (pMatch) {
-                      params.push(pMatch[1]);
-                    }
-                  }
-                }
-                currentFunc = { name, startLine: lineNum, params };
-                depth = 0;
-              }
-            }
-          }
-        }
-
-        if (currentFunc) {
-          for (let c = 0; c < line.length; c++) {
-            if (line[c] === '{') depth++;
-            else if (line[c] === '}') {
-              depth--;
-              if (depth <= 0) {
-                ranges.push({
-                  name: currentFunc.name,
-                  startLine: currentFunc.startLine,
-                  endLine: lineNum,
-                  params: currentFunc.params || [],
-                });
-                currentFunc = null;
-                depth = 0;
-                break;
-              }
-            }
-          }
-        }
-      }
-    } catch {
-      // ignore
+    if (!resolvedPath) return [];
+    const cached = SourceAnalysisCache.get(resolvedPath);
+    if (cached) {
+      return cached.functionRanges;
     }
-
-    return ranges;
+    return [];
   }
 
   public static getEnclosingFunction(
@@ -1416,12 +989,12 @@ export class StateExtractor {
     // This is a bounded hint in the legacy source-discovery path: support a
     // variable with an optional constant offset, without executing C++ expressions.
     let sourceHints = '';
-    try {
-      if (resolvedFile) sourceHints = fs.readFileSync(resolvedFile, 'utf8').replace(
-        /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g,
-        text => text.replace(/[^\n]/g, ' ')
-      );
-    } catch { /* Without source hints, do not invent array index roles. */ }
+    if (resolvedFile) {
+      const cached = SourceAnalysisCache.get(resolvedFile);
+      if (cached) {
+        sourceHints = cached.sanitizedContent;
+      }
+    }
     const escapePattern = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     for (const arr of discoveredArrays) {
       const sourceName = arr.name.split(/\.|->/).pop()!;
@@ -1943,7 +1516,7 @@ export class StateExtractor {
         this.resolveFilePath();
       if (!sourceFile) return null;
 
-      const sourceText = fs.readFileSync(sourceFile, 'utf8');
+      const sourceText = SourceAnalysisCache.getRawContent(sourceFile);
       const layout = discoverGraphLayout(sourceText);
       if (!layout) return null;
 
@@ -2003,7 +1576,7 @@ export class StateExtractor {
             sourceText:
               frameSourceFile === sourceFile
                 ? sourceText
-                : fs.readFileSync(frameSourceFile, 'utf8'),
+                : SourceAnalysisCache.getRawContent(frameSourceFile),
             variables,
           });
         } catch (err) {

@@ -15,7 +15,7 @@ npm-debug.log*
 Thumbs.db
 # Build output
 dist/
-"*.vsix" 
+*.vsix
 
 # Private learning notes and local credentials
 /devpost/learner-profile.md
