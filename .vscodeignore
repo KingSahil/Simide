@@ -8,6 +8,10 @@ test/**
 docs/**
 devpost/**
 examples/**
+!examples/stack-operations.cpp
+!examples/array-operations.cpp
+!examples/linked-list.cpp
+!examples/bst-traversals.cpp
 .gitignore
 tsconfig.json
 esbuild.js

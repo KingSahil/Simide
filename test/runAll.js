@@ -4,13 +4,15 @@ const { spawnSync } = require('child_process');
 
 console.log('Building test bundle...');
 esbuild.buildSync({
-  entryPoints: ['test/runTests.ts', 'test/gdbExecution.test.ts', 'test/startup.test.ts', 'test/stateExtraction.test.ts', 'test/arrayIndices.test.ts', 'test/oopExtraction.test.ts', 'test/gfgExtraction.test.ts'],
+  entryPoints: ['test/runTests.ts', 'test/gdbExecution.test.ts', 'test/startup.test.ts', 'test/examples.test.ts', 'test/stateExtraction.test.ts', 'test/arrayIndices.test.ts', 'test/oopExtraction.test.ts', 'test/gfgExtraction.test.ts'],
   bundle: true,
   platform: 'node',
   outdir: 'dist',
   alias: { vscode: './test/mockVscode.ts' },
 });
 
+const examples = spawnSync('node', ['dist/examples.test.js'], { stdio: 'inherit' });
+if (examples.status !== 0) process.exit(examples.status || 1);
 console.log('Running simulation startup regression tests...');
 const startup = spawnSync('node', ['dist/startup.test.js'], { stdio: 'inherit' });
 if (startup.status !== 0) process.exit(startup.status || 1);

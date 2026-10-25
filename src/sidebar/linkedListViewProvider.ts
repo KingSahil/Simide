@@ -19,7 +19,10 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   private disposables: vscode.Disposable[] = [];
   private starting = false;
 
-  constructor(private readonly extensionUri: vscode.Uri) {
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly exampleStorageUri: vscode.Uri = extensionUri
+  ) {
     this.registerDebugListeners();
   }
 
@@ -177,6 +180,41 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  public async openExample(example: string): Promise<void> {
+    const files: Record<string, string> = {
+      stack: 'stack-operations.cpp',
+      array: 'array-operations.cpp',
+      linkedlist: 'linked-list.cpp',
+      tree: 'bst-traversals.cpp',
+    };
+    if (!Object.prototype.hasOwnProperty.call(files, example)) return;
+    const fileName = files[example];
+    try {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const directory = path.join(workspaceRoot || this.exampleStorageUri.fsPath, 'examples');
+      const destination = path.join(directory, fileName);
+      if (!fs.existsSync(destination)) {
+        await fs.promises.mkdir(directory, { recursive: true });
+        try {
+          // Keep any example the learner has already edited.
+          await fs.promises.copyFile(
+            path.join(this.extensionUri.fsPath, 'examples', fileName),
+            destination,
+            fs.constants.COPYFILE_EXCL
+          );
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      }
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(destination));
+      await vscode.window.showTextDocument(document, { preview: false });
+      CppCompiler.setLastActiveSourceFile(destination);
+      this.sendTargetFileUpdate();
+    } catch (error) {
+      await vscode.window.showErrorMessage(`Could not open the SimIDE example: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private async handleMessage(message: WebviewMessage): Promise<void> {
     switch (message.command) {
       case 'visualize':
@@ -188,22 +226,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case 'visualizeExample':
-        if (message.example) {
-          const wsFolders = vscode.workspace.workspaceFolders;
-          if (wsFolders && wsFolders.length > 0) {
-            const map: Record<string, string> = {
-              stack: 'examples/stack-operations.cpp',
-              array: 'examples/array-operations.cpp',
-              linkedlist: 'examples/linked-list.cpp',
-              tree: 'examples/bst-traversals.cpp',
-            };
-            const rel = map[message.example] || 'examples/stack-operations.cpp';
-            const fullPath = path.join(wsFolders[0].uri.fsPath, rel);
-            if (fs.existsSync(fullPath)) {
-              await this.startVisualization(fullPath);
-            }
-          }
-        }
+        await this.openExample(message.example);
         break;
 
       case 'getTargetFile':

@@ -41,6 +41,7 @@ export enum ConfigurationTarget {
 }
 
 export const Uri = {
+  file: (fsPath: string) => ({ fsPath }),
   joinPath: (base: { fsPath: string }, ...parts: string[]) => ({
     fsPath: [base.fsPath, ...parts].join('/'),
   }),
@@ -54,9 +55,13 @@ export const window = {
   showWarningMessage: () => {},
   showErrorMessage: () => {},
   showInformationMessage: () => {},
+  showTextDocument: async (document: any, _options?: any) => {
+    window.activeTextEditor = { document } as any;
+  },
 };
 
 export const workspace = {
+  openTextDocument: async (uri: { fsPath: string }) => ({ fileName: uri.fsPath, languageId: 'cpp' }),
   workspaceFolders: [
     {
       uri: {
