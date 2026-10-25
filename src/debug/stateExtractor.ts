@@ -2363,6 +2363,57 @@ export class StateExtractor {
       const allDiscoveredNodes = new Map<string, ListNode>();
       const visitedAddrs = new Set<string>();
 
+      const evalCompoundListNode = async (
+        ptrCast: string,
+        dField: string,
+        nField: string
+      ): Promise<{ dataStr: string; nextValStr: string } | null> => {
+        try {
+          const raw = await evalHeapExpr(`*${ptrCast}`);
+          if (!raw || raw.includes('error') || raw.includes('Cannot access') || !raw.includes('{')) {
+            return null;
+          }
+          const dMatch = raw.match(new RegExp(`\\b${dField}\\s*=\\s*([^,}]+)`));
+          const nMatch = raw.match(new RegExp(`\\b${nField}\\s*=\\s*([^,}]+)`));
+          if (dMatch && nMatch) {
+            return {
+              dataStr: dMatch[1].trim(),
+              nextValStr: nMatch[1].trim(),
+            };
+          }
+        } catch {
+          // fall back
+        }
+        return null;
+      };
+
+      const evalCompoundTreeNode = async (
+        ptrCast: string,
+        dField: string,
+        lField: string,
+        rField: string
+      ): Promise<{ dataStr: string; leftValStr: string; rightValStr: string } | null> => {
+        try {
+          const raw = await evalHeapExpr(`*${ptrCast}`);
+          if (!raw || raw.includes('error') || raw.includes('Cannot access') || !raw.includes('{')) {
+            return null;
+          }
+          const dMatch = raw.match(new RegExp(`\\b${dField}\\s*=\\s*([^,}]+)`));
+          const lMatch = raw.match(new RegExp(`\\b${lField}\\s*=\\s*([^,}]+)`));
+          const rMatch = raw.match(new RegExp(`\\b${rField}\\s*=\\s*([^,}]+)`));
+          if (dMatch && lMatch && rMatch) {
+            return {
+              dataStr: dMatch[1].trim(),
+              leftValStr: lMatch[1].trim(),
+              rightValStr: rMatch[1].trim(),
+            };
+          }
+        } catch {
+          // fall back
+        }
+        return null;
+      };
+
       const traverseChain = async (
         startAddr: string,
         isHeadChain: boolean,
@@ -2371,6 +2422,12 @@ export class StateExtractor {
         let currAddr: string | null = startAddr;
         let depth = 0;
         const MAX_DEPTH = 50;
+
+        const initialCast = `((${nodeType}*)${startAddr})`;
+        const [dataField, nextField] = await Promise.all([
+          this.resolveDataField(evalHeapExpr, initialCast),
+          this.resolveNextField(evalHeapExpr, initialCast),
+        ]);
 
         while (currAddr && !visitedAddrs.has(currAddr) && depth < MAX_DEPTH) {
           if (this.deletedAddresses.has(currAddr)) {
@@ -2382,11 +2439,24 @@ export class StateExtractor {
           const id = this.getStableId(currAddr);
           const ptrCast = `((${nodeType}*)${currAddr})`;
 
-          const dataField = await this.resolveDataField(evalHeapExpr, ptrCast);
-          const nextField = await this.resolveNextField(evalHeapExpr, ptrCast);
+          // Step 3.3: Compound struct dereference (*ptrCast) in 1 roundtrip
+          let dataStr: string;
+          let nextValStr: string;
 
-          const dataStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${dataField}`), `${ptrCast}->${dataField}`);
-          const nextValStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${nextField}`), `${ptrCast}->${nextField}`, true);
+          const compound = await evalCompoundListNode(ptrCast, dataField, nextField);
+          if (compound) {
+            dataStr = compound.dataStr;
+            nextValStr = compound.nextValStr;
+          } else {
+            // Step 3.1: Concurrent evaluation of data and next via Promise.all
+            const [rawD, rawN] = await Promise.all([
+              evalHeapExpr(`${ptrCast}->${dataField}`),
+              evalHeapExpr(`${ptrCast}->${nextField}`),
+            ]);
+            dataStr = requireNodeValue(rawD, `${ptrCast}->${dataField}`);
+            nextValStr = requireNodeValue(rawN, `${ptrCast}->${nextField}`, true);
+          }
+
           const nextAddr = this.parsePointer(nextValStr);
 
           const nextId =
@@ -2424,6 +2494,13 @@ export class StateExtractor {
         const MAX_NODES = 100;
         let count = 0;
 
+        const initialCast = `((${nodeType}*)${startAddr})`;
+        const [dataField, leftField, rightField] = await Promise.all([
+          this.resolveDataField(evalHeapExpr, initialCast),
+          this.resolveLeftField(evalHeapExpr, initialCast),
+          this.resolveRightField(evalHeapExpr, initialCast),
+        ]);
+
         while (queue.length > 0 && count < MAX_NODES) {
           const item = queue.shift()!;
           const currAddr = item.addr;
@@ -2438,13 +2515,26 @@ export class StateExtractor {
           const id = this.getStableId(currAddr);
           const ptrCast = `((${nodeType}*)${currAddr})`;
 
-          const dataField = await this.resolveDataField(evalHeapExpr, ptrCast);
-          const leftField = await this.resolveLeftField(evalHeapExpr, ptrCast);
-          const rightField = await this.resolveRightField(evalHeapExpr, ptrCast);
+          // Step 3.3 & Step 3.2: Compound struct dereference or concurrent Promise.all
+          let dataStr: string;
+          let leftValStr: string;
+          let rightValStr: string;
 
-          const dataStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${dataField}`), `${ptrCast}->${dataField}`);
-          const leftValStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${leftField}`), `${ptrCast}->${leftField}`, true);
-          const rightValStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${rightField}`), `${ptrCast}->${rightField}`, true);
+          const compound = await evalCompoundTreeNode(ptrCast, dataField, leftField, rightField);
+          if (compound) {
+            dataStr = compound.dataStr;
+            leftValStr = compound.leftValStr;
+            rightValStr = compound.rightValStr;
+          } else {
+            const [rawD, rawL, rawR] = await Promise.all([
+              evalHeapExpr(`${ptrCast}->${dataField}`),
+              evalHeapExpr(`${ptrCast}->${leftField}`),
+              evalHeapExpr(`${ptrCast}->${rightField}`),
+            ]);
+            dataStr = requireNodeValue(rawD, `${ptrCast}->${dataField}`);
+            leftValStr = requireNodeValue(rawL, `${ptrCast}->${leftField}`, true);
+            rightValStr = requireNodeValue(rawR, `${ptrCast}->${rightField}`, true);
+          }
 
           const leftAddr = this.parsePointer(leftValStr);
           const rightAddr = this.parsePointer(rightValStr);
@@ -2502,6 +2592,14 @@ export class StateExtractor {
         });
       }
 
+      // Step 3.4: Filter and batch-evaluate pointer candidates concurrently
+      const pointerCandidates: Array<{
+        varName: string;
+        varInfo: { value: string; type?: string; isArgument?: boolean };
+        isPointerType: boolean;
+        depth: number;
+      }> = [];
+
       for (const [varName, varInfo] of Object.entries(localVars)) {
         if (varName === 'head' || varName === 'root' || varName === 'this') continue;
         if (
@@ -2534,17 +2632,44 @@ export class StateExtractor {
         const isPointerType = varInfo.type?.trim()
           ? varInfo.type.includes('*') && (pointedType === nodeType || pointedType.endsWith('::' + nodeType))
           : isDeclaredPointer;
-        let varAddr = this.parsePointer(varInfo.value);
-        if (isPointerType && varInfo.type) {
-          const depth = (varInfo.type.match(/\*/g) || []).length;
-          if (depth > 1) {
+        const depth = varInfo.type ? (varInfo.type.match(/\*/g) || []).length : 0;
+
+        pointerCandidates.push({
+          varName,
+          varInfo,
+          isPointerType,
+          depth,
+        });
+      }
+
+      const resolvedPointers = await Promise.all(
+        pointerCandidates.map(async (c) => {
+          let varAddr = this.parsePointer(c.varInfo.value);
+          let valid = true;
+          if (c.isPointerType && c.varInfo.type && c.depth > 1) {
             // Node** stores a pointer slot, not a node. Resolve the slot first.
-            if (!/^[a-zA-Z_]\w*$/.test(varName) || depth > 3) continue;
-            const value = await evalExpr(`${'*'.repeat(depth - 1)}${varName}`);
-            if (value === null) continue;
-            varAddr = this.parsePointer(value);
+            if (!/^[a-zA-Z_]\w*$/.test(c.varName) || c.depth > 3) {
+              valid = false;
+            } else {
+              const value = await evalExpr(`${'*'.repeat(c.depth - 1)}${c.varName}`);
+              if (value === null) {
+                valid = false;
+              } else {
+                varAddr = this.parsePointer(value);
+              }
+            }
           }
-        }
+          return {
+            ...c,
+            varAddr,
+            valid,
+          };
+        })
+      );
+
+      for (const p of resolvedPointers) {
+        if (!p.valid) continue;
+        const { varName, varAddr, isPointerType } = p;
         const isFreed = varAddr ? this.deletedAddresses.has(varAddr) : false;
         const targetId = varAddr && !isFreed ? this.getStableId(varAddr) : null;
         const isTargetingKnownNode = varAddr ? allDiscoveredNodes.has(varAddr) : false;

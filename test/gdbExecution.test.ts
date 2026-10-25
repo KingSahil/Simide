@@ -24,6 +24,28 @@ function getWindowsShortPath(longPath: string): string {
   return longPath;
 }
 
+async function runGdbBatch(
+  debuggerPath: string,
+  args: string[],
+  options: { cwd: string }
+): Promise<{ stdout: string; stderr: string }> {
+  let lastErr: any;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await execFileAsync(debuggerPath, args, options);
+    } catch (err: any) {
+      lastErr = err;
+      const msg = `${err?.message || ''} ${err?.stderr || ''}`;
+      if (attempt < 4 && (msg.includes('4551') || msg.includes('Application Control policy'))) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 async function testGdbExecution() {
   console.log('=== Running Real GDB Runtime Stepping & State Extraction Test ===\n');
 
@@ -57,7 +79,7 @@ async function testGdbExecution() {
   fs.writeFileSync(scriptPath, gdbCmds.join('\n'), 'utf8');
 
   try {
-    const { stdout } = await execFileAsync(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
+    const { stdout } = await runGdbBatch(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
     console.log('[GDB Output Sample]');
     const lines = stdout.split('\n').filter((l) => l.includes('$') || l.includes('Breakpoint') || l.includes('Thread'));
     lines.forEach((l) => console.log('  ' + l.trim()));
@@ -108,7 +130,7 @@ async function testLeetcodeReverseGdb() {
   fs.writeFileSync(scriptPath, gdbCmds.join('\n'), 'utf8');
 
   try {
-    const { stdout } = await execFileAsync(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
+    const { stdout } = await runGdbBatch(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
     console.log('[GDB LeetCode Output Sample]');
     const lines = stdout.split('\n').filter((l) => l.includes('$') || l.includes('Breakpoint'));
     lines.forEach((l) => console.log('  ' + l.trim()));
@@ -166,7 +188,7 @@ async function testBstTraversalsGdb() {
   fs.writeFileSync(scriptPath, gdbCmds.join('\n'), 'utf8');
 
   try {
-    const { stdout } = await execFileAsync(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
+    const { stdout } = await runGdbBatch(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
     console.log('[GDB BST Traversal Output Sample]');
     const lines = stdout.split('\n').filter((l) => l.includes('$') || l.includes('Breakpoint'));
     lines.forEach((l) => console.log('  ' + l.trim()));
@@ -230,7 +252,7 @@ async function testArrayOperationsGdb() {
   fs.writeFileSync(scriptPath, gdbCmds.join('\n'), 'utf8');
 
   try {
-    const { stdout } = await execFileAsync(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
+    const { stdout } = await runGdbBatch(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
     console.log('[GDB Array Operations Output Sample]');
     const lines = stdout.split('\n').filter((l) => l.includes('$') || l.includes('Breakpoint'));
     lines.forEach((l) => console.log('  ' + l.trim()));
@@ -276,7 +298,7 @@ async function testBstRecursiveReturnGdb() {
     'quit',
   ].join('\n'));
   try {
-    const { stdout } = await execFileAsync(debuggerInfo.path,
+    const { stdout } = await runGdbBatch(debuggerInfo.path,
       ['-batch', '-x', path.basename(scriptPath), 'bst-traversals.exe'],
       { cwd: debugMentorDir, timeout: 30000 });
     assert.ok(stdout.includes('BEFORE_RETURN:50,30,40,70,60'), stdout);
@@ -324,7 +346,7 @@ async function testOopLifecycleGdb() {
     'quit',
   ].join('\n'));
   try {
-    const { stdout } = await execFileAsync(debuggerInfo.path,
+    const { stdout } = await runGdbBatch(debuggerInfo.path,
       ['-batch', '-x', path.basename(scriptPath), path.basename(exe)],
       { cwd: directory, timeout: 30000 });
     for (const marker of ['PRIVATE_HEAD:10', 'APPENDED:10,20,30', 'INSERTED:5,10,20,30', 'DELETED:5,10,30', 'CLEANED:1']) {
@@ -391,7 +413,7 @@ async function testStackOperationsGdb() {
   fs.writeFileSync(scriptPath, gdbCmds.join('\n'), 'utf8');
 
   try {
-    const { stdout } = await execFileAsync(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
+    const { stdout } = await runGdbBatch(debuggerInfo.path, ['-batch', '-x', scriptFile, exeFile], { cwd: debugMentorDir });
     console.log('[GDB Stack Operations Output Sample]');
     const lines = stdout.split('\n').filter((l) => l.includes('$') || l.includes('Breakpoint'));
     lines.forEach((l) => console.log('  ' + l.trim()));
@@ -431,7 +453,7 @@ async function runGdbScenario(sourceFile: string, commands: string[]): Promise<s
   const scriptPath = path.join(directory, `test_${path.basename(sourceFile, '.cpp')}_${process.pid}.txt`);
   fs.writeFileSync(scriptPath, commands.concat('quit').join('\n'));
   try {
-    return (await execFileAsync(debuggerInfo.path,
+    return (await runGdbBatch(debuggerInfo.path,
       ['-batch', '-x', path.basename(scriptPath), path.basename(executable)],
       { cwd: directory, timeout: 30000 })).stdout;
   } finally {

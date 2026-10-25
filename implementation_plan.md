@@ -255,10 +255,10 @@ Validate end-to-end performance gains and guarantee full regression safety acros
 | `2.1` | Build `availableNames` registry from DAP scopes | Completed |
 | `2.2` | Implement 3-stage targeted candidate pipeline | Completed |
 | `2.3` | Add fast early null exit | Completed |
-| `3.1` | Parallelize `traverseChain` with `Promise.all` | Pending |
-| `3.2` | Parallelize `traverseTree` with `Promise.all` | Pending |
-| `3.3` | Implement compound `*ptrCast` evaluation | Pending |
-| `3.4` | Parallelize local pointer badge inspections | Pending |
+| `3.1` | Parallelize `traverseChain` with `Promise.all` | Completed |
+| `3.2` | Parallelize `traverseTree` with `Promise.all` | Completed |
+| `3.3` | Implement compound `*ptrCast` evaluation | Completed |
+| `3.4` | Parallelize local pointer badge inspections | Completed |
 | `4.1` | Run automated test suite | Pending |
 | `4.2` | Measure latency benchmarks | Pending |
 | `4.3` | Repackage and install VSIX | Pending |
