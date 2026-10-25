@@ -252,9 +252,9 @@ Validate end-to-end performance gains and guarantee full regression safety acros
 | `1.2` | Implement single-pass analyzer | Completed |
 | `1.3` | Refactor `StateExtractor` disk reads to use cache | Completed |
 | `1.4` | Refactor `LinkedListViewProvider` to use cache | Completed |
-| `2.1` | Build `availableNames` registry from DAP scopes | Pending |
-| `2.2` | Implement 3-stage targeted candidate pipeline | Pending |
-| `2.3` | Add fast early null exit | Pending |
+| `2.1` | Build `availableNames` registry from DAP scopes | Completed |
+| `2.2` | Implement 3-stage targeted candidate pipeline | Completed |
+| `2.3` | Add fast early null exit | Completed |
 | `3.1` | Parallelize `traverseChain` with `Promise.all` | Pending |
 | `3.2` | Parallelize `traverseTree` with `Promise.all` | Pending |
 | `3.3` | Implement compound `*ptrCast` evaluation | Pending |

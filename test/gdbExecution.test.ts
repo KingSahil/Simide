@@ -10,7 +10,7 @@ import { discoverGraphLayout, GraphStateExtractor } from '../src/debug/graphStat
 const execFileAsync = promisify(execFile);
 
 function getWindowsShortPath(longPath: string): string {
-  if (process.platform !== 'win32') {
+  if (process.platform !== 'win32' || !longPath.includes(' ')) {
     return longPath;
   }
   try {
@@ -27,8 +27,8 @@ function getWindowsShortPath(longPath: string): string {
 async function testGdbExecution() {
   console.log('=== Running Real GDB Runtime Stepping & State Extraction Test ===\n');
 
-  const debugMentorDir = getWindowsShortPath(path.resolve(process.cwd(), 'test/fixtures/.debug-mentor'));
-  const exeFile = 'bst-reference.exe';
+  const debugMentorDir = getWindowsShortPath(path.resolve(process.cwd(), 'examples/.debug-mentor'));
+  const exeFile = 'bst-traversals.exe';
   const exePath = path.join(debugMentorDir, exeFile);
   assert.ok(fs.existsSync(exePath), 'Compiled executable must exist');
 

@@ -1968,6 +1968,9 @@ export class StateExtractor {
         // Scopes request might not be supported; we'll evaluate directly
       }
 
+      // Step 2.1: Fast lookup registry of in-scope variable names
+      const availableNames = new Set<string>(Object.keys(localVars));
+
       // Evaluation helper in current frame or specific target frame
       const evalExpr = async (expr: string, targetFrameId: number = frameId): Promise<string | null> => {
         try {
@@ -2110,6 +2113,23 @@ export class StateExtractor {
       let headResolved = false;
       const frameVariables = new Map<number, RuntimeVariable[]>();
       frameVariables.set(frameId, Object.entries(localVars).map(([name, variable]) => ({ name, ...variable })));
+
+      const ensureFrameVariables = async (targetFrameId: number): Promise<RuntimeVariable[]> => {
+        const existing = frameVariables.get(targetFrameId);
+        if (existing) return existing;
+        const variables: RuntimeVariable[] = [];
+        try {
+          const response = await session.customRequest('scopes', { frameId: targetFrameId });
+          for (const scope of response?.scopes || []) {
+            if (!/local|var|arg|param/i.test(scope.name || '') || !scope.variablesReference) continue;
+            const res = await session.customRequest('variables', { variablesReference: scope.variablesReference });
+            variables.push(...(res?.variables || []));
+          }
+        } catch { /* Existing expression-based discovery remains available */ }
+        frameVariables.set(targetFrameId, variables);
+        return variables;
+      };
+
       const mainFrameForObjects = frames.find((frame: any) =>
         frame.name === 'main' || frame.name?.startsWith('main(')
       );
@@ -2120,20 +2140,9 @@ export class StateExtractor {
       const recordTypes = this.discoverNodeTypes(resolvedFile);
       const memberNames = headCandidates.filter(candidate => !candidate.includes('->'));
       for (const frame of objectFrames) {
-        if (!frameVariables.has(frame.id)) {
-          const variables: RuntimeVariable[] = [];
-          try {
-            const response = await session.customRequest('scopes', { frameId: frame.id });
-            for (const scope of response?.scopes || []) {
-              if (!/local|var|arg|param/i.test(scope.name || '') || !scope.variablesReference) continue;
-              const response = await session.customRequest('variables', { variablesReference: scope.variablesReference });
-              variables.push(...(response?.variables || []));
-            }
-          } catch { /* Existing expression-based discovery remains available. */ }
-          frameVariables.set(frame.id, variables);
-        }
+        const vars = await ensureFrameVariables(frame.id);
         const result = await resolveObjectHead(
-          frameVariables.get(frame.id)!, nodeType, recordTypes, memberNames,
+          vars, nodeType, recordTypes, memberNames,
           async reference => (await session.customRequest('variables', { variablesReference: reference }))?.variables || [],
           expression => evalExpr(expression, frame.id), value => this.parsePointer(value)
         );
@@ -2148,27 +2157,102 @@ export class StateExtractor {
         return !!variable?.type && !isNodePointerType(variable.type, nodeType);
       };
 
+      // Step 2.2: Build targeted candidate list dynamically based on in-scope variables
+      const getTargetedCandidates = (targetFrameId: number, vars: RuntimeVariable[]): string[] => {
+        if (!vars || vars.length === 0) {
+          return headCandidates;
+        }
+
+        const varMap = new Map<string, RuntimeVariable>();
+        for (const v of vars) {
+          varMap.set(v.name, v);
+        }
+
+        const candidates: string[] = [];
+        const added = new Set<string>();
+
+        const addCandidate = (name: string) => {
+          if (!added.has(name)) {
+            added.add(name);
+            candidates.push(name);
+          }
+        };
+
+        const treePriority = [
+          'root', 'pRoot', 'tree', 't', '_root', 'm_root', 'root_ref',
+          'head', 'pHead', 'first', 'start', 'head_ref', 'dummy', 'list'
+        ];
+        const listPriority = [
+          'head', 'pHead', 'headNode', 'first', 'start', 'listHead',
+          '_head', 'm_head', 'head_ref', 'l1', 'l2', 'dummy', 'dummyHead',
+          'h', 'list', 'root', 'pRoot', 'tree', 't', 'root_ref'
+        ];
+        const priorityList = structureType === 'tree' ? treePriority : listPriority;
+
+        // Stage 1: Standard head names present in frame scope
+        for (const name of priorityList) {
+          if (varMap.has(name)) {
+            addCandidate(name);
+          }
+        }
+
+        // Stage 2: Pointer / node-like variables in frame scope
+        for (const v of vars) {
+          if (added.has(v.name)) continue;
+          const vType = v.type || '';
+          const cleanType = vType.replace(/\b(?:const|volatile|struct|class)\b|[*&\s]/g, '');
+          if (
+            isNodePointerType(vType, nodeType) ||
+            (vType.includes('*') && (recordTypes.has(cleanType) || varDecls.has(v.name)))
+          ) {
+            addCandidate(v.name);
+          }
+        }
+
+        // Stage 3: Class member pointers if 'this' is in scope
+        if (varMap.has('this')) {
+          const thisPriority = structureType === 'tree'
+            ? ['this->root', 'this->pRoot', 'this->tree', 'this->head', 'this->first']
+            : ['this->head', 'this->first', 'this->pHead', 'this->headNode', 'this->root', 'this->tree'];
+          for (const expr of thisPriority) {
+            addCandidate(expr);
+          }
+        }
+
+        return candidates.length > 0 ? candidates : headCandidates;
+      };
+
       // A: Try current user frame (only if we're in main — in helper functions like insert()
       // the 'root' parameter may be a by-value nullptr copy, not the actual tree root)
       const isInMain = isInsideMain;
       if (isInMain && !headResolved) {
-        for (const cand of headCandidates) {
+        const currentVars = await ensureFrameVariables(frameId);
+        const candidates = getTargetedCandidates(frameId, currentVars);
+        for (const cand of candidates) {
           if (isNonNodeVariable(cand, frameId)) continue;
           if (varDecls.has(cand) && !this.isVariableInitialized(cand, rawLine, varDecls, funcRange)) {
             continue;
           }
           let valStr: string | null | undefined = localVars[cand]?.value;
-          if (!valStr) {
+          if (!valStr || cand.includes('->')) {
             valStr = await evalExpr(cand);
           }
           if (valStr) {
+            let isNull = false;
             if (cand === 'head_ref' || cand === 'root_ref' || valStr.includes('**')) {
               const derefVal = await evalExpr(`*${cand}`);
               headAddr = this.parsePointer(derefVal);
+              isNull = derefVal ? isExplicitNull(derefVal) : false;
             } else {
               headAddr = this.parsePointer(valStr);
+              isNull = isExplicitNull(valStr);
             }
-            if (isExplicitNull(valStr)) { headResolved = true; break; }
+            // Step 2.3: Fast early-exit on explicit null
+            if (isNull) {
+              headResolved = true;
+              headAddr = null;
+              break;
+            }
             if (headAddr && !this.deletedAddresses.has(headAddr)) {
               break;
             } else {
@@ -2189,18 +2273,28 @@ export class StateExtractor {
         });
 
         if (mainFrame) {
-          for (const cand of headCandidates) {
+          const mainVars = await ensureFrameVariables(mainFrame.id);
+          const mainCandidates = getTargetedCandidates(mainFrame.id, mainVars);
+          for (const cand of mainCandidates) {
             if (isNonNodeVariable(cand, mainFrame.id)) continue;
             const valStr = await evalExpr(cand, mainFrame.id);
             if (valStr) {
               let candidate: string | null = null;
+              let isNull = false;
               if (cand === 'head_ref' || cand === 'root_ref' || valStr.includes('**')) {
                 const derefVal = await evalExpr(`*${cand}`, mainFrame.id);
                 candidate = this.parsePointer(derefVal);
+                isNull = derefVal ? isExplicitNull(derefVal) : false;
               } else {
                 candidate = this.parsePointer(valStr);
+                isNull = isExplicitNull(valStr);
               }
-              if (isExplicitNull(valStr)) { headResolved = true; break; }
+              // Step 2.3: Fast early-exit on explicit null
+              if (isNull) {
+                headResolved = true;
+                headAddr = null;
+                break;
+              }
               if (candidate && !this.deletedAddresses.has(candidate)) {
                 headAddr = candidate;
                 break;
@@ -2215,18 +2309,30 @@ export class StateExtractor {
             const callerFrame = frames[i];
             const callerPath = callerFrame.source?.path || callerFrame.source?.name || '';
             if (!this.isUserSource(callerPath)) continue;
-            for (const cand of headCandidates) {
+            if (mainFrame && callerFrame.id === mainFrame.id) continue;
+
+            const callerVars = await ensureFrameVariables(callerFrame.id);
+            const callerCandidates = getTargetedCandidates(callerFrame.id, callerVars);
+            for (const cand of callerCandidates) {
               if (isNonNodeVariable(cand, callerFrame.id)) continue;
               const valStr = await evalExpr(cand, callerFrame.id);
               if (valStr) {
                 let candidate: string | null = null;
+                let isNull = false;
                 if (cand === 'head_ref' || cand === 'root_ref' || valStr.includes('**')) {
                   const derefVal = await evalExpr(`*${cand}`, callerFrame.id);
                   candidate = this.parsePointer(derefVal);
+                  isNull = derefVal ? isExplicitNull(derefVal) : false;
                 } else {
                   candidate = this.parsePointer(valStr);
+                  isNull = isExplicitNull(valStr);
                 }
-                if (isExplicitNull(valStr)) { headResolved = true; break; }
+                // Step 2.3: Fast early-exit on explicit null
+                if (isNull) {
+                  headResolved = true;
+                  headAddr = null;
+                  break;
+                }
                 if (candidate && !this.deletedAddresses.has(candidate)) {
                   headAddr = candidate;
                   break;
