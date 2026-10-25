@@ -403,6 +403,36 @@ body {
   border-color: #3b4859;
 }
 
+/* ----- Visual Link Mode ----- */
+body.link-mode {
+  cursor: crosshair;
+}
+body.link-mode .graph-node {
+  cursor: pointer;
+}
+body.link-mode .graph-node:hover {
+  outline: 2px solid var(--main-accent);
+  outline-offset: 2px;
+}
+.graph-node.link-source {
+  outline: 3px solid var(--main-accent);
+  outline-offset: 2px;
+  background: rgba(0, 102, 255, 0.12);
+}
+.graph-node.link-target {
+  outline: 3px solid var(--success-indicator);
+  outline-offset: 2px;
+  background: rgba(54, 199, 121, 0.12);
+}
+.btn-secondary.active {
+  background-color: var(--success-indicator);
+  border-color: var(--success-indicator);
+  color: #ffffff;
+}
+.btn-secondary.active:hover {
+  background-color: #2ea043;
+}
+
 .graph-viewport {
   position: relative;
   width: 100%;

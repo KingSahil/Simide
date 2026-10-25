@@ -9,6 +9,7 @@ import {
   QueueSlot,
 } from '../src/visualization/linkedListModel';
 import { ExtensionMessage, WebviewMessage } from '../src/sidebar/messages';
+import type { GraphEdge } from '../src/sidebar/edgeLinkHandler';
 import {
   forceSimulation,
   forceLink,
@@ -53,6 +54,79 @@ const explanationText = document.getElementById('explanationText') as HTMLDivEle
 const terminalPlaceholder = document.getElementById('terminalPlaceholder') as HTMLSpanElement;
 const terminalText = document.getElementById('terminalText') as HTMLPreElement;
 const btnClearTerminal = document.getElementById('btnClearTerminal') as HTMLButtonElement;
+const btnLinkMode = document.getElementById('btnLinkMode') as HTMLButtonElement | null;
+
+// Visual Link Mode state: click two graph nodes to wire them in source code.
+let linkMode = false;
+let linkSourceId: string | null = null;
+
+function setLinkMode(on: boolean) {
+  linkMode = on;
+  if (btnLinkMode) {
+    btnLinkMode.classList.toggle('active', on);
+    btnLinkMode.setAttribute('aria-pressed', String(on));
+  }
+  document.body.classList.toggle('link-mode', on);
+  if (canvasHint) {
+    canvasHint.textContent = on
+      ? 'Link Mode: click a source node, then a target node to wire them in code (Esc to cancel)'
+      : 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
+  }
+  if (!on) clearLinkSelection();
+}
+
+function clearLinkSelection() {
+  linkSourceId = null;
+  document.querySelectorAll('.graph-node.link-source, .graph-node.link-target').forEach((el) => {
+    el.classList.remove('link-source', 'link-target');
+  });
+}
+
+/**
+ * Node tap (click without drag) handler for Link Mode. Select a source node,
+ * then a target node to post a createEdge request to the extension host.
+ */
+function onNodeTap(id: string) {
+  if (!linkMode || !id.startsWith('node-')) return;
+  if (linkSourceId === id) {
+    clearLinkSelection();
+    return;
+  }
+  if (!linkSourceId) {
+    linkSourceId = id;
+    const el = document.getElementById(`node-${id}`);
+    if (el) el.classList.add('link-source');
+    return;
+  }
+
+  const sourceNode = currentSnapshot?.nodes.find((n) => n.id === linkSourceId);
+  const targetNode = currentSnapshot?.nodes.find((n) => n.id === id);
+  if (!sourceNode || !targetNode || !currentSnapshot) {
+    clearLinkSelection();
+    return;
+  }
+
+  const filePath = currentSnapshot.source?.file || '';
+  const edge: GraphEdge = {
+    source: {
+      id: sourceNode.id,
+      name: sourceNode.variableName || String(sourceNode.data),
+      label: String(sourceNode.data),
+      data: sourceNode.data,
+      file: filePath,
+    },
+    target: {
+      id: targetNode.id,
+      name: targetNode.variableName || String(targetNode.data),
+      label: String(targetNode.data),
+      data: targetNode.data,
+      file: filePath,
+    },
+    kind: 'member-bind',
+  };
+  vscode.postMessage({ command: 'createEdge', edge });
+  clearLinkSelection();
+}
 
 function updateTerminal(output?: string) {
   if (output && output.length > 0) {
@@ -399,7 +473,7 @@ function updateBadge(status: 'idle' | 'running' | 'paused' | 'error' | 'terminat
 }
 
 // Make DOM elements draggable with live arrow updates & zoom support
-function makeDraggable(el: HTMLElement, id: string) {
+function makeDraggable(el: HTMLElement, id: string, onTap?: (id: string) => void) {
   el.onpointerdown = (e: PointerEvent) => {
     // Left click only (Right click and middle click are for panning)
     if (e.button !== 0 || isSpacePressed) return;
@@ -432,6 +506,12 @@ function makeDraggable(el: HTMLElement, id: string) {
     };
 
     const onPointerUp = (upEv: PointerEvent) => {
+      // A tap (press + release without meaningful drag) selects the node in Link Mode.
+      const wasTap =
+        upEv.button === 0 &&
+        Math.abs(upEv.clientX - startMouseX) <= 4 &&
+        Math.abs(upEv.clientY - startMouseY) <= 4;
+
       try {
         el.releasePointerCapture(upEv.pointerId);
       } catch {}
@@ -450,6 +530,10 @@ function makeDraggable(el: HTMLElement, id: string) {
       if (simulation) {
         simulation.alphaTarget(0);
         simulation.alpha(0.6).restart();
+      }
+
+      if (wasTap) {
+        onTap?.(id);
       }
 
       el.removeEventListener('pointermove', onPointerMove);
@@ -1614,7 +1698,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
       }
 
       registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 46, 46, 'node', resetPositions);
-      makeDraggable(nodeEl, node.id);
+      makeDraggable(nodeEl, node.id, onNodeTap);
 
       if (node.leftId && nodes.some((n) => n.id === node.leftId)) {
         d3Links.push({
@@ -1702,7 +1786,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
     const targetCenterX = 180 + i * 165;
     const targetCenterY = 135;
     registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 126, 50, 'node', resetPositions);
-    makeDraggable(nodeEl, node.id);
+    makeDraggable(nodeEl, node.id, onNodeTap);
 
     const targetNodeExists = Boolean(node.nextId && nodes.some((n) => n.id === node.nextId));
     if (targetNodeExists) {
@@ -1767,7 +1851,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
     const targetCenterX = 180 + baseIdx * 165;
     const targetCenterY = 135;
     registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 126, 50, 'node', resetPositions);
-    makeDraggable(nodeEl, node.id);
+    makeDraggable(nodeEl, node.id, onNodeTap);
 
     const targetExists = Boolean(node.nextId && nodes.some((n) => n.id === node.nextId));
     if (targetExists) {
@@ -1847,6 +1931,11 @@ btnResetLayout.onclick = () => {
     resetCameraView(true);
     renderDiagram(currentSnapshot, true);
   }
+};
+if (btnLinkMode) {
+  btnLinkMode.onclick = () => {
+    setLinkMode(!linkMode);
+  };
 };
 if (btnClearTerminal) {
   btnClearTerminal.onclick = () => {
@@ -1930,6 +2019,10 @@ graphViewport.addEventListener('dblclick', (e: MouseEvent) => {
 
 // Spacebar hold for pan cursor
 window.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape' && linkMode) {
+    setLinkMode(false);
+    return;
+  }
   if (e.code === 'Space' && !isSpacePressed && document.activeElement?.tagName !== 'INPUT') {
     isSpacePressed = true;
     graphViewport.classList.add('can-pan');
@@ -1989,6 +2082,44 @@ window.addEventListener('message', (event) => {
 
       // Render interactive diagram
       renderDiagram(snapshot, false);
+      currentSnapshot = snapshot;
+      // A re-snapshot replaces all canvas elements, so drop any in-progress link selection.
+      clearLinkSelection();
+      break;
+    }
+
+    case 'edgeApplied': {
+      const { sourceNodeId, targetNodeId, highlighted, message } = msg;
+      const prev = terminalText.textContent || '';
+      terminalText.style.display = 'block';
+      if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+      terminalText.textContent =
+        prev +
+        `\n✓ ${message}\n   Wiring inserted at line ${highlighted.startLine}${
+          highlighted.endLine > highlighted.startLine ? `–${highlighted.endLine}` : ''
+        }`;
+      const vp = document.getElementById('terminalViewport');
+      if (vp) vp.scrollTop = vp.scrollHeight;
+      // Flash the linked nodes on canvas.
+      const flash = (id: string | undefined, cls: string) => {
+        if (!id) return;
+        const el = document.getElementById(`node-${id}`);
+        if (!el) return;
+        el.classList.add(cls);
+        setTimeout(() => el.classList.remove(cls), 2000);
+      };
+      flash(sourceNodeId, 'link-source');
+      flash(targetNodeId, 'link-target');
+      break;
+    }
+
+    case 'edgeError': {
+      const prev = terminalText.textContent || '';
+      terminalText.style.display = 'block';
+      if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+      terminalText.textContent = prev + `\n✗ Link error: ${msg.message}${msg.details ? `\n   ${msg.details}` : ''}`;
+      const vp = document.getElementById('terminalViewport');
+      if (vp) vp.scrollTop = vp.scrollHeight;
       break;
     }
 

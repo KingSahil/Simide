@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { ExtensionMessage, WebviewMessage } from './messages';
 import { CppCompiler } from '../debug/compiler';
 import { DebugSessionManager } from '../debug/debugSessionManager';
 import { DebugTrackerFactory, DebuggerStopEvent } from '../debug/debugAdapterTracker';
@@ -9,6 +8,10 @@ import { ExecutionController } from '../debug/executionController';
 import { StateExtractor } from '../debug/stateExtractor';
 import { SnapshotManager } from '../visualization/snapshotManager';
 import { LinkedListSnapshot } from '../visualization/linkedListModel';
+import { AstCodePatcher } from '../visualization/codePatcher';
+import { ClangAstParser } from '../parser/clangAstParser';
+import { GraphEdgeLinker, GraphEdge } from './edgeLinkHandler';
+import { ExtensionMessage, WebviewMessage } from './messages';
 
 export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'debug-mentor.sidebar';
@@ -19,9 +22,28 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   private disposables: vscode.Disposable[] = [];
   private starting = false;
 
-  constructor(private readonly extensionUri: vscode.Uri) {
+  // Wiring engine: parses the backing source file with clang and turns a visual
+  // graph edge into a precise source-text edit.
+  private astParser = new ClangAstParser();
+  private codePatcher = new AstCodePatcher();
+  private edgeLinker!: GraphEdgeLinker;
+
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    edgeLinker?: GraphEdgeLinker
+  ) {
+    this.edgeLinker = edgeLinker ?? new GraphEdgeLinker(this.astParser, this.codePatcher);
     this.registerDebugListeners();
   }
+
+  // Highlight for lines that received wiring code after a visual link was made.
+  private linkEditDecorationType = vscode.window.createTextEditorDecorationType({
+    backgroundColor: 'rgba(54, 199, 121, 0.18)',
+    isWholeLine: true,
+    border: '1px solid rgba(54, 199, 121, 0.6)',
+    overviewRulerColor: '#36C779',
+    overviewRulerLane: vscode.OverviewRulerLane.Full,
+  });
 
   private registerDebugListeners(): void {
     // Re-apply highlight if student clicks back into editor
@@ -249,6 +271,121 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           this.broadcastState(curr);
         }
         break;
+
+      case 'createEdge':
+        await this.handleCreateEdge(message.edge);
+        break;
+    }
+  }
+
+  /**
+   * Integration glue: a visual edge was created in the sidebar canvas. Translate
+   * it into a source-code edit in the active editor, highlight the touched lines,
+   * and re-parse the file so the AST visualization reflects the new wiring.
+   */
+  private async handleCreateEdge(edge: GraphEdge): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      this.postMessage({
+        command: 'edgeError',
+        message: 'No active editor. Open the C++ source file before creating links.',
+      });
+      return;
+    }
+
+    const filePath = editor.document.fileName;
+    if (!/\.(cpp|cc|cxx|c\+\+|h|hpp)$/i.test(filePath)) {
+      this.postMessage({
+        command: 'edgeError',
+        message: 'Active file is not a C++ source file.',
+      });
+      return;
+    }
+
+    this.edgeLinker.setSourceFile(filePath);
+    const result = await this.edgeLinker.handleEdgeCreated(edge);
+
+    if (!result.ok) {
+      this.postMessage({
+        command: 'edgeError',
+        message: result.error ?? 'Link could not be applied to source code.',
+        details: result.message,
+      });
+      return;
+    }
+
+    if (!result.edit || !result.highlighted) {
+      this.postMessage({
+        command: 'edgeError',
+        message: 'The linker produced an empty edit.',
+        details: result.message,
+      });
+      return;
+    }
+
+    // Apply the edit to the editor's text buffer (fully undoable via VS Code).
+    const docText = editor.document.getText();
+    const edit = result.edit!;
+    const start = AstCodePatcher.offsetToPosition(docText, edit.start);
+    const end = AstCodePatcher.offsetToPosition(docText, edit.end);
+    try {
+      await editor.edit((builder) => {
+        builder.replace(new vscode.Range(
+          new vscode.Position(start.line, start.character),
+          new vscode.Position(end.line, end.character)
+        ), edit.newText);
+      });
+    } catch (err: any) {
+      this.postMessage({
+        command: 'edgeError',
+        message: 'Failed to apply the wiring edit to the editor buffer.',
+        details: err.message ?? String(err),
+      });
+      return;
+    }
+
+    // Highlight the inserted lines across all visible editors of this file.
+    this.highlightLinkEdit(filePath, result.highlighted);
+
+    // Background re-parse of the modified code so the AST visualization tree
+    // reflects the wiring in real time. Best-effort: failure does not roll back
+    // the applied edit.
+    let astReparsed = false;
+    try {
+      const ast = await this.astParser.parseFile(filePath);
+      const nodeCount = AstCodePatcher.findAll(ast, () => true).length;
+      this.postMessage({ command: 'astRefreshed', filePath, nodeCount });
+      astReparsed = true;
+    } catch (err: any) {
+      // clang may not be installed; the edit itself remains applied.
+    }
+
+    this.postMessage({
+      command: 'edgeApplied',
+      filePath,
+      edit: result.edit,
+      highlighted: result.highlighted,
+      message: result.message ?? `Edge wired into ${path.basename(filePath)}.`,
+    });
+  }
+
+  /**
+   * Paint whole-line decorations over the lines that received wiring code, and
+   * scroll the editor to the first highlighted line.
+   */
+  private highlightLinkEdit(filePath: string, highlighted: { startLine: number; endLine: number }): void {
+    const startLine = Math.max(0, highlighted.startLine - 1);
+    const endLine = Math.max(startLine, highlighted.endLine - 1);
+    const decorations: vscode.Range[] = [];
+    for (let line = startLine; line <= endLine; line++) {
+      decorations.push(new vscode.Range(line, 0, line, 0));
+    }
+    const revealRange = new vscode.Range(startLine, 0, endLine + 1, 0);
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (editor.document.fileName === filePath) {
+        editor.setDecorations(this.linkEditDecorationType, decorations);
+        editor.revealRange(revealRange, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+      }
     }
   }
 
@@ -627,6 +764,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   public async dispose(): Promise<void> {
     this.clearEditorHighlight();
     this.activeLineDecorationType.dispose();
+    this.linkEditDecorationType.dispose();
     await this.restoreNativeStackFrameHighlight();
     for (const d of this.disposables) {
       d.dispose();

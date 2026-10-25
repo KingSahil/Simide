@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { LinkedListViewProvider } from './sidebar/linkedListViewProvider';
+import { GraphEdgeLinker } from './sidebar/edgeLinkHandler';
+import { AstCodePatcher } from './visualization/codePatcher';
+import { ClangAstParser } from './parser/clangAstParser';
 import { DebugTrackerFactory } from './debug/debugAdapterTracker';
 import { DebugSessionManager } from './debug/debugSessionManager';
 import { CppCompiler } from './debug/compiler';
@@ -26,8 +29,13 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // Wire the Visual Node-to-Code Linker: AST parser + text patcher + edge handler.
+  const astParser = new ClangAstParser();
+  const codePatcher = new AstCodePatcher();
+  const edgeLinker = new GraphEdgeLinker(astParser, codePatcher);
+
   // Register Webview Provider for the sidebar view
-  const provider = new LinkedListViewProvider(context.extensionUri);
+  const provider = new LinkedListViewProvider(context.extensionUri, edgeLinker);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       LinkedListViewProvider.viewType,
