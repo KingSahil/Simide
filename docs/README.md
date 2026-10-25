@@ -8,12 +8,14 @@ This documentation is written in clear, plain language to provide human develope
 
 ## Documentation Map
 
+- [Graph visualization](./graph-visualization.md) Map
+
 | Document | Purpose | Audience |
 | :--- | :--- | :--- |
-| **[System Architecture](file:///c:/Projects/vscode-extension/docs/architecture.md)** | High-level system overview, 4 core subsystems, physics canvas, technology stack, and state machine. | All Developers & AI Agents |
+| **[System Architecture](file:///c:/Projects/vscode-extension/docs/architecture.md)** | High-level system overview, 4 core subsystems, physics canvas, technology stack, and state machine (Linked Lists, Binary Trees, Arrays, Stacks, and Circular Queues). | All Developers & AI Agents |
 | **[Component Deep-Dive](file:///c:/Projects/vscode-extension/docs/components.md)** | File-by-file breakdown of every module across debug, visualization, sidebar, and webview layers. | Developers extending features |
-| **[Data Flow & Lifecycles](file:///c:/Projects/vscode-extension/docs/data-flow.md)** | Step-by-step traces with sequence diagrams for session launch, stepping, traversals, deletions, and teardown. | Debugging & Protocol Engineers |
-| **[AI Agent Guide](file:///c:/Projects/vscode-extension/docs/agent-guide.md)** | Guidelines, conventions, testing recipes, and instructions for adding new data structures (Trees, Doubly Linked Lists). | AI Agents & Automations |
+| **[Data Flow & Lifecycles](file:///c:/Projects/vscode-extension/docs/data-flow.md)** | Step-by-step traces with sequence diagrams for session launch, stepping, traversals, deletions, stacks, and circular queues. | Debugging & Protocol Engineers |
+| **[AI Agent Guide](file:///c:/Projects/vscode-extension/docs/agent-guide.md)** | Guidelines, conventions, testing recipes, and instructions for adding new data structures (Trees, Arrays, Stacks, Queues). | AI Agents & Automations |
 
 ---
 
@@ -21,21 +23,25 @@ This documentation is written in clear, plain language to provide human develope
 
 **SimIDE** is a Visual Studio Code extension that bridges the gap between raw C++ debugging and visual data structure comprehension.
 
-When students or developers learn C++ data structures (like linked lists or trees), they often struggle with pointers, dynamic heap allocations (`new Node`), address assignments (`first->next = second;`), in-place pointer reversals (LeetCode 206), and memory deletions (`delete temp;`). Traditional debuggers only show tabular hexadecimal memory addresses (such as `0x74a3b0`) and variable names in a small sidebar, which is hard for beginners to parse.
+When students or developers learn C++ data structures (like linked lists, trees, arrays, stacks, and queues), they often struggle with pointers, dynamic heap allocations (`new Node`), address assignments (`first->next = second;`), in-place pointer reversals (LeetCode 206), memory deletions (`delete temp;`), stack overflow/underflow, and circular queue pointer wrap-around (`(rear + 1) % capacity`). Traditional debuggers only show tabular hexadecimal memory addresses (such as `0x74a3b0`) and variable names in a small sidebar, which is hard for beginners to parse.
 
 SimIDE solves this by:
 1. **Compiling real C++ code** with debug flags (`-g -O0 -std=c++17`).
 2. **Connecting directly to GDB or LLDB** via VS Code's native Debug Adapter Protocol (DAP).
-3. **Dynamically discovering pointer variables and user functions** (`printList`, `reverseList`, `push`, `deleteNode`, OOP methods) from the user's source code without hardcoding.
-4. **Extracting runtime heap variables and pointer references** across function boundaries upon every single step.
-5. **Rendering a dynamic, interactive physics canvas** in the sidebar featuring spring-damper node connections, smooth SVG pointer arrows, and Excalidraw-style infinite pan & zoom.
+3. **Dynamically discovering pointer variables and user functions** (`printList`, `reverseList`, `push`, `pop`, `enqueue`, `dequeue`, `deleteNode`, OOP methods) from the user's source code without hardcoding.
+4. **Extracting runtime heap variables and pointer references** across function boundaries and stack frames upon every single step.
+5. **Rendering dynamic, interactive visualizations**:
+   - **Linked Lists**: Spring-damper physics canvas (`d3-force`), draggable cards, SVG arrows, and detached node staging.
+   - **Binary Search Trees (BST)**: Depth levels, in-order non-overlapping column layout, visiting node pulse, and Case A deletions.
+   - **Linear Arrays**: Interactive strip with cell elevation, value mutations, swapping animations, and active index pointers (`i`, `j`, `k`, `low`, `high`, `mid`).
+   - **Stacks (LIFO)**: Vertical tray with spring elevation, active `TOP` pointer badge, push/pop animations, and overflow/underflow detection.
+   - **Circular Queues (FIFO)**: Horizontal ring buffer with persistent `FRONT` and `REAR` badges across all function traversals, real-time wrap-around indicator (`(rear + 1) % capacity = 0`), and empty/full state protection.
 6. **Live-streaming console output** from `std::cout` and `printf` in a dedicated sidebar terminal card.
 7. **Tracking heap memory freeing** via `delete`, visually explaining unlinking, bypassing, and deletions.
-8. **Binary Search Tree (BST) Simulation**: Automatic tree mode detection, non-overlapping in-order column depth layout, visiting node animations, and Case A deletions.
-9. **Seamless Multi-File Switching**: Effortlessly switch between different C++ files without editor tab hijacking or redirect loops.
-10. **Zero-Distraction Debugging**: Automatically suppresses internal debug console popups, build task terminals, and third-party AI sidebars.
-11. **Generating pedagogical teaching explanations** explaining pointer aliasing, heap allocations, tree branching, and chain mutations.
-12. **Enabling non-destructive time-travel scrubbing**, allowing learners to walk backward and forward through previous snapshots without restarting the C++ process.
+8. **Seamless Multi-File Switching**: Effortlessly switch between different C++ files without editor tab hijacking or redirect loops.
+9. **Zero-Distraction Debugging**: Automatically suppresses internal debug console popups, build task terminals, and third-party AI sidebars.
+10. **Generating pedagogical teaching explanations** explaining pointer aliasing, heap allocations, tree branching, stack push/pop, queue enqueues, and circular wrap-around.
+11. **Enabling non-destructive time-travel scrubbing**, allowing learners to walk backward and forward through previous snapshots without restarting the C++ process.
 
 ---
 

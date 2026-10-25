@@ -1,14 +1,23 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { ExtensionMessage, WebviewMessage } from './messages';
+import {
+  createUpdateStateMessage,
+  ExtensionMessage,
+  WebviewMessage,
+} from './messages';
 import { CppCompiler } from '../debug/compiler';
 import { DebugSessionManager } from '../debug/debugSessionManager';
 import { DebugTrackerFactory, DebuggerStopEvent } from '../debug/debugAdapterTracker';
 import { ExecutionController } from '../debug/executionController';
 import { StateExtractor } from '../debug/stateExtractor';
+import {
+  describeGraphSnapshotChange,
+  preservePreviousGraphObjects,
+} from '../debug/graphStateExtractor';
 import { SnapshotManager } from '../visualization/snapshotManager';
-import { LinkedListSnapshot } from '../visualization/linkedListModel';
+import { isGraphSnapshot, VisualizationSnapshot } from '../visualization/graphModel';
+import { selectVisualizationMode } from './visualizationMode';
 
 export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'debug-mentor.sidebar';
@@ -17,8 +26,13 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   private snapshotManager = new SnapshotManager();
   private stepCounter = 1;
   private disposables: vscode.Disposable[] = [];
+  private starting = false;
+  private visualizationMode: 'graph' | 'linked_list' = 'linked_list';
 
-  constructor(private readonly extensionUri: vscode.Uri) {
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly exampleStorageUri: vscode.Uri = extensionUri
+  ) {
     this.registerDebugListeners();
   }
 
@@ -61,8 +75,8 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     this.disposables.push(
       DebugTrackerFactory.onStopped(async (event: DebuggerStopEvent) => {
         ExecutionController.setPaused(true);
-        // Small delay to ensure DAP stack frames are completely populated
-        await new Promise((r) => setTimeout(r, 60));
+        // Minimal delay to ensure DAP stack frames are completely populated
+        await new Promise((r) => setTimeout(r, 10));
         vscode.commands.executeCommand('workbench.action.closePanel');
 
         // Inspect call stack to see if we stepped into library or CRT internals
@@ -97,18 +111,123 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           // Ignore and continue
         }
 
-        const prev = this.snapshotManager.getLatestSnapshot();
-        const snapshot = await StateExtractor.extractState(
-          event.session,
-          event.threadId,
-          this.stepCounter++,
-          prev
-        );
+        const previousSnapshot = this.snapshotManager.getLatestSnapshot();
+        let snapshot: VisualizationSnapshot | null = null;
+        let mode: 'graph' | 'linked_list' = 'linked_list';
+        const sourceFile = StateExtractor.resolveFilePath();
+
+        if (sourceFile) {
+          try {
+            mode = selectVisualizationMode(fs.readFileSync(sourceFile, 'utf8'));
+          } catch (error) {
+            console.warn(
+              `[LinkedListViewProvider] Could not inspect '${sourceFile}' for graph registry types.`,
+              error
+            );
+          }
+        }
+
+        const stepNumber = this.stepCounter++;
+        if (mode === 'graph') {
+          try {
+            const extractedGraphSnapshot = await StateExtractor.extractGraphState(
+              event.session,
+              event.threadId,
+              stepNumber
+            );
+            if (extractedGraphSnapshot) {
+              const graphSnapshot = preservePreviousGraphObjects(
+                previousSnapshot && isGraphSnapshot(previousSnapshot)
+                  ? previousSnapshot
+                  : undefined,
+                extractedGraphSnapshot
+              );
+              const graphChange = describeGraphSnapshotChange(
+                previousSnapshot && isGraphSnapshot(previousSnapshot)
+                  ? previousSnapshot
+                  : undefined,
+                graphSnapshot
+              );
+              snapshot = {
+                ...graphSnapshot,
+                ...graphChange,
+                terminalOutput: StateExtractor.getAccumulatedTerminalOutput(),
+              };
+            } else {
+              console.warn(
+                '[LinkedListViewProvider] Graph source detected, but no supported graph state was available at this debugger stop.'
+              );
+              if (previousSnapshot && isGraphSnapshot(previousSnapshot)) {
+                try {
+                  const stackResponse = await event.session.customRequest('stackTrace', {
+                    threadId: event.threadId,
+                    startFrame: 0,
+                    levels: 25,
+                  });
+                  const hasUserFrame = (stackResponse?.stackFrames || []).some((frame: any) => {
+                    const framePath = frame.source?.path || frame.source?.name || '';
+                    const frameName = (frame.name || '').toLowerCase();
+                    return (
+                      StateExtractor.isUserSource(framePath) &&
+                      !frameName.includes('crt') &&
+                      !frameName.includes('startup')
+                    );
+                  });
+                  if (!hasUserFrame) {
+                    snapshot = {
+                      ...previousSnapshot,
+                      stepNumber,
+                      explanation: 'Program execution completed. This is the final graph state.',
+                      changeType: 'final',
+                      terminalOutput: StateExtractor.getAccumulatedTerminalOutput(),
+                      isHistorical: false,
+                    };
+                  }
+                } catch (error) {
+                  console.warn(
+                    '[LinkedListViewProvider] Could not determine whether graph execution completed.',
+                    error
+                  );
+                }
+              }
+            }
+          } catch (error) {
+            console.error('[LinkedListViewProvider] Graph snapshot extraction failed.', error);
+          }
+        } else {
+          const previousListSnapshot =
+            previousSnapshot && !isGraphSnapshot(previousSnapshot)
+              ? previousSnapshot
+              : undefined;
+          snapshot = await StateExtractor.extractState(
+            event.session,
+            event.threadId,
+            stepNumber,
+            previousListSnapshot
+          );
+        }
 
         if (snapshot) {
           this.snapshotManager.addSnapshot(snapshot);
           this.broadcastState(snapshot);
         }
+      })
+    );
+
+    this.disposables.push(
+      DebugTrackerFactory.onOutput((session, output, category) => {
+        const activeSession = DebugSessionManager.getActiveSession();
+        if (!activeSession || activeSession.id !== session.id) return;
+        // Legacy modes already reconstruct output while stepping. Capture actual
+        // DAP output for graphs without printing legacy output twice.
+        if (this.visualizationMode !== 'graph') return;
+        if (!StateExtractor.appendDapOutput(output, category)) return;
+
+        this.postMessage({
+          command: 'terminalOutput',
+          output,
+          fullOutput: StateExtractor.getAccumulatedTerminalOutput(),
+        });
       })
     );
 
@@ -176,30 +295,54 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  public async openExample(example: string): Promise<void> {
+    const files: Record<string, string> = {
+      stack: 'stack-operations.cpp',
+      array: 'array-operations.cpp',
+      linkedlist: 'linked-list.cpp',
+      tree: 'bst-traversals.cpp',
+      graph: 'graph-registry.cpp',
+    };
+    if (!Object.prototype.hasOwnProperty.call(files, example)) return;
+    const fileName = files[example];
+    try {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const directory = path.join(workspaceRoot || this.exampleStorageUri.fsPath, 'examples');
+      const destination = path.join(directory, fileName);
+      if (!fs.existsSync(destination)) {
+        await fs.promises.mkdir(directory, { recursive: true });
+        try {
+          // Keep any example the learner has already edited.
+          await fs.promises.copyFile(
+            path.join(this.extensionUri.fsPath, 'examples', fileName),
+            destination,
+            fs.constants.COPYFILE_EXCL
+          );
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      }
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(destination));
+      await vscode.window.showTextDocument(document, { preview: false });
+      CppCompiler.setLastActiveSourceFile(destination);
+      this.sendTargetFileUpdate();
+    } catch (error) {
+      await vscode.window.showErrorMessage(`Could not open the SimIDE example: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private async handleMessage(message: WebviewMessage): Promise<void> {
     switch (message.command) {
       case 'visualize':
-      case 'retry':
         await this.startVisualization(message.filePath);
         break;
 
+      case 'retry':
+        await this.startVisualization();
+        break;
+
       case 'visualizeExample':
-        if (message.example) {
-          const wsFolders = vscode.workspace.workspaceFolders;
-          if (wsFolders && wsFolders.length > 0) {
-            const map: Record<string, string> = {
-              stack: 'examples/stack-operations.cpp',
-              array: 'examples/array-operations.cpp',
-              linkedlist: 'examples/linked-list.cpp',
-              tree: 'examples/bst-traversals.cpp',
-            };
-            const rel = map[message.example] || 'examples/stack-operations.cpp';
-            const fullPath = path.join(wsFolders[0].uri.fsPath, rel);
-            if (fs.existsSync(fullPath)) {
-              await this.startVisualization(fullPath);
-            }
-          }
-        }
+        await this.openExample(message.example);
         break;
 
       case 'getTargetFile':
@@ -309,7 +452,11 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           const isTrivialHelper = [
             'isfull',
             'isempty',
+            'getfront',
+            'getrear',
             'peek',
+            'front',
+            'rear',
             'top',
             'size',
           ].includes(fnName.toLowerCase());
@@ -331,7 +478,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       if (callsUserFunction) {
         await ExecutionController.stepIn();
       } else {
-        // Otherwise step OVER (so new Node(...) constructors and cout statements execute cleanly in 1 step)
+        // Otherwise step OVER (so new Node(...) constructors, cout statements, and queue/stack operations execute cleanly in 1 step)
         await ExecutionController.next();
       }
     } catch {
@@ -348,6 +495,25 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async startVisualization(explicitSource?: string): Promise<void> {
+    if (this.starting) return;
+    this.starting = true;
+    try {
+      await this.prepareVisualization(explicitSource);
+    } catch (error) {
+      await this.restoreNativeStackFrameHighlight();
+      ExecutionController.setPaused(true);
+      this.postMessage({
+        command: 'error',
+        message: 'Could not start simulation',
+        details: error instanceof Error ? error.message : String(error),
+        canRetry: true,
+      });
+    } finally {
+      this.starting = false;
+    }
+  }
+
+  private async prepareVisualization(explicitSource?: string): Promise<void> {
     this.reveal();
     await vscode.commands.executeCommand('workbench.action.closePanel');
     if (DebugSessionManager.getActiveSession()) {
@@ -407,6 +573,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     this.snapshotManager.reset();
     StateExtractor.reset();
     StateExtractor.setActiveSourceFile(sourceFile);
+    this.visualizationMode = selectVisualizationMode(fs.readFileSync(sourceFile, 'utf8'));
     this.stepCounter = 1;
 
     // Launch Debugger
@@ -493,7 +660,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   }
 
   private updateEditorActiveLineHighlight(
-    snapshot: LinkedListSnapshot,
+    snapshot: VisualizationSnapshot,
     openIfNotVisible: boolean = false
   ): void {
     const line = snapshot.source?.line;
@@ -542,7 +709,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private broadcastState(snapshot: LinkedListSnapshot): void {
+  private broadcastState(snapshot: VisualizationSnapshot): void {
     this.reveal();
     this.updateEditorActiveLineHighlight(snapshot, true);
     const isHistorical = !!snapshot.isHistorical;
@@ -550,19 +717,22 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     const isPaused = ExecutionController.status.isPaused;
     const isRunning = ExecutionController.status.isRunning;
 
-    this.postMessage({
-      command: 'updateState',
-      snapshot,
-      canStepNext: isHistorical ? true : ((!isFinal || !!DebugSessionManager.getActiveSession()) && isPaused),
-      canStepPrev: this.snapshotManager.canGoPrev(),
-      canContinue: isPaused && !isHistorical && (!isFinal || !!DebugSessionManager.getActiveSession()),
-      canPause: isRunning,
-      canRestart: true,
-      isPaused,
-      isRunning,
-      totalSnapshots: this.snapshotManager.totalSnapshots,
-      currentSnapshotIndex: this.snapshotManager.currentSnapshotIndex,
-    });
+    this.postMessage(
+      createUpdateStateMessage(snapshot, {
+        canStepNext: isHistorical
+          ? true
+          : ((!isFinal || !!DebugSessionManager.getActiveSession()) && isPaused),
+        canStepPrev: this.snapshotManager.canGoPrev(),
+        canContinue:
+          isPaused && !isHistorical && (!isFinal || !!DebugSessionManager.getActiveSession()),
+        canPause: isRunning,
+        canRestart: true,
+        isPaused,
+        isRunning,
+        totalSnapshots: this.snapshotManager.totalSnapshots,
+        currentSnapshotIndex: this.snapshotManager.currentSnapshotIndex,
+      })
+    );
   }
 
   private postMessage(message: ExtensionMessage): void {

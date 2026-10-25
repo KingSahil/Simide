@@ -14,7 +14,11 @@ export interface DebuggerContinueEvent {
 export type StopListener = (event: DebuggerStopEvent) => void;
 export type ContinueListener = (event: DebuggerContinueEvent) => void;
 export type TerminateListener = (session: vscode.DebugSession) => void;
-export type OutputListener = (output: string, category?: string) => void;
+export type OutputListener = (
+  session: vscode.DebugSession,
+  output: string,
+  category?: string
+) => void;
 
 export class DebugTrackerFactory implements vscode.DebugAdapterTrackerFactory {
   private static stopListeners: StopListener[] = [];
@@ -101,7 +105,7 @@ export class DebugTrackerFactory implements vscode.DebugAdapterTrackerFactory {
             if (outputText) {
               for (const listener of DebugTrackerFactory.outputListeners) {
                 try {
-                  listener(outputText, category);
+                  listener(session, outputText, category);
                 } catch (e) {
                   console.error('[DebugTracker] Error in output listener', e);
                 }

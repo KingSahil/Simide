@@ -3,6 +3,7 @@ node_modules/
 
 # Compiled C++ binaries and temporary debug artifacts
 examples/.debug-mentor/
+test/fixtures/.debug-mentor/
 *.exe
 
 # Log files
@@ -15,3 +16,9 @@ Thumbs.db
 # Build output
 dist/
 "*.vsix" 
+
+# Private learning notes and local credentials
+/devpost/learner-profile.md
+.env
+.env.*
+!.env.example
