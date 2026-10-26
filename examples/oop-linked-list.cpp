@@ -17,7 +17,7 @@ public:
         Node* newNode = new Node(val);
         newNode->next = head;
         head = newNode;
-    }
+        }
 
     void display() {
         Node* curr = head;

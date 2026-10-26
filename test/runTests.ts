@@ -738,6 +738,30 @@ async function runTests() {
   assert.strictEqual(structInfoQueue.structureType, 'queue');
   console.log('  ✓ Verified stack and circular queue structure discovery for stack-operations.cpp & circular-queue.cpp');
 
+  const stringPalinPath = path.resolve(process.cwd(), 'examples', 'string-palindrome.cpp');
+  const structInfoString = StateExtractor.parseStructMembers(stringPalinPath);
+  assert.strictEqual(structInfoString.structureType, 'string');
+  const strDecls = StateExtractor.discoverStringDeclarations(stringPalinPath);
+  assert.ok(strDecls.some((s) => s.name === 'word' && s.type === 'std_string'));
+  const palinPattern = StateExtractor.detectStringAlgorithmPattern(stringPalinPath);
+  assert.strictEqual(palinPattern.pattern, 'two_pointer');
+  assert.strictEqual(palinPattern.leftPtr, 'left');
+  assert.strictEqual(palinPattern.rightPtr, 'right');
+
+  const cStringRevPath = path.resolve(process.cwd(), 'examples', 'c-string-reverse.cpp');
+  const structInfoCString = StateExtractor.parseStructMembers(cStringRevPath);
+  assert.strictEqual(structInfoCString.structureType, 'string');
+  const cStrDecls = StateExtractor.discoverStringDeclarations(cStringRevPath);
+  assert.ok(cStrDecls.some((s) => s.name === 'str' && s.type === 'char_array' && s.size === 10));
+  const cStrPattern = StateExtractor.detectStringAlgorithmPattern(cStringRevPath);
+  assert.strictEqual(cStrPattern.pattern, 'two_pointer');
+
+  const slidingWinPath = path.resolve(process.cwd(), 'examples', 'sliding-window-string.cpp');
+  const slidingWinPattern = StateExtractor.detectStringAlgorithmPattern(slidingWinPath);
+  assert.strictEqual(slidingWinPattern.pattern, 'sliding_window');
+
+  console.log('  ✓ Verified string structure discovery & algorithm pattern detection (two-pointer & sliding window)');
+
   // User defined functions discovery (including free functions and class member methods)
   const leetcodeFns = StateExtractor.getUserDefinedFunctions(leetcodePath);
   assert.ok(leetcodeFns.has('reverseList'), 'Must detect reverseList');

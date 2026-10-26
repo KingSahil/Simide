@@ -236,7 +236,7 @@ Ensure 100% test pass rate with both unit tests (mock DAP) and real GDB stepping
 ## 4. Verification Gate & Acceptance Criteria
 
 - [x] Phase 1: Data Model & Type System Foundation (`StructureType`, `StringVariable`, `StringElement`, `StringWindow`, `ChangeType`).
-- [ ] Phase 2: Static Source Analysis & Pattern Detection (`discoverStringDeclarations`).
+- [x] Phase 2: Static Source Analysis & Pattern Detection (`discoverStringDeclarations`).
 - [ ] Phase 3: High-Performance DAP Runtime Extraction Engine (`extractStrings`).
 - [ ] Phase 4: Pedagogical Explanation Engine (`generateStringExplanation`).
 - [ ] Phase 5: Webview UI & Canvas Visualization (`renderStringDiagram`).
@@ -252,8 +252,8 @@ Ensure 100% test pass rate with both unit tests (mock DAP) and real GDB stepping
 | `1.2` | Define `StringElement`, `StringVariable`, `StringWindow` | Completed |
 | `1.3` | Extend `ChangeType` with string mutation/pointer actions | Completed |
 | `1.4` | Extend `LinkedListSnapshot` with `strings` & `stringWindows` | Completed |
-| `2.1` | Implement `discoverStringDeclarations` in `SourceAnalysisCache` | Pending |
-| `2.2` | Implement string algorithm pattern heuristics (two-pointer, sliding window) | Pending |
+| `2.1` | Implement `discoverStringDeclarations` in `SourceAnalysisCache` | Completed |
+| `2.2` | Implement string algorithm pattern heuristics (two-pointer, sliding window) | Completed |
 | `3.1` | Implement single-roundtrip string value fetching (`evalExpr(varName)`) | Pending |
 | `3.2` | Implement C-style character buffer extraction with `\0` detection | Pending |
 | `3.3` | Map active index pointers (`i`, `j`, `left`, `right`) to string elements | Pending |

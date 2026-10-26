@@ -13,6 +13,7 @@ import {
   SourceLocation,
   StackElement,
   StackModel,
+  StringDeclaration,
   StructureType,
 } from '../visualization/linkedListModel';
 import { GraphSnapshot } from '../visualization/graphModel';
@@ -201,6 +202,147 @@ export class StateExtractor {
       // ignore
     }
     return types;
+  }
+
+  public static discoverStringDeclarations(resolvedPath?: string): StringDeclaration[] {
+    const stringDecls: StringDeclaration[] = [];
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+      return stringDecls;
+    }
+    try {
+      const content = fs.readFileSync(resolvedPath, 'utf8');
+      const lines = content.split('\n');
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        const lineNum = i + 1;
+        if (line.startsWith('//') || line.startsWith('/*') || line.startsWith('#')) {
+          continue;
+        }
+
+        // 1. std::string or string: std::string s = "hello"; or string s("world"); or string word;
+        const strMatch = line.match(
+          /(?:(?:const\s+)?(?:std::)?string)\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*(?:=\s*("[^"]*"|[a-zA-Z0-9_]+)|\(\s*("[^"]*")\s*\))|\s*[,;{()])/
+        );
+        if (strMatch) {
+          const name = strMatch[1];
+          // Check it's not a function definition or return type (e.g. string isPalindrome(...))
+          const isFuncDef = line.includes(`${name}(`) && !line.includes(`${name}("`) && !line.includes(`${name}()`);
+          if (!isFuncDef && name !== 'main' && name !== 'return' && name !== 'void') {
+            const rawVal = strMatch[2] || strMatch[3];
+            const initialValue = rawVal ? rawVal.replace(/^"|"$/g, '') : undefined;
+            stringDecls.push({
+              name,
+              line: lineNum,
+              type: 'std_string',
+              initialValue,
+              isDynamic: false,
+            });
+            continue;
+          }
+        }
+
+        // 2. Fixed character array: char str[50] = "world"; or char str[] = "test";
+        const charArrMatch = line.match(
+          /(?:const\s+)?char\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\[\s*([^\]]*)\s*\](?:\s*=\s*(?:("[^"]*")|\{([^}]+)\}))?/
+        );
+        if (charArrMatch) {
+          const name = charArrMatch[1];
+          if (name === 'argv' || name === 'envp') continue;
+
+          const sizeStr = charArrMatch[2]?.trim();
+          let parsedSize = sizeStr ? parseInt(sizeStr, 10) : undefined;
+          const strLiteral = charArrMatch[3];
+          let initialValue: string | undefined = undefined;
+          if (strLiteral) {
+            initialValue = strLiteral.replace(/^"|"$/g, '');
+            if (parsedSize === undefined || isNaN(parsedSize)) {
+              parsedSize = initialValue.length + 1;
+            }
+          } else if (charArrMatch[4]) {
+            const chars = charArrMatch[4].split(',').map((c) => c.trim().replace(/^'|'$/g, ''));
+            initialValue = chars.join('');
+            if (parsedSize === undefined || isNaN(parsedSize)) {
+              parsedSize = chars.length;
+            }
+          }
+
+          stringDecls.push({
+            name,
+            line: lineNum,
+            size: parsedSize && !isNaN(parsedSize) ? parsedSize : undefined,
+            type: 'char_array',
+            initialValue,
+            isDynamic: false,
+          });
+          continue;
+        }
+
+        // 3. Character pointer strings: char* p = "hello"; or const char* msg = "read-only";
+        const charPtrMatch = line.match(
+          /(?:const\s+)?char\s*\*\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*=\s*(?:("[^"]*")|new\s+char\s*\[\s*(\d+)\s*\]|[a-zA-Z0-9_]+))?/
+        );
+        if (charPtrMatch) {
+          const name = charPtrMatch[1];
+          if (name === 'argv' || name === 'envp') continue;
+          const strLiteral = charPtrMatch[2];
+          const newSize = charPtrMatch[3];
+          const initialValue = strLiteral ? strLiteral.replace(/^"|"$/g, '') : undefined;
+          const size = newSize ? parseInt(newSize, 10) : undefined;
+
+          stringDecls.push({
+            name,
+            line: lineNum,
+            type: 'char_pointer',
+            size,
+            initialValue,
+            isDynamic: true,
+          });
+          continue;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return stringDecls;
+  }
+
+  public static detectStringAlgorithmPattern(resolvedPath?: string): {
+    pattern: 'two_pointer' | 'sliding_window' | 'general';
+    leftPtr?: string;
+    rightPtr?: string;
+  } {
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+      return { pattern: 'general' };
+    }
+    try {
+      const content = fs.readFileSync(resolvedPath, 'utf8');
+
+      // Check for two-pointer convergence pattern: e.g. while (left < right) or while (i < j)
+      const twoPtrLoop = content.match(
+        /while\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*<\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)/
+      );
+      if (twoPtrLoop) {
+        return {
+          pattern: 'two_pointer',
+          leftPtr: twoPtrLoop[1],
+          rightPtr: twoPtrLoop[2],
+        };
+      }
+
+      // Check for sliding window pattern
+      const isSlidingWindow =
+        /\b(?:windowStart|windowEnd|maxLen|minLen|subLen)\b/i.test(content) ||
+        (/\b(left|start|i)\b/.test(content) && /\b(right|end|j)\b/.test(content) && content.includes('-') && content.includes('+ 1')) ||
+        (/\b(?:freq|count|charCount|seen|visited)\b/i.test(content) && /\b(?:string|char)\b/i.test(content) && (content.includes('while') || content.includes('for')));
+
+      if (isSlidingWindow) {
+        return { pattern: 'sliding_window' };
+      }
+    } catch {
+      // ignore
+    }
+    return { pattern: 'general' };
   }
 
   public static discoverArrayDeclarations(resolvedPath?: string): Array<{
@@ -455,8 +597,11 @@ export class StateExtractor {
         } else if (isStack) {
           structureType = 'stack';
         } else {
+          const stringDecls = this.discoverStringDeclarations(resolvedPath);
           const arrayDecls = this.discoverArrayDeclarations(resolvedPath);
-          if (arrayDecls.length > 0) {
+          if (stringDecls.length > 0) {
+            structureType = 'string';
+          } else if (arrayDecls.length > 0) {
             structureType = 'array';
           }
         }
@@ -2262,6 +2407,19 @@ export class StateExtractor {
             } else {
               hasHead = true;
             }
+          } else if (structureType === 'string') {
+            const stringDecls = StateExtractor.discoverStringDeclarations(resolvedFile);
+            if (stringDecls.length > 0) {
+              const firstStr = stringDecls[0];
+              if (funcRange && firstStr.line < funcRange.startLine) {
+                // Member or global string declared before main function
+                hasHead = rawLine > funcRange.startLine;
+              } else {
+                hasHead = rawLine > firstStr.line;
+              }
+            } else {
+              hasHead = true;
+            }
           } else if (structureType === 'stack') {
             const stackVarCandidates = ['s', 'st', 'stack', 's1', 's2', 'myStack'];
             let declaredCandidate: string | null = null;
@@ -2317,6 +2475,8 @@ export class StateExtractor {
             ? 'Program paused at start. Click Next to allocate and initialize tree: TreeNode* root = ...'
             : structureType === 'array'
             ? 'Program paused at start. Click Next to allocate and initialize array.'
+            : structureType === 'string'
+            ? 'Program paused at start. Click Next to allocate and initialize string.'
             : structureType === 'stack'
             ? 'Program paused at start. Click Next to initialize stack.'
             : 'Program paused at start. Click Next to execute: Node* head = ...';
@@ -3047,6 +3207,8 @@ export class StateExtractor {
           } else {
             explanation = 'Program execution finished.';
           }
+        } else if (structureType === 'string') {
+          explanation = `String execution complete. Program execution finished.`;
         } else if (structureType === 'stack') {
           explanation = `Stack execution complete. Program execution finished.`;
         } else if (structureType === 'queue') {
