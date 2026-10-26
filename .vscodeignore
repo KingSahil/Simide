@@ -8,11 +8,9 @@ test/**
 docs/**
 devpost/**
 examples/**
-!examples/stack-operations.cpp
-!examples/array-operations.cpp
-!examples/linked-list.cpp
-!examples/bst-traversals.cpp
-!examples/graph-registry.cpp
+!examples/**/*.cpp
+!examples/**/*.cc
+!examples/**/*.cxx
 .gitignore
 tsconfig.json
 esbuild.js

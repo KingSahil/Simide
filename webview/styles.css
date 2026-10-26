@@ -219,6 +219,55 @@ body {
   font-weight: 600;
 }
 
+.example-catalog {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  margin-top: 8px;
+}
+
+.example-category {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--card-bg);
+}
+
+.example-category h3 {
+  margin: 0 0 10px;
+  color: var(--secondary-text);
+  font-size: 12px;
+}
+
+.example-list { display: grid; gap: 6px; }
+.example-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--elevated-surface);
+  color: var(--primary-text);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.example-item small { color: var(--secondary-text); font-size: 10px; }
+.example-item:hover { border-color: var(--main-accent); }
+.example-item:focus-visible, #btnHome:focus-visible {
+  outline: 2px solid var(--main-accent);
+  outline-offset: 2px;
+}
+@media (max-width: 360px) {
+  .app-header { flex-wrap: wrap; gap: 10px; }
+  .header-actions { flex-wrap: wrap; }
+}
+
 .example-chips {
   display: flex;
   flex-wrap: wrap;

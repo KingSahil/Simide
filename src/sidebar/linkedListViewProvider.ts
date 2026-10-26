@@ -18,6 +18,7 @@ import {
 import { SnapshotManager } from '../visualization/snapshotManager';
 import { isGraphSnapshot, VisualizationSnapshot } from '../visualization/graphModel';
 import { selectVisualizationMode } from './visualizationMode';
+import { listExamples } from './exampleCatalog';
 
 export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'debug-mentor.sidebar';
@@ -27,6 +28,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   private stepCounter = 1;
   private disposables: vscode.Disposable[] = [];
   private starting = false;
+  private openingExample = false;
   private visualizationMode: 'graph' | 'linked_list' = 'linked_list';
 
   constructor(
@@ -295,7 +297,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  public async openExample(example: string): Promise<void> {
+  public async openExample(example: string): Promise<string | undefined> {
     const files: Record<string, string> = {
       stack: 'stack-operations.cpp',
       array: 'array-operations.cpp',
@@ -303,14 +305,19 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       tree: 'bst-traversals.cpp',
       graph: 'graph-registry.cpp',
     };
-    if (!Object.prototype.hasOwnProperty.call(files, example)) return;
-    const fileName = files[example];
+    const fileName = Object.prototype.hasOwnProperty.call(files, example) ? files[example] : example;
     try {
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const directory = path.join(workspaceRoot || this.exampleStorageUri.fsPath, 'examples');
+      const workspaceRoots = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+      const workspaceRoot = workspaceRoots[0];
+      const catalog = listExamples(this.extensionUri.fsPath, ...workspaceRoots);
+      if (!catalog.some(entry => entry.fileName === fileName)) {
+        throw new Error('This example is unavailable. Return Home to refresh the list.');
+      }
+      const existingRoot = workspaceRoots.find(root => fs.existsSync(path.join(root, 'examples', fileName)));
+      const directory = path.join(existingRoot || workspaceRoot || this.exampleStorageUri.fsPath, 'examples');
       const destination = path.join(directory, fileName);
       if (!fs.existsSync(destination)) {
-        await fs.promises.mkdir(directory, { recursive: true });
+        await fs.promises.mkdir(path.dirname(destination), { recursive: true });
         try {
           // Keep any example the learner has already edited.
           await fs.promises.copyFile(
@@ -326,6 +333,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       await vscode.window.showTextDocument(document, { preview: false });
       CppCompiler.setLastActiveSourceFile(destination);
       this.sendTargetFileUpdate();
+      return destination;
     } catch (error) {
       await vscode.window.showErrorMessage(`Could not open the SimIDE example: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -333,6 +341,20 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
 
   private async handleMessage(message: WebviewMessage): Promise<void> {
     switch (message.command) {
+      case 'getExamples': {
+        const roots = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+        this.postMessage({ command: 'examples', examples: listExamples(this.extensionUri.fsPath, ...roots) });
+        break;
+      }
+
+      case 'goHome':
+        if (DebugSessionManager.getActiveSession()) await DebugSessionManager.stopDebugging();
+        this.clearEditorHighlight();
+        this.snapshotManager.reset();
+        this.sendTargetFileUpdate();
+        this.postMessage({ command: 'home' });
+        break;
+
       case 'visualize':
         await this.startVisualization(message.filePath);
         break;
@@ -341,9 +363,17 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         await this.startVisualization();
         break;
 
-      case 'visualizeExample':
-        await this.openExample(message.example);
+      case 'visualizeExample': {
+        if (this.starting || this.openingExample) break;
+        this.openingExample = true;
+        try {
+          const source = await this.openExample(message.example);
+          if (source) await this.startVisualization(source);
+        } finally {
+          this.openingExample = false;
+        }
         break;
+      }
 
       case 'getTargetFile':
         this.sendTargetFileUpdate();

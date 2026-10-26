@@ -25,6 +25,7 @@
         <span class="brand-title">SimIDE</span>
       </div>
       <div class="header-actions">
+        <button id="btnHome" class="btn btn-restart" title="End this simulation and return Home" style="display: none;">← Home</button>
         <div id="sessionBadge" class="session-badge">
           <span id="badgeDot" class="badge-dot"></span>
           <span id="badgeText">Idle</span>
@@ -62,24 +63,10 @@
         <span id="btnVisualizeText">Visualize Active Code</span>
       </button>
 
-      <div class="quick-examples-section">
-        <div class="quick-examples-title">Quick-Launch DSA Examples:</div>
-        <div class="example-chips">
-          <button class="example-chip chip-stack" id="btnExampleStack" title="Open the Stack (LIFO) example">
-            <span class="chip-icon">🥞</span> Stack (LIFO)
-          </button>
-          <button class="example-chip chip-array" id="btnExampleArray" title="Open the Array example">
-            <span class="chip-icon">📊</span> Array
-          </button>
-          <button class="example-chip chip-ll" id="btnExampleLinkedList" title="Open the Linked List example">
-            <span class="chip-icon">🔗</span> Linked List
-          </button>
-          <button class="example-chip chip-tree" id="btnExampleTree" title="Open the BST Tree example">
-            <span class="chip-icon">🌳</span> BST Tree
-          </button>
-          <button class="example-chip" id="btnExampleGraph" title="Open the Graph example">Graph</button>
-        </div>
-      </div>
+      <section class="quick-examples-section" aria-label="C++ examples">
+        <div class="quick-examples-title">Explore Examples</div>
+        <div id="exampleCatalog" class="example-catalog" aria-live="polite">Loading examples…</div>
+      </section>
     </div>
 
     <!-- Screen 2: Loading View -->

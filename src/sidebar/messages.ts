@@ -1,5 +1,6 @@
 import { LinkedListSnapshot } from '../visualization/linkedListModel';
 import { GraphSnapshot, isGraphSnapshot } from '../visualization/graphModel';
+import { ExampleEntry } from './exampleCatalog';
 
 interface UpdateStateBase {
   command: 'updateState';
@@ -43,7 +44,9 @@ export function isGraphUpdateStateMessage(
 
 export type WebviewMessage =
   | { command: 'visualize'; filePath?: string }
-  | { command: 'visualizeExample'; example: 'stack' | 'array' | 'linkedlist' | 'tree' | 'graph' }
+  | { command: 'visualizeExample'; example: string }
+  | { command: 'getExamples' }
+  | { command: 'goHome' }
   | { command: 'getTargetFile' }
   | { command: 'next' }
   | { command: 'prev' }
@@ -57,6 +60,8 @@ export type WebviewMessage =
   | { command: 'requestState' };
 
 export type ExtensionMessage =
+  | { command: 'examples'; examples: ExampleEntry[] }
+  | { command: 'home' }
   | {
       command: 'targetFile';
       fileName: string;

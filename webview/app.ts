@@ -99,10 +99,6 @@ if (btnClearTerminal) {
 const btnInitialVisualize = document.getElementById('btnInitialVisualize') as HTMLButtonElement;
 const btnVisualizeText = document.getElementById('btnVisualizeText') as HTMLElement | null;
 const targetFileName = document.getElementById('targetFileName') as HTMLElement | null;
-const btnExampleStack = document.getElementById('btnExampleStack') as HTMLButtonElement | null;
-const btnExampleArray = document.getElementById('btnExampleArray') as HTMLButtonElement | null;
-const btnExampleLinkedList = document.getElementById('btnExampleLinkedList') as HTMLButtonElement | null;
-const btnExampleTree = document.getElementById('btnExampleTree') as HTMLButtonElement | null;
 
 const btnPrev = document.getElementById('btnPrev') as HTMLButtonElement;
 const btnNext = document.getElementById('btnNext') as HTMLButtonElement;
@@ -383,6 +379,7 @@ function showView(view: 'initial' | 'loading' | 'active' | 'error') {
   activeView.style.display = view === 'active' ? 'block' : 'none';
   errorView.style.display = view === 'error' ? 'flex' : 'none';
   btnRestart.style.display = view === 'active' || view === 'error' ? 'inline-flex' : 'none';
+  document.getElementById('btnHome')!.style.display = view === 'active' || view === 'error' ? 'inline-flex' : 'none';
 }
 
 // Satisfying physical spring overshoot bounce-back draggable for Stack and Queue elements
@@ -2250,24 +2247,21 @@ const graphViewportResizeObserver = new ResizeObserver(() => {
 graphViewportResizeObserver.observe(graphViewport);
 
 // Event Listeners
-const btnExampleGraph = document.getElementById('btnExampleGraph');
-if (btnExampleGraph) {
-  btnExampleGraph.onclick = () => vscode.postMessage({ command: 'visualizeExample', example: 'graph' });
-}
-btnInitialVisualize.onclick = () => vscode.postMessage({ command: 'visualize' });
-
-if (btnExampleStack) {
-  btnExampleStack.onclick = () => vscode.postMessage({ command: 'visualizeExample', example: 'stack' });
-}
-if (btnExampleArray) {
-  btnExampleArray.onclick = () => vscode.postMessage({ command: 'visualizeExample', example: 'array' });
-}
-if (btnExampleLinkedList) {
-  btnExampleLinkedList.onclick = () => vscode.postMessage({ command: 'visualizeExample', example: 'linkedlist' });
-}
-if (btnExampleTree) {
-  btnExampleTree.onclick = () => vscode.postMessage({ command: 'visualizeExample', example: 'tree' });
-}
+const btnHome = document.getElementById('btnHome') as HTMLButtonElement;
+let homeRequested = false;
+btnHome.onclick = () => {
+  homeRequested = true;
+  cancelActiveNodeDrag?.();
+  simulation?.stop();
+  showView('initial');
+  updateBadge('idle');
+  btnInitialVisualize.disabled = true;
+  vscode.postMessage({ command: 'goHome' });
+};
+btnInitialVisualize.onclick = () => {
+  homeRequested = false;
+  vscode.postMessage({ command: 'visualize' });
+};
 
 btnPrev.onclick = () => vscode.postMessage({ command: 'prev' });
 btnNext.onclick = () => vscode.postMessage({ command: 'next' });
@@ -2403,7 +2397,21 @@ window.addEventListener('message', (event) => {
       break;
     }
 
+    case 'examples': {
+      renderExampleCatalog(msg.examples);
+      break;
+    }
+
+    case 'home': {
+      showView('initial');
+      updateBadge('idle');
+      btnInitialVisualize.disabled = false;
+      vscode.postMessage({ command: 'getExamples' });
+      break;
+    }
+
     case 'updateState': {
+      if (homeRequested) break;
       showView('active');
       const { snapshot, canStepNext, canStepPrev, canRestart, isPaused, isRunning } = msg;
 
@@ -2466,8 +2474,47 @@ window.addEventListener('message', (event) => {
   }
 });
 
+function renderExampleCatalog(examples: import('../src/sidebar/exampleCatalog').ExampleEntry[]) {
+  const catalog = document.getElementById('exampleCatalog')!;
+  catalog.replaceChildren();
+  if (examples.length === 0) {
+    catalog.textContent = 'No C++ examples found.';
+    return;
+  }
+  const groups = new Map<string, HTMLElement>();
+  for (const example of examples) {
+    let group = groups.get(example.category);
+    if (!group) {
+      const section = document.createElement('section');
+      section.className = 'example-category';
+      const heading = document.createElement('h3');
+      heading.textContent = example.category;
+      section.appendChild(heading);
+      group = document.createElement('div');
+      group.className = 'example-list';
+      section.appendChild(group);
+      catalog.appendChild(section);
+      groups.set(example.category, group);
+    }
+    const button = document.createElement('button');
+    button.className = 'example-item';
+    button.title = `Start simulation: ${example.fileName}`;
+    const title = document.createElement('span');
+    title.textContent = example.title;
+    const file = document.createElement('small');
+    file.textContent = example.fileName;
+    button.append(title, file);
+    button.onclick = () => {
+      homeRequested = false;
+      vscode.postMessage({ command: 'visualizeExample', example: example.fileName });
+    };
+    group.appendChild(button);
+  }
+}
+
 // Initial View
 showView('initial');
 updateBadge('idle');
 vscode.postMessage({ command: 'requestState' });
 vscode.postMessage({ command: 'getTargetFile' });
+vscode.postMessage({ command: 'getExamples' });

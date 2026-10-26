@@ -5,6 +5,17 @@ description: Turn the approved plan into ordered working build steps, then build
 
 # 5-build — Build Your App
 
+## SimIDE Project Rule: Preserve Janky Physics
+
+The owner considers loose, bouncy, slightly janky movement an important part of
+SimIDE's identity, inspired by the VS Code Debug Visualizer extension. Preserve
+spring physics, momentum, wobble, and free dragging when fixing visualizations.
+Do not make nodes rigid, permanently pin them, or snap them into a static layout
+unless the owner explicitly requests it. Fix misleading tree placement with soft
+layout forces while retaining movement. Temporary pinning during a drag is fine;
+release the node back to physics afterward. This is a SimIDE product preference,
+not a rule for unrelated projects.
+
 ## SimIDE Project Rule: Executed-Line Highlighting
 
 The owner explicitly requires SimIDE to highlight the line whose execution produced
