@@ -126,6 +126,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
             nodes: state.nodes,
             stacks: state.stacks,
             queues: state.queues,
+            strings: state.strings,
           });
         }, 120);
       })
@@ -594,6 +595,66 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case 'creativeStringCreate': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) return;
+        const res = await CreativeCodeManager.handleStringCreate(editor, message.varName, message.initialValue);
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: res.ok,
+          message: res.message || res.error || '',
+          highlightLine: res.highlightLine,
+        });
+        if (res.highlightLine) {
+          this.highlightLinkEdit(editor.document.fileName, { startLine: res.highlightLine, endLine: res.highlightLine });
+        }
+        break;
+      }
+
+      case 'creativeStringAppend': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) return;
+        const res = await CreativeCodeManager.handleStringAppend(editor, message.varName, message.char);
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: res.ok,
+          message: res.message || res.error || '',
+          highlightLine: res.highlightLine,
+        });
+        if (res.highlightLine) {
+          this.highlightLinkEdit(editor.document.fileName, { startLine: res.highlightLine, endLine: res.highlightLine });
+        }
+        break;
+      }
+
+      case 'creativeStringMutate': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) return;
+        const res = await CreativeCodeManager.handleStringMutate(editor, message.varName, message.index, message.char);
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: res.ok,
+          message: res.message || res.error || '',
+          highlightLine: res.highlightLine,
+        });
+        if (res.highlightLine) {
+          this.highlightLinkEdit(editor.document.fileName, { startLine: res.highlightLine, endLine: res.highlightLine });
+        }
+        break;
+      }
+
+      case 'creativeStringDelete': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) return;
+        const res = await CreativeCodeManager.handleStringDelete(editor, message.varName);
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: res.ok,
+          message: res.message || res.error || '',
+        });
+        break;
+      }
+
       case 'creativeRequestSync': {
         const editor = await this.getOrCreateCppEditor();
         if (editor) {
@@ -603,6 +664,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
             nodes: state.nodes,
             stacks: state.stacks,
             queues: state.queues,
+            strings: state.strings,
           });
         }
         break;
@@ -639,6 +701,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           nodes: [],
           stacks: [],
           queues: [],
+          strings: [],
         });
         break;
       }

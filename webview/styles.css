@@ -3098,6 +3098,11 @@ body.is-canvas-panning * {
   color: #7ee787;
 }
 
+.dock-btn-string {
+  border-color: #0284c7;
+  color: #38bdf8;
+}
+
 .btn-creative {
   background: linear-gradient(135deg, #1f6feb 0%, #8957e5 100%);
   border: 1px solid rgba(255, 255, 255, 0.15);

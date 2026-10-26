@@ -107,6 +107,26 @@ export type WebviewMessage =
       value: number;
     }
   | {
+      command: 'creativeStringCreate';
+      varName: string;
+      initialValue: string;
+    }
+  | {
+      command: 'creativeStringAppend';
+      varName: string;
+      char: string;
+    }
+  | {
+      command: 'creativeStringMutate';
+      varName: string;
+      index: number;
+      char: string;
+    }
+  | {
+      command: 'creativeStringDelete';
+      varName: string;
+    }
+  | {
       command: 'creativeRequestSync';
     }
   | {
@@ -181,6 +201,7 @@ export type ExtensionMessage =
       nodes: Array<{ id: string; varName: string; value: number; x: number; y: number; nextVar?: string | null }>;
       stacks: Array<{ id: string; varName: string; elements: number[]; x: number; y: number }>;
       queues: Array<{ id: string; varName: string; elements: number[]; x: number; y: number }>;
+      strings: Array<{ id: string; varName: string; value: string; x: number; y: number }>;
     }
   | {
       command: 'creativeFeedback';

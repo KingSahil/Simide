@@ -7,6 +7,8 @@ import {
   QueueModel,
   StackElement,
   QueueSlot,
+  StringElement,
+  StringVariable,
 } from '../src/visualization/linkedListModel';
 import { GraphSnapshot } from '../src/visualization/graphModel';
 import {
@@ -77,6 +79,7 @@ const creativePalette = document.getElementById('creativePalette') as HTMLElemen
 const dockAddNode = document.getElementById('dockAddNode') as HTMLElement | null;
 const dockAddStack = document.getElementById('dockAddStack') as HTMLElement | null;
 const dockAddQueue = document.getElementById('dockAddQueue') as HTMLElement | null;
+const dockAddString = document.getElementById('dockAddString') as HTMLElement | null;
 
 // Visual Link Mode state: click NEXT cell or click two graph nodes to wire them in source code.
 let linkMode = false;
@@ -1714,6 +1717,37 @@ function renderStringDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Li
       cell.appendChild(glyphSpan);
       cell.appendChild(asciiSpan);
       cell.appendChild(indexSpan);
+
+      if (isCreativeMode && !elem.isNullTerminator) {
+        cell.title = `Click to mutate ${strVar.name}[${elem.index}] in C++`;
+        cell.style.cursor = 'pointer';
+        cell.onclick = (e) => {
+          e.stopPropagation();
+          const currCode = elem.char.charCodeAt(0) || 65;
+          let nextChar = 'A';
+          if (currCode >= 65 && currCode < 90) {
+            nextChar = String.fromCharCode(currCode + 1);
+          } else if (currCode === 90) {
+            nextChar = 'a';
+          } else if (currCode >= 97 && currCode < 122) {
+            nextChar = String.fromCharCode(currCode + 1);
+          } else if (currCode === 122) {
+            nextChar = '0';
+          } else {
+            nextChar = 'A';
+          }
+          elem.char = nextChar;
+          elem.ascii = nextChar.charCodeAt(0);
+          elem.isModified = true;
+          renderDiagram(snapshot, false);
+          vscode.postMessage({
+            command: 'creativeStringMutate',
+            varName: strVar.name,
+            index: elem.index,
+            char: nextChar,
+          });
+        };
+      }
 
       col.appendChild(cell);
       strip.appendChild(col);
@@ -3557,9 +3591,31 @@ window.addEventListener('message', (event) => {
         break;
       }
 
+      if (msg.strings && msg.strings.length > 0) {
+        snap.strings = msg.strings.map((str) => {
+          const chars = str.value.split('');
+          const elements: StringElement[] = chars.map((c, i) => ({
+            index: i,
+            char: c,
+            ascii: c.charCodeAt(0),
+          }));
+          return {
+            name: str.varName,
+            type: 'std_string' as const,
+            length: chars.length,
+            elements,
+            hasNullTerminator: false,
+          };
+        });
+        snap.structureType = 'string';
+        renderDiagram(snap, false);
+        break;
+      }
+
       snap.nodes = [];
       snap.stack = undefined;
       snap.queue = undefined;
+      snap.strings = undefined;
       snap.hasHead = false;
       snap.headId = null;
       renderDiagram(snap, false);
@@ -3721,7 +3777,7 @@ function openCreativeStudio() {
   if (cardTitle) cardTitle.textContent = 'Creative Studio';
   if (explanationText) {
     explanationText.textContent =
-      'Creative Mode: Click "+ Node", "+ Stack", or "+ Queue" to build data structures visually and write C++ in real time!';
+      'Creative Mode: Click "+ Node", "+ Stack", "+ Queue", or "+ String" to build data structures visually and write C++ in real time!';
   }
 
   // Creative mode always starts with a blank C++ file and blank canvas
@@ -3730,6 +3786,7 @@ function openCreativeStudio() {
   snap.nodes = [];
   snap.stack = undefined;
   snap.queue = undefined;
+  snap.strings = undefined;
   snap.hasHead = false;
   snap.headId = null;
   renderDiagram(snap, false);
@@ -3738,7 +3795,7 @@ function openCreativeStudio() {
     terminalText.style.display = 'block';
     if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
     terminalText.textContent =
-      'Creative Mode started with blank C++ file (creative.cpp).\nClick "+ Node", "+ Stack", or "+ Queue" to build data structures and generate C++ in real-time.';
+      'Creative Mode started with blank C++ file (creative.cpp).\nClick "+ Node", "+ Stack", "+ Queue", or "+ String" to build data structures and generate C++ in real-time.';
   }
 
   vscode.postMessage({ command: 'creativeStart' });
@@ -3897,6 +3954,76 @@ function addCreativeQueue() {
   if (vp) vp.scrollTop = vp.scrollHeight;
 }
 
+function addCreativeString() {
+  const snap = getCreativeSnapshot();
+  const currentStrings = snap.strings || [];
+
+  if (currentStrings.length === 0 || snap.structureType !== 'string') {
+    const varName = 'str';
+    const initialValue = 'hello';
+    const elements: StringElement[] = initialValue.split('').map((c, i) => ({
+      index: i,
+      char: c,
+      ascii: c.charCodeAt(0),
+      isModified: true,
+    }));
+    snap.structureType = 'string';
+    snap.strings = [
+      {
+        name: varName,
+        type: 'std_string',
+        length: initialValue.length,
+        elements,
+        hasNullTerminator: false,
+      },
+    ];
+    renderDiagram(snap, false);
+
+    vscode.postMessage({
+      command: 'creativeStringCreate',
+      varName,
+      initialValue,
+    });
+
+    const prev = terminalText.textContent || '';
+    terminalText.style.display = 'block';
+    if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+    terminalText.textContent =
+      prev +
+      `\n[Added] std::string ${varName} = "${initialValue}"; in C++\nClick "+ String" again to append characters, or click any letter cell to mutate it!`;
+    const vp = document.getElementById('terminalViewport');
+    if (vp) vp.scrollTop = vp.scrollHeight;
+  } else {
+    const targetStr = currentStrings[0];
+    const lettersToAppend = ['!', '?', '+', '*', 'X', 'Y', 'Z'];
+    const charToAppend = lettersToAppend[targetStr.elements.length % lettersToAppend.length];
+
+    const newIdx = targetStr.elements.length;
+    targetStr.elements.push({
+      index: newIdx,
+      char: charToAppend,
+      ascii: charToAppend.charCodeAt(0),
+      isModified: true,
+    });
+    targetStr.length = targetStr.elements.length;
+
+    renderDiagram(snap, false);
+
+    vscode.postMessage({
+      command: 'creativeStringAppend',
+      varName: targetStr.name,
+      char: charToAppend,
+    });
+
+    const prev = terminalText.textContent || '';
+    terminalText.style.display = 'block';
+    if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+    terminalText.textContent = prev + `\n[Appended] ${targetStr.name} += '${charToAppend}'; in C++`;
+    const vp = document.getElementById('terminalViewport');
+    if (vp) vp.scrollTop = vp.scrollHeight;
+  }
+}
+
 function setupCreativeEvents() {
   if (btnInitialCreative) btnInitialCreative.onclick = openCreativeStudio;
 
@@ -3908,6 +4035,9 @@ function setupCreativeEvents() {
   }
   if (dockAddQueue) {
     dockAddQueue.onclick = () => addCreativeQueue();
+  }
+  if (dockAddString) {
+    dockAddString.onclick = () => addCreativeString();
   }
 }
 

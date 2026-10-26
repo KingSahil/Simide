@@ -26,10 +26,19 @@ export interface CreativeQueue {
   y: number;
 }
 
+export interface CreativeString {
+  id: string;
+  varName: string;
+  value: string;
+  x: number;
+  y: number;
+}
+
 export interface CreativeState {
   nodes: CreativeNode[];
   stacks: CreativeStack[];
   queues: CreativeQueue[];
+  strings: CreativeString[];
 }
 
 export interface CreativeEditResult {
@@ -47,6 +56,7 @@ export class CreativeCodeManager {
     const nodes: CreativeNode[] = [];
     const stacks: CreativeStack[] = [];
     const queues: CreativeQueue[] = [];
+    const strings: CreativeString[] = [];
 
     // Parse Linked List Nodes: e.g. Node* head = new Node(10); or ListNode* n1 = new ListNode{20};
     const nodeRegex = /(?:Node|ListNode)\s*\*\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*new\s+(?:Node|ListNode)(?:\s*(?:\(|\{)\s*(-?\d+)?\s*(?:\)|\}))?\s*;/g;
@@ -137,7 +147,44 @@ export class CreativeCodeManager {
       queueIdx++;
     }
 
-    return { nodes, stacks, queues };
+    // Parse Strings: std::string str = "hello"; or string s = "cat"; or std::string s;
+    const stringRegex = /(?:\bstd::)?string\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?\s*;/g;
+    let strIdx = 0;
+    while ((match = stringRegex.exec(code)) !== null) {
+      const varName = match[1];
+      if (varName === 'main') continue;
+      let initialVal = match[2] !== undefined ? match[2] : match[3] !== undefined ? match[3] : '';
+
+      // Check appends / mutations for this string: str += 'c'; or str += "abc"; or str.push_back('c');
+      const appendRegex = new RegExp(`\\b${varName}\\s*(?:\\+=\\s*(?:"([^"]*)"|'([^']*)')|\\.(?:push_back|append)\\s*\\(\\s*(?:"([^"]*)"|'([^']*)')\\s*\\))\\s*;`, 'g');
+      let appendMatch: RegExpExecArray | null;
+      while ((appendMatch = appendRegex.exec(code)) !== null) {
+        const added = appendMatch[1] || appendMatch[2] || appendMatch[3] || appendMatch[4] || '';
+        initialVal += added;
+      }
+
+      // Check index assignments: str[0] = 'H';
+      const indexAssignRegex = new RegExp(`\\b${varName}\\s*\\[\\s*(\\d+)\\s*\\]\\s*=\\s*'([^']*)'\\s*;`, 'g');
+      let idxAssignMatch: RegExpExecArray | null;
+      while ((idxAssignMatch = indexAssignRegex.exec(code)) !== null) {
+        const atIdx = parseInt(idxAssignMatch[1], 10);
+        const newChar = idxAssignMatch[2];
+        if (atIdx >= 0 && atIdx < initialVal.length) {
+          initialVal = initialVal.substring(0, atIdx) + newChar + initialVal.substring(atIdx + 1);
+        }
+      }
+
+      strings.push({
+        id: `string-${varName}`,
+        varName,
+        value: initialVal,
+        x: 60 + strIdx * 240,
+        y: 200,
+      });
+      strIdx++;
+    }
+
+    return { nodes, stacks, queues, strings };
   }
 
   /**
@@ -482,6 +529,128 @@ int main() {
       ok: success,
       message: `Added: ${varName}.push(${value});`,
       highlightLine: mainPos.position.line + 1,
+    };
+  }
+
+  /**
+   * Create or initialize a std::string in the active C++ file
+   */
+  public static async handleStringCreate(
+    editor: vscode.TextEditor,
+    varName: string,
+    initialValue: string = "hello"
+  ): Promise<CreativeEditResult> {
+    const doc = editor.document;
+    let text = doc.getText();
+
+    // 1. If file is completely empty or has no main(), scaffold runnable program
+    if (!text.trim() || !text.includes('main(')) {
+      const boilerplate = `#include <iostream>
+#include <string>
+
+int main() {
+    std::string ${varName} = "${initialValue}";
+
+    return 0;
+}
+`;
+      const fullRange = new vscode.Range(0, 0, doc.lineCount, 0);
+      const applied = await editor.edit((b) => b.replace(fullRange, boilerplate));
+      if (!applied) return { ok: false, error: 'Failed to write C++ string boilerplate' };
+      return { ok: true, message: `Created std::string ${varName} = "${initialValue}";`, highlightLine: 5 };
+    }
+
+    // 2. Ensure #include <string> is present at top
+    let workingText = text;
+    if (!workingText.includes('#include <string>')) {
+      await editor.edit((b) => b.insert(new vscode.Position(0, 0), '#include <string>\n'));
+      workingText = editor.document.getText();
+    }
+
+    // 3. Insert declaration in main()
+    const strDeclRegex = new RegExp(`\\b(?:std::)?string\\s+${varName}\\b`);
+    const mainPos = this.findMainInsertionPosition(editor.document);
+    if (!mainPos) return { ok: false, error: 'Could not find insertion position in main()' };
+
+    let codeToInsert = '';
+    if (!strDeclRegex.test(workingText)) {
+      codeToInsert += `    std::string ${varName} = "${initialValue}";\n`;
+    }
+
+    const success = await editor.edit((b) => {
+      b.insert(mainPos.position, codeToInsert);
+    });
+
+    return {
+      ok: success,
+      message: `Added: std::string ${varName} = "${initialValue}";`,
+      highlightLine: mainPos.position.line + 1,
+    };
+  }
+
+  /**
+   * Append a character to an existing std::string in main()
+   */
+  public static async handleStringAppend(
+    editor: vscode.TextEditor,
+    varName: string,
+    charOrStr: string
+  ): Promise<CreativeEditResult> {
+    const mainPos = this.findMainInsertionPosition(editor.document);
+    if (!mainPos) return { ok: false, error: 'Could not find insertion position in main()' };
+
+    const statement = charOrStr.length === 1 ? `    ${varName} += '${charOrStr}';\n` : `    ${varName} += "${charOrStr}";\n`;
+    const success = await editor.edit((b) => {
+      b.insert(mainPos.position, statement);
+    });
+
+    return {
+      ok: success,
+      message: `Added: ${varName} += '${charOrStr}';`,
+      highlightLine: mainPos.position.line + 1,
+    };
+  }
+
+  /**
+   * Mutate a character at an index: str[idx] = 'c';
+   */
+  public static async handleStringMutate(
+    editor: vscode.TextEditor,
+    varName: string,
+    index: number,
+    char: string
+  ): Promise<CreativeEditResult> {
+    const mainPos = this.findMainInsertionPosition(editor.document);
+    if (!mainPos) return { ok: false, error: 'Could not find insertion position in main()' };
+
+    const statement = `    ${varName}[${index}] = '${char}';\n`;
+    const success = await editor.edit((b) => {
+      b.insert(mainPos.position, statement);
+    });
+
+    return {
+      ok: success,
+      message: `Added: ${varName}[${index}] = '${char}';`,
+      highlightLine: mainPos.position.line + 1,
+    };
+  }
+
+  /**
+   * Delete a string declaration and references from main()
+   */
+  public static async handleStringDelete(
+    editor: vscode.TextEditor,
+    varName: string
+  ): Promise<CreativeEditResult> {
+    const doc = editor.document;
+    const text = doc.getText();
+    const regex = new RegExp(`^[ \\t]*.*\\b${varName}\\b.*$\\r?\\n?`, 'gm');
+    const newText = text.replace(regex, '');
+    const fullRange = new vscode.Range(0, 0, doc.lineCount, 0);
+    const success = await editor.edit((b) => b.replace(fullRange, newText));
+    return {
+      ok: success,
+      message: `Removed std::string ${varName}`,
     };
   }
 
