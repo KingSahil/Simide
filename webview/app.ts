@@ -342,6 +342,16 @@ const btnRestart = document.getElementById('btnRestart') as HTMLButtonElement;
 const btnRetry = document.getElementById('btnRetry') as HTMLButtonElement;
 const btnResetLayout = document.getElementById('btnResetLayout') as HTMLButtonElement;
 
+// Audio Narration & Auto-Play Controls
+const btnPlayPause = document.getElementById('btnPlayPause') as HTMLButtonElement | null;
+const iconPlay = document.getElementById('iconPlay') as unknown as SVGElement | null;
+const iconPause = document.getElementById('iconPause') as unknown as SVGElement | null;
+const playPauseLabel = document.getElementById('playPauseLabel') as HTMLSpanElement | null;
+const btnSpeakText = document.getElementById('btnSpeakText') as HTMLButtonElement | null;
+const btnSpeakTextLabel = document.getElementById('btnSpeakTextLabel') as HTMLSpanElement | null;
+const btnAutoNarrate = document.getElementById('btnAutoNarrate') as HTMLButtonElement | null;
+const autoNarrateLabel = document.getElementById('autoNarrateLabel') as HTMLSpanElement | null;
+
 // Interactive Graph State
 interface NodePos {
   x: number;
@@ -2852,6 +2862,8 @@ graphViewportResizeObserver.observe(graphViewport);
 const btnHome = document.getElementById('btnHome') as HTMLButtonElement;
 let homeRequested = false;
 btnHome.onclick = () => {
+  stopAutoPlay();
+  stopSpeech();
   homeRequested = true;
   isCreativeMode = false;
   if (creativePalette) creativePalette.style.display = 'none';
@@ -2891,10 +2903,277 @@ if (lessonGuideToggle && lessonGuideBody && lessonGuideIcon) {
   };
 }
 
-btnPrev.onclick = () => vscode.postMessage({ command: 'prev' });
-btnNext.onclick = () => vscode.postMessage({ command: 'next' });
-btnRestart.onclick = () => vscode.postMessage({ command: 'restart' });
-btnRetry.onclick = () => vscode.postMessage({ command: 'retry' });
+// ==========================================
+// Cross-Platform Audio Narration (Web Speech API) & Auto-Play Simulator
+// ==========================================
+let isAutoNarrate = false;
+let isSpeakingExplanation = false;
+let autoPlayTimer: any = null;
+let isAutoPlaying = false;
+let autoPlayIntervalMs = 1400;
+
+// Cached cross-platform voices pool (handles macOS/Linux async voice discovery)
+let cachedVoices: SpeechSynthesisVoice[] = [];
+
+function refreshVoices() {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      cachedVoices = window.speechSynthesis.getVoices() || [];
+    } catch {
+      cachedVoices = [];
+    }
+  }
+}
+
+// Initial populate and async voice listener (critical for macOS WebKit/Chromium)
+if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+  refreshVoices();
+  if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
+    window.speechSynthesis.onvoiceschanged = () => {
+      refreshVoices();
+    };
+  }
+}
+
+function cleanTextForSpeech(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/([a-zA-Z0-9_]+)\[(\d+)\]/g, '$1 at index $2')
+    .replace(/->/g, ' points to ')
+    .replace(/\bNULL\b|\bnullptr\b/gi, 'null')
+    .replace(/\(0x[0-9a-fA-F]+\)/g, '')
+    .replace(/\[\.\.\]/g, '')
+    .replace(/[`*_~#]/g, '')
+    .trim();
+}
+
+/**
+ * Cross-Platform Voice Selector:
+ * 1. macOS Natural/Siri voices (Samantha, Daniel, Alex, Victoria, Oliver)
+ * 2. Windows OneCore/SAPI (Microsoft David, Zira, Mark, Jenny)
+ * 3. Linux speech-dispatcher / Chrome OS natural voices (espeak-ng, English default)
+ * 4. Any English locale (en-US, en-GB, en-CA, en-AU)
+ * 5. OS Default fallback
+ */
+function getBestCrossPlatformVoice(): SpeechSynthesisVoice | null {
+  if (cachedVoices.length === 0) {
+    refreshVoices();
+  }
+  if (cachedVoices.length === 0) return null;
+
+  // Tier 1: Preferred macOS & Windows high-quality natural voices
+  const tier1Voice = cachedVoices.find(
+    (v) =>
+      v.lang.startsWith('en') &&
+      (v.name.includes('Samantha') ||
+        v.name.includes('Daniel') ||
+        v.name.includes('Alex') ||
+        v.name.includes('Victoria') ||
+        v.name.includes('David') ||
+        v.name.includes('Zira') ||
+        v.name.includes('Jenny') ||
+        v.name.includes('Natural') ||
+        v.name.includes('Google'))
+  );
+  if (tier1Voice) return tier1Voice;
+
+  // Tier 2: Any English voice (e.g. Linux speech-dispatcher / espeak-ng / generic English)
+  const tier2Voice = cachedVoices.find((v) => v.lang.startsWith('en') || v.lang.startsWith('en_'));
+  if (tier2Voice) return tier2Voice;
+
+  // Tier 3: Default voice tagged by browser
+  const tier3Voice = cachedVoices.find((v) => v.default);
+  if (tier3Voice) return tier3Voice;
+
+  // Tier 4: First available voice
+  return cachedVoices[0] || null;
+}
+
+function speakCurrentExplanation(onFinish?: () => void) {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    if (onFinish) onFinish();
+    return;
+  }
+
+  try {
+    window.speechSynthesis.cancel();
+  } catch {}
+
+  const rawText = explanationText ? explanationText.textContent || '' : '';
+  const textToRead = cleanTextForSpeech(rawText);
+  if (!textToRead) {
+    if (onFinish) onFinish();
+    return;
+  }
+
+  try {
+    const utterance = new SpeechSynthesisUtterance(textToRead);
+    // Normalized rate and pitch to prevent Linux speech-dispatcher crashes
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+
+    const chosenVoice = getBestCrossPlatformVoice();
+    if (chosenVoice) {
+      utterance.voice = chosenVoice;
+    }
+
+    utterance.onstart = () => {
+      isSpeakingExplanation = true;
+      if (btnSpeakText) btnSpeakText.classList.add('speaking');
+      if (btnSpeakTextLabel) btnSpeakTextLabel.textContent = 'Stop';
+    };
+
+    const finishSpeech = () => {
+      isSpeakingExplanation = false;
+      if (btnSpeakText) btnSpeakText.classList.remove('speaking');
+      if (btnSpeakTextLabel) btnSpeakTextLabel.textContent = 'Listen';
+      if (onFinish) onFinish();
+    };
+
+    utterance.onend = finishSpeech;
+    utterance.onerror = (err) => {
+      // Graceful error recovery (e.g. Linux speech-dispatcher audio server busy)
+      finishSpeech();
+    };
+
+    window.speechSynthesis.speak(utterance);
+  } catch (err) {
+    isSpeakingExplanation = false;
+    if (btnSpeakText) btnSpeakText.classList.remove('speaking');
+    if (btnSpeakTextLabel) btnSpeakTextLabel.textContent = 'Listen';
+    if (onFinish) onFinish();
+  }
+}
+
+function stopSpeech() {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {}
+  }
+  isSpeakingExplanation = false;
+  if (btnSpeakText) btnSpeakText.classList.remove('speaking');
+  if (btnSpeakTextLabel) btnSpeakTextLabel.textContent = 'Listen';
+}
+  if (btnSpeakText) btnSpeakText.classList.remove('speaking');
+  if (btnSpeakTextLabel) btnSpeakTextLabel.textContent = 'Listen';
+}
+
+if (btnSpeakText) {
+  btnSpeakText.onclick = () => {
+    if (isSpeakingExplanation) {
+      stopSpeech();
+    } else {
+      speakCurrentExplanation();
+    }
+  };
+}
+
+if (btnAutoNarrate) {
+  btnAutoNarrate.onclick = () => {
+    isAutoNarrate = !isAutoNarrate;
+    btnAutoNarrate.classList.toggle('active', isAutoNarrate);
+    if (autoNarrateLabel) {
+      autoNarrateLabel.textContent = isAutoNarrate ? 'Voice: ON' : 'Voice: OFF';
+    }
+    if (isAutoNarrate && explanationText && explanationText.textContent) {
+      speakCurrentExplanation();
+    } else if (!isAutoNarrate) {
+      stopSpeech();
+    }
+  };
+}
+
+function stopAutoPlay() {
+  if (autoPlayTimer) {
+    clearTimeout(autoPlayTimer);
+    autoPlayTimer = null;
+  }
+  isAutoPlaying = false;
+  if (btnPlayPause) {
+    btnPlayPause.classList.remove('playing');
+    if (iconPlay) (iconPlay as unknown as HTMLElement).style.display = 'inline';
+    if (iconPause) (iconPause as unknown as HTMLElement).style.display = 'none';
+    if (playPauseLabel) playPauseLabel.textContent = 'Auto Play';
+  }
+}
+
+function scheduleNextAutoPlayStep() {
+  if (!isAutoPlaying) return;
+
+  if (autoPlayTimer) {
+    clearTimeout(autoPlayTimer);
+    autoPlayTimer = null;
+  }
+
+  // If auto-voice narration is active and currently speaking, wait for speech to finish before auto-stepping
+  if (isAutoNarrate && isSpeakingExplanation) {
+    return;
+  }
+
+  autoPlayTimer = setTimeout(() => {
+    if (!isAutoPlaying) return;
+    if (btnNext.disabled) {
+      stopAutoPlay();
+      return;
+    }
+    vscode.postMessage({ command: 'next' });
+  }, autoPlayIntervalMs);
+}
+
+function startAutoPlay() {
+  if (btnNext.disabled) return;
+  isAutoPlaying = true;
+  if (btnPlayPause) {
+    btnPlayPause.classList.add('playing');
+    if (iconPlay) (iconPlay as unknown as HTMLElement).style.display = 'none';
+    if (iconPause) (iconPause as unknown as HTMLElement).style.display = 'inline';
+    if (playPauseLabel) playPauseLabel.textContent = 'Pause';
+  }
+  vscode.postMessage({ command: 'next' });
+}
+
+if (btnPlayPause) {
+  btnPlayPause.onclick = () => {
+    if (isAutoPlaying) {
+      stopAutoPlay();
+    } else {
+      startAutoPlay();
+    }
+  };
+}
+
+const speedButtons = document.querySelectorAll<HTMLButtonElement>('.btn-speed');
+speedButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    speedButtons.forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    const speed = parseInt(btn.dataset.speed || '1400', 10);
+    autoPlayIntervalMs = speed;
+    if (isAutoPlaying) {
+      scheduleNextAutoPlayStep();
+    }
+  });
+});
+
+btnPrev.onclick = () => {
+  stopAutoPlay();
+  vscode.postMessage({ command: 'prev' });
+};
+btnNext.onclick = () => {
+  stopAutoPlay();
+  vscode.postMessage({ command: 'next' });
+};
+btnRestart.onclick = () => {
+  stopAutoPlay();
+  stopSpeech();
+  vscode.postMessage({ command: 'restart' });
+};
+btnRetry.onclick = () => {
+  stopAutoPlay();
+  stopSpeech();
+  vscode.postMessage({ command: 'retry' });
+};
 btnResetLayout.onclick = () => {
   if (currentSnapshot) {
     nodePositions.clear();
@@ -3064,6 +3343,8 @@ window.addEventListener('message', (event) => {
     }
 
     case 'home': {
+      stopAutoPlay();
+      stopSpeech();
       isCreativeMode = false;
       if (creativePalette) creativePalette.style.display = 'none';
       showView('initial');
@@ -3094,6 +3375,9 @@ window.addEventListener('message', (event) => {
       btnNext.disabled = !canStepNext;
       btnPrev.disabled = !canStepPrev;
       btnRestart.disabled = !canRestart;
+      if (btnPlayPause) {
+        btnPlayPause.disabled = !canStepNext && !isAutoPlaying;
+      }
 
       const warningText =
         isGraphUpdateStateMessage(msg) && msg.snapshot.warnings?.length
@@ -3105,6 +3389,24 @@ window.addEventListener('message', (event) => {
       currentSnapshot = snapshot;
       // A re-snapshot replaces all canvas elements, so drop any in-progress link selection.
       clearLinkSelection();
+
+      // Trigger automatic audio narration if enabled
+      if (isAutoNarrate) {
+        speakCurrentExplanation(() => {
+          if (isAutoPlaying) {
+            scheduleNextAutoPlayStep();
+          }
+        });
+      }
+
+      // Handle continuous auto-stepping
+      if (isAutoPlaying) {
+        if (!canStepNext) {
+          stopAutoPlay();
+        } else if (!isAutoNarrate) {
+          scheduleNextAutoPlayStep();
+        }
+      }
       break;
     }
 
@@ -3268,8 +3570,11 @@ window.addEventListener('message', (event) => {
     }
 
     case 'sessionEnded': {
+      stopAutoPlay();
+      stopSpeech();
       updateBadge('terminated');
       btnNext.disabled = true;
+      if (btnPlayPause) btnPlayPause.disabled = true;
       btnRestart.disabled = false;
       explanationText.textContent = msg.reason || 'Debugging session finished.';
       break;

@@ -187,7 +187,22 @@
 
       <!-- Explanation Card -->
       <div class="explanation-card">
-        <div class="explanation-title">Explanation</div>
+        <div class="explanation-title-row">
+          <div class="explanation-title">Explanation</div>
+          <div class="explanation-audio-actions">
+            <button id="btnSpeakText" class="btn-audio-speak" title="Listen to explanation (Audio TTS)">
+              <svg class="audio-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+              </svg>
+              <span id="btnSpeakTextLabel">Listen</span>
+            </button>
+            <button id="btnAutoNarrate" class="btn-audio-narrate-toggle" title="Toggle automatic voice narration on each step">
+              <span id="autoNarrateLabel">Voice: OFF</span>
+            </button>
+          </div>
+        </div>
         <div id="explanationText" class="explanation-text">Initial state</div>
       </div>
 
@@ -219,6 +234,16 @@
             </svg>
             Previous
           </button>
+          <button id="btnPlayPause" class="btn btn-play-pause" title="Auto-play simulation steps">
+            <svg id="iconPlay" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <svg id="iconPause" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+              <rect x="6" y="4" width="4" height="16"></rect>
+              <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+            <span id="playPauseLabel">Auto Play</span>
+          </button>
           <button id="btnNext" class="btn btn-primary">
             Next
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -226,6 +251,14 @@
               <polyline points="12 5 19 12 12 19"></polyline>
             </svg>
           </button>
+        </div>
+        <div class="secondary-controls-row">
+          <div class="playback-speed-group">
+            <span class="speed-label">Speed:</span>
+            <button class="btn-speed active" data-speed="1400" title="Normal speed (1.4s)">1x</button>
+            <button class="btn-speed" data-speed="800" title="Fast speed (0.8s)">1.5x</button>
+            <button class="btn-speed" data-speed="400" title="Rapid speed (0.4s)">2.5x</button>
+          </div>
         </div>
       </div>
     </div>

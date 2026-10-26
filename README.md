@@ -34,6 +34,7 @@ https://github.com/user-attachments/assets/e1ec6b1d-d235-47ed-b450-3d5907460efa
 - [Current scope](#current-scope)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
+- [Authors & Maintainers](#authors--maintainers)
 
 ## Learning workflows
 
@@ -43,8 +44,9 @@ Open a supported, compilable C++ file, open **SimIDE** from the Activity Bar, an
 
 - **Next** advances through execution or saved history.
 - **Previous** reviews recorded snapshots; it does not reverse the running C++ process.
+- **Auto Play** steps through execution automatically with configurable playback speeds (1x, 1.5x, 2.5x).
 - **Restart** begins a new execution session.
-- Step explanations connect supported allocations, mutations, traversals, and deletions with plain-English descriptions.
+- **Step explanations & Audio TTS** connect supported allocations, mutations, traversals, and deletions with plain-English descriptions and live Web Speech voice narration.
 - A program-output panel displays supported output alongside the diagram.
 - Draggable nodes, background panning, zoom, and layout reset help navigate larger structures.
 
@@ -252,8 +254,19 @@ Bug reports, examples, tutorials, and focused improvements are welcome. Open an 
 
 For code contributions, read the [developer guide](docs/agent-guide.md), create a branch, keep the change focused, and run the relevant build and tests before opening a pull request.
 
+## Authors & Maintainers
+
+SimIDE is actively designed, maintained, and developed by:
+
+- **[Sahil Gupta](https://github.com/KingSahil)**
+- **[Sparsh Khanna](https://github.com/Khanna-Sparsh)**
+- **[Yogita](https://github.com/Codewith-Yogita)**
+- **[Anubhav G.](https://github.com/anubhav-1207)**
+- **[Rivanshu Behal](https://github.com/Rivanshu88)**
+- **[FeV06](https://github.com/FeV06)**
+
+Special thanks to all community contributors!
+
 ## License
 
 SimIDE is available under the [MIT License](LICENSE).
-
-Created by [Sahil](https://github.com/KingSahil) and contributors.
