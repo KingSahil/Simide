@@ -1,4 +1,4 @@
-export type StructureType = 'linked_list' | 'tree' | 'array' | 'stack' | 'queue';
+export type StructureType = 'linked_list' | 'tree' | 'array' | 'stack' | 'queue' | 'string';
 
 export interface ArrayElement {
   index: number;
@@ -18,6 +18,34 @@ export interface ArrayVariable {
   elements: ArrayElement[];
   address?: string;
   isDynamic?: boolean;
+}
+
+export interface StringElement {
+  index: number;
+  char: string;             // e.g. "a", "\0", " "
+  ascii: number;            // e.g. 97, 0, 32
+  isModified?: boolean;     // Highlighted if changed this step
+  isCompared?: boolean;     // Highlighted if involved in comparison (e.g. s[i] == s[j])
+  isWindow?: boolean;       // Inside current sliding window [start..end]
+  isNullTerminator?: boolean; // True for '\0'
+  address?: string;         // Memory address of character slot
+}
+
+export interface StringVariable {
+  name: string;             // e.g. "s", "str", "haystack"
+  type: 'std_string' | 'char_array' | 'char_pointer';
+  length: number;           // Actual character count (excluding \0 for std::string)
+  capacity?: number;        // std::string capacity or allocated buffer size
+  elements: StringElement[];
+  address?: string;
+  hasNullTerminator: boolean;
+}
+
+export interface StringWindow {
+  stringName: string;
+  startIndex: number;
+  endIndex: number;
+  label?: string;           // e.g. "current window" or "match"
 }
 
 export interface IndexPointer {
@@ -141,13 +169,19 @@ export type ChangeType =
   | 'queue_rear'
   | 'queue_wrap'
   | 'queue_initialized'
+  | 'string_initialized'
+  | 'string_char_updated'
+  | 'string_char_swapped'
+  | 'string_pointer_moved'
+  | 'string_window_resized'
+  | 'string_concatenated'
   | 'final';
 
 export interface LinkedListSnapshot {
   stepNumber: number;
   structureType?: StructureType;
   source?: SourceLocation;
-  hasHead: boolean; // Also represents hasRoot when tree, hasArray when array, hasStack when stack, hasQueue when queue
+  hasHead: boolean; // Also represents hasRoot when tree, hasArray when array, hasStack when stack, hasQueue when queue, hasString when string
   headId: string | null; // Also represents rootId when tree
   activeVisitingNodeId?: string | null;
   nodes: ListNode[];
@@ -156,6 +190,8 @@ export interface LinkedListSnapshot {
   indexPointers?: IndexPointer[];
   stack?: StackModel;
   queue?: QueueModel;
+  strings?: StringVariable[];
+  stringWindows?: StringWindow[];
   explanation: string;
   changeType: ChangeType;
   terminalOutput?: string;
