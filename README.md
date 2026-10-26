@@ -20,9 +20,11 @@ This is a **real developer tool** connected directly to native GDB/LLDB via VS C
 
 ## Launch Demo
 
-[![Watch the SimIDE launch demo](docs/media/simide-launch-preview.jpg)](docs/media/simide-launch.mp4)
 
-[Watch or download the launch video](docs/media/simide-launch.mp4).
+
+https://github.com/user-attachments/assets/b5c6fe15-2761-47d3-b326-b5f49e691d8e
+
+
 
 ## Table of Contents
 
