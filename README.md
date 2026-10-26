@@ -17,9 +17,11 @@
 
 ## Demo
 
-[![Watch the SimIDE launch demo](resources/demo/simide-launch-preview.jpg)](https://github.com/KingSahil/Simide/blob/main/resources/demo/simide-launch.mp4)
 
-**[Watch the launch demo](https://github.com/KingSahil/Simide/blob/main/resources/demo/simide-launch.mp4)** · 1 minute 36 seconds · 1080p · [Download MP4](https://raw.githubusercontent.com/KingSahil/Simide/main/resources/demo/simide-launch.mp4)
+
+https://github.com/user-attachments/assets/e1ec6b1d-d235-47ed-b450-3d5907460efa
+
+
 
 ## Contents
 
