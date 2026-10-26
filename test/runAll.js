@@ -4,7 +4,7 @@ const { spawnSync } = require('child_process');
 
 console.log('Building test bundle...');
 esbuild.buildSync({
-  entryPoints: ['test/runTests.ts', 'test/gdbExecution.test.ts', 'test/startup.test.ts', 'test/examples.test.ts', 'test/graphModel.test.ts', 'test/graphStateExtractor.test.ts', 'test/graphRenderer.test.ts', 'test/graphIntegration.test.ts', 'test/debugOutput.test.ts', 'test/stateExtraction.test.ts', 'test/arrayIndices.test.ts', 'test/oopExtraction.test.ts', 'test/gfgExtraction.test.ts'],
+  entryPoints: ['test/runTests.ts', 'test/gdbExecution.test.ts', 'test/startup.test.ts', 'test/examples.test.ts', 'test/graphModel.test.ts', 'test/graphStateExtractor.test.ts', 'test/graphRenderer.test.ts', 'test/graphIntegration.test.ts', 'test/debugOutput.test.ts', 'test/stateExtraction.test.ts', 'test/arrayIndices.test.ts', 'test/oopExtraction.test.ts', 'test/gfgExtraction.test.ts', 'test/stringExtraction.test.ts'],
   bundle: true,
   platform: 'node',
   outdir: 'dist',
@@ -28,6 +28,9 @@ const oop = spawnSync('node', ['dist/oopExtraction.test.js'], { stdio: 'inherit'
 if (oop.status !== 0) process.exit(oop.status || 1);
 const gfg = spawnSync('node', ['dist/gfgExtraction.test.js'], { stdio: 'inherit' });
 if (gfg.status !== 0) process.exit(gfg.status || 1);
+console.log('Running test/stringExtraction.test.ts...');
+const strRes = spawnSync('node', ['dist/stringExtraction.test.js'], { stdio: 'inherit' });
+if (strRes.status !== 0) process.exit(strRes.status || 1);
 console.log('Running test/runTests.ts...');
 const res1 = spawnSync('node', ['dist/runTests.js'], { stdio: 'inherit' });
 if (res1.status !== 0) {

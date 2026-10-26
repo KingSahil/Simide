@@ -304,6 +304,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       linkedlist: 'linked-list.cpp',
       tree: 'bst-traversals.cpp',
       graph: 'graph-registry.cpp',
+      string: 'string-palindrome.cpp',
     };
     const fileName = Object.prototype.hasOwnProperty.call(files, example) ? files[example] : example;
     try {

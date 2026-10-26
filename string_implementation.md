@@ -239,8 +239,8 @@ Ensure 100% test pass rate with both unit tests (mock DAP) and real GDB stepping
 - [x] Phase 2: Static Source Analysis & Pattern Detection (`discoverStringDeclarations`).
 - [x] Phase 3: High-Performance DAP Runtime Extraction Engine (`extractStrings`).
 - [x] Phase 4: Pedagogical Explanation Engine (`generateStringExplanation`).
-- [ ] Phase 5: Webview UI & Canvas Visualization (`renderStringDiagram`).
-- [ ] Phase 6: Test Suite & Example Fixtures (`examples/string-*.cpp`, `test/stringExtraction.test.ts`).
+- [x] Phase 5: Webview UI & Canvas Visualization (`renderStringDiagram`).
+- [x] Phase 6: Test Suite & Example Fixtures (`examples/string-*.cpp`, `test/stringExtraction.test.ts`).
 
 ---
 
@@ -259,9 +259,9 @@ Ensure 100% test pass rate with both unit tests (mock DAP) and real GDB stepping
 | `3.3` | Map active index pointers (`i`, `j`, `left`, `right`) to string elements | Completed |
 | `3.4` | Implement character mutation & in-place swap detection | Completed |
 | `4.1` | Generate pedagogical explanations for string lifecycle and operations | Completed |
-| `5.1` | Create `renderStringDiagram` component in `webview/app.ts` | Pending |
-| `5.2` | Implement character tiles, ASCII sub-labels, and `\0` null cell styling | Pending |
-| `5.3` | Implement sliding window highlight bracket and two-pointer badges | Pending |
-| `6.1` | Create string algorithm example programs in `examples/` | Pending |
-| `6.2` | Add comprehensive unit tests in `test/stringExtraction.test.ts` | Pending |
-| `6.3` | Verify full test suite pass rate with `npm test` | Pending |
+| `5.1` | Create `renderStringDiagram` component in `webview/app.ts` | Completed |
+| `5.2` | Implement character tiles, ASCII sub-labels, and `\0` null cell styling | Completed |
+| `5.3` | Implement sliding window highlight bracket and two-pointer badges | Completed |
+| `6.1` | Create string algorithm example programs in `examples/` | Completed |
+| `6.2` | Add comprehensive unit tests in `test/stringExtraction.test.ts` | Completed |
+| `6.3` | Verify full test suite pass rate with `npm test` | Completed |

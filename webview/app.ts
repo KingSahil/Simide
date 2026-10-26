@@ -1260,6 +1260,205 @@ function renderArrayDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Lin
   nodesLayer.appendChild(container);
 }
 
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderStringDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: LinkedListSnapshot | null) {
+  if (simulation) {
+    simulation.stop();
+    simulation.nodes([]);
+  }
+  const paths = arrowsSvg.querySelectorAll('path');
+  paths.forEach((p) => p.remove());
+
+  const strings = snapshot.strings || [];
+  const indexPointers = snapshot.indexPointers || [];
+  const stringWindows = snapshot.stringWindows || [];
+
+  if (strings.length === 0) {
+    const emptyMsg = document.createElement('div');
+    emptyMsg.className = 'empty-canvas-message';
+    emptyMsg.innerHTML = `
+      <div class="empty-icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#737D8C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+        </svg>
+      </div>
+      <div class="empty-title">String Initializing</div>
+      <div class="empty-subtitle">Program paused at entry.<br>Click <b>Next</b> to allocate and initialize the string.</div>
+    `;
+    nodesLayer.appendChild(emptyMsg);
+    return;
+  }
+
+  const container = document.createElement('div');
+  container.className = 'string-board-container';
+
+  for (const strVar of strings) {
+    const board = document.createElement('div');
+    board.className = 'string-board';
+
+    // Variable Label & Meta Badge: • s (std::string, length: 7)
+    const nameLabel = document.createElement('div');
+    nameLabel.className = 'string-name-simple';
+    const typeLabel =
+      strVar.type === 'std_string'
+        ? 'std::string'
+        : strVar.type === 'char_array'
+        ? `char[${strVar.capacity || strVar.length + 1}]`
+        : 'char*';
+    nameLabel.innerHTML = `<span class="string-var-name">${escapeHtml(strVar.name)}</span> <span class="string-meta-tag">${typeLabel}, length: ${strVar.length}</span>`;
+    board.appendChild(nameLabel);
+
+    // Detect if two characters were swapped between previousSnapshot and current strVar
+    let swappedPair: { idxA: number; idxB: number } | null = null;
+    const prevStr = previousSnapshot?.strings?.find((s) => s.name === strVar.name);
+    if (prevStr && prevStr.elements.length === strVar.elements.length) {
+      const changedIndices: number[] = [];
+      for (let k = 0; k < strVar.elements.length; k++) {
+        if (prevStr.elements[k] && prevStr.elements[k].char !== strVar.elements[k].char) {
+          changedIndices.push(k);
+        }
+      }
+      if (changedIndices.length === 2) {
+        const [a, b] = changedIndices;
+        if (
+          prevStr.elements[a].char === strVar.elements[b].char &&
+          prevStr.elements[b].char === strVar.elements[a].char
+        ) {
+          swappedPair = { idxA: a, idxB: b };
+        }
+      }
+    }
+
+    // Active sliding window for this string
+    const activeWindow = stringWindows.find((w) => !w.stringName || w.stringName === strVar.name);
+
+    // Strip Wrapper
+    const stripWrapper = document.createElement('div');
+    stripWrapper.className = 'string-strip-wrapper';
+
+    const strip = document.createElement('div');
+    strip.className = 'string-strip';
+
+    // Build Character Columns
+    for (const elem of strVar.elements) {
+      const col = document.createElement('div');
+      col.className = 'string-column';
+
+      // Index Pointer Badges pointing to this cell (e.g. left, right, i, j)
+      const matchingPointers = indexPointers.filter(
+        (ptr) =>
+          ptr.targetIndex === elem.index &&
+          (!ptr.targetArrayName || ptr.targetArrayName === strVar.name)
+      );
+
+      if (matchingPointers.length > 0) {
+        col.classList.add('has-active-pointer');
+        const ptrContainer = document.createElement('div');
+        ptrContainer.className = 'string-pointer-container';
+
+        for (const ptr of matchingPointers) {
+          const ptrPill = document.createElement('div');
+          const cleanName = ptr.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+          ptrPill.className = `string-pointer-pill ptr-${cleanName}`;
+          ptrPill.innerHTML = `<span>${escapeHtml(ptr.name)}</span><span class="ptr-arrow">↓</span>`;
+          ptrContainer.appendChild(ptrPill);
+        }
+        col.appendChild(ptrContainer);
+      }
+
+      // Character Cell
+      const cell = document.createElement('div');
+      cell.className = 'string-cell';
+      cell.id = `string-${strVar.name}-${elem.index}`;
+
+      if (elem.isNullTerminator) {
+        cell.classList.add('string-null-cell');
+      }
+
+      if (elem.isModified) {
+        cell.classList.add('modified');
+      }
+
+      if (elem.isCompared) {
+        cell.classList.add('compared');
+      }
+
+      if (matchingPointers.length > 0 || elem.isActive) {
+        cell.classList.add('active');
+      }
+
+      // Sliding Window styling
+      if (
+        elem.isWindow ||
+        (activeWindow && elem.index >= activeWindow.startIndex && elem.index <= activeWindow.endIndex)
+      ) {
+        cell.classList.add('in-window');
+      }
+
+      // Swapped animation
+      if (swappedPair) {
+        if (elem.index === swappedPair.idxA) {
+          cell.classList.add('cell-swapped-left');
+        } else if (elem.index === swappedPair.idxB) {
+          cell.classList.add('cell-swapped-right');
+        }
+      }
+
+      // Character Glyph
+      const glyphSpan = document.createElement('span');
+      glyphSpan.className = 'string-cell-char';
+      glyphSpan.textContent = elem.isNullTerminator ? '\\0' : elem.char === ' ' ? '␣' : elem.char;
+
+      // ASCII Subscript Code
+      const asciiSpan = document.createElement('span');
+      asciiSpan.className = 'string-cell-ascii';
+      asciiSpan.textContent = String(elem.ascii);
+
+      // Index label
+      const indexSpan = document.createElement('span');
+      indexSpan.className = 'string-cell-index';
+      indexSpan.textContent = `[${elem.index}]`;
+
+      cell.appendChild(glyphSpan);
+      cell.appendChild(asciiSpan);
+      cell.appendChild(indexSpan);
+
+      col.appendChild(cell);
+      strip.appendChild(col);
+    }
+
+    stripWrapper.appendChild(strip);
+
+    // Sliding Window Bracket / Tag if active
+    if (activeWindow && activeWindow.startIndex <= activeWindow.endIndex) {
+      const windowBar = document.createElement('div');
+      windowBar.className = 'string-window-bracket-container';
+      const subStr = strVar.elements
+        .slice(activeWindow.startIndex, activeWindow.endIndex + 1)
+        .filter((e) => !e.isNullTerminator)
+        .map((e) => e.char)
+        .join('');
+      windowBar.innerHTML = `
+        <div class="string-window-indicator">
+          <span class="window-bracket-symbol">⟦</span>
+          <span class="window-bracket-label">${escapeHtml(activeWindow.label || 'Window')} [${activeWindow.startIndex}..${activeWindow.endIndex}]: "${escapeHtml(subStr)}"</span>
+          <span class="window-bracket-symbol">⟧</span>
+        </div>
+      `;
+      stripWrapper.appendChild(windowBar);
+    }
+
+    board.appendChild(stripWrapper);
+    container.appendChild(board);
+  }
+
+  nodesLayer.appendChild(container);
+}
+
 /**
  * Enables smooth pointer-dragging on a stack element card with an elastic spring
  * bounce-back to its slot inside the stack container when released.
@@ -1858,7 +2057,8 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
         ? 'tree'
         : snapshot.structureType === 'array'
         ? 'array'
-
+        : snapshot.structureType === 'string'
+        ? 'string'
         : 'linked list';
     const emptyMsg = document.createElement('div');
     emptyMsg.className = 'empty-canvas-message';
@@ -1881,6 +2081,12 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
   // Handle Array Rendering
   if (snapshot.structureType === 'array') {
     renderArrayDiagram(snapshot, previousSnapshot);
+    return;
+  }
+
+  // Handle String Rendering
+  if (snapshot.structureType === 'string') {
+    renderStringDiagram(snapshot, previousSnapshot);
     return;
   }
 
