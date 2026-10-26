@@ -2637,6 +2637,19 @@ body.is-canvas-panning * {
   font-size: 10px;
   color: #36c779;
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dock-sync-indicator::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: #36c779;
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(54, 199, 121, 0.7);
 }
 
 .dock-actions {

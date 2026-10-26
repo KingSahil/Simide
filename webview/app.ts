@@ -87,7 +87,7 @@ function setLinkMode(on: boolean) {
   document.body.classList.toggle('link-mode', on);
   if (canvasHint) {
     canvasHint.textContent = on
-      ? '🔗 Link Mode: tap target node to connect next pointer (Esc to cancel)'
+      ? 'Link Mode: tap target node to connect next pointer (Esc to cancel)'
       : 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
   }
   if (!on) clearLinkSelection();
@@ -142,7 +142,7 @@ function onNodeTap(id: string, clickedEl?: HTMLElement) {
     const srcNode = listSnap?.nodes.find((n: ListNode) => n.id === rawId || n.id === id || n.variableName === rawId);
     const srcName = srcNode?.variableName || srcNode?.data || rawId;
     if (canvasHint) {
-      canvasHint.textContent = `🔗 Linking from ${srcName}: now tap target node to connect next pointer (Esc to cancel)`;
+      canvasHint.textContent = `Linking from ${srcName}: now tap target node to connect next pointer (Esc to cancel)`;
     }
     return;
   }
@@ -219,7 +219,7 @@ function onNodeTap(id: string, clickedEl?: HTMLElement) {
   const prev = terminalText.textContent || '';
   terminalText.style.display = 'block';
   if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
-  terminalText.textContent = prev + `\n⚡ Linked: ${sName}->next = ${tName}; in C++`;
+  terminalText.textContent = prev + `\n[Linked] ${sName}->next = ${tName}; in C++`;
   const vp = document.getElementById('terminalViewport');
   if (vp) vp.scrollTop = vp.scrollHeight;
 }
@@ -618,6 +618,10 @@ function showView(view: 'initial' | 'loading' | 'active' | 'error') {
   btnRestart.style.display = view === 'active' || view === 'error' ? 'inline-flex' : 'none';
   const homeBtn = document.getElementById('btnHome');
   if (homeBtn) homeBtn.style.display = view === 'active' || view === 'error' ? 'inline-flex' : 'none';
+
+  if (creativePalette) {
+    creativePalette.style.display = (view === 'active' && isCreativeMode) ? 'flex' : 'none';
+  }
 }
 
 // Satisfying physical spring overshoot bounce-back draggable for Stack and Queue elements
@@ -2421,7 +2425,8 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
   }
 
   // 3. Render Detached Unlinked Allocations
-  const detachedNodes = nodes.filter((n) => n.isDetached);
+  const renderedNodeIds = new Set(reachableNodes.map((n) => n.id));
+  const detachedNodes = nodes.filter((n) => !renderedNodeIds.has(n.id));
   for (let j = 0; j < detachedNodes.length; j++) {
     const node = detachedNodes[j];
     activeIds.add(node.id);
@@ -2542,6 +2547,8 @@ const btnHome = document.getElementById('btnHome') as HTMLButtonElement;
 let homeRequested = false;
 btnHome.onclick = () => {
   homeRequested = true;
+  isCreativeMode = false;
+  if (creativePalette) creativePalette.style.display = 'none';
   cancelActiveNodeDrag?.();
   simulation?.stop();
   showView('initial');
@@ -2551,6 +2558,8 @@ btnHome.onclick = () => {
 };
 btnInitialVisualize.onclick = () => {
   homeRequested = false;
+  isCreativeMode = false;
+  if (creativePalette) creativePalette.style.display = 'none';
   vscode.postMessage({ command: 'visualize' });
 };
 
@@ -2708,6 +2717,8 @@ window.addEventListener('message', (event) => {
 
   switch (msg.command) {
     case 'status': {
+      isCreativeMode = false;
+      if (creativePalette) creativePalette.style.display = 'none';
       showView('loading');
       loadingText.textContent = msg.text;
       if (msg.step === 'compiling') {
@@ -2727,6 +2738,8 @@ window.addEventListener('message', (event) => {
     }
 
     case 'home': {
+      isCreativeMode = false;
+      if (creativePalette) creativePalette.style.display = 'none';
       showView('initial');
       updateBadge('idle');
       btnInitialVisualize.disabled = false;
@@ -2736,6 +2749,8 @@ window.addEventListener('message', (event) => {
 
     case 'updateState': {
       if (homeRequested) break;
+      isCreativeMode = false;
+      if (creativePalette) creativePalette.style.display = 'none';
       showView('active');
       const { snapshot, canStepNext, canStepPrev, canRestart, isPaused, isRunning } = msg;
 
@@ -2837,6 +2852,7 @@ window.addEventListener('message', (event) => {
     }
 
     case 'creativeSyncState': {
+      if (!isCreativeMode) break;
       const snap: LinkedListSnapshot =
         currentSnapshot && !isGraphSnapshot(currentSnapshot)
           ? currentSnapshot
@@ -2851,14 +2867,17 @@ window.addEventListener('message', (event) => {
         break;
       }
 
-      snap.nodes = msg.nodes.map((pn) => ({
-        id: pn.varName,
-        data: pn.value,
-        variableName: pn.varName,
-        nextId: pn.nextVar || undefined,
-        isHead: pn.varName === 'head' || !msg.nodes.some((o) => o.nextVar === pn.varName),
-        isDetached: !pn.nextVar && !msg.nodes.some((o) => o.nextVar === pn.varName),
-      }));
+      snap.nodes = msg.nodes.map((pn) => {
+        const isHead = pn.varName === 'head' || (!msg.nodes.some((o) => o.nextVar === pn.varName) && pn.varName !== 'second');
+        return {
+          id: pn.varName,
+          data: pn.value,
+          variableName: pn.varName,
+          nextId: pn.nextVar || undefined,
+          isHead,
+          isDetached: !isHead && !pn.nextVar && !msg.nodes.some((o) => o.nextVar === pn.varName),
+        };
+      });
       const headNode = snap.nodes.find((n: ListNode) => n.isHead);
       if (headNode) {
         snap.hasHead = true;
@@ -2976,6 +2995,8 @@ function renderExampleCatalog(examples: import('../src/sidebar/exampleCatalog').
     button.append(title, file);
     button.onclick = () => {
       homeRequested = false;
+      isCreativeMode = false;
+      if (creativePalette) creativePalette.style.display = 'none';
       vscode.postMessage({ command: 'visualizeExample', example: example.fileName });
     };
     group.appendChild(button);
@@ -3015,7 +3036,7 @@ function openCreativeStudio() {
   updateBadge('idle');
 
   if (creativePalette) creativePalette.style.display = 'flex';
-  if (cardTitle) cardTitle.textContent = '🎨 Creative Studio';
+  if (cardTitle) cardTitle.textContent = 'Creative Studio';
   if (explanationText) {
     explanationText.textContent =
       'Creative Mode: Click "+ Node" or type in editor to create nodes. Tap NEXT block on any node, then tap another node to link them! Code updates in real time.';
@@ -3032,7 +3053,7 @@ function openCreativeStudio() {
     terminalText.style.display = 'block';
     if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
     terminalText.textContent =
-      '🎨 Creative Mode started with blank C++ file (creative.cpp).\n💡 Click "+ Node" or type in editor to create nodes, then click NEXT cell to link them!';
+      'Creative Mode started with blank C++ file (creative.cpp).\nClick "+ Node" or type in editor to create nodes, then click NEXT cell to link them!';
   }
 
   vscode.postMessage({ command: 'creativeStart' });
@@ -3080,7 +3101,7 @@ function addCreativeNode() {
   if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
   terminalText.textContent =
     prev +
-    `\n⚡ Added Node* ${varName} = new Node(${value}); in C++\n💡 Tap NEXT cell on any node, then tap another node to link them!`;
+    `\n[Added] Node* ${varName} = new Node(${value}); in C++\nTap NEXT cell on any node, then tap another node to link them!`;
   const vp = document.getElementById('terminalViewport');
   if (vp) vp.scrollTop = vp.scrollHeight;
 }
@@ -3097,7 +3118,7 @@ function setupCreativeEvents() {
       const prev = terminalText.textContent || '';
       terminalText.style.display = 'block';
       if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
-      terminalText.textContent = prev + `\n⚡ Created std::stack<int> s; in C++`;
+      terminalText.textContent = prev + `\n[Created] std::stack<int> s; in C++`;
       const vp = document.getElementById('terminalViewport');
       if (vp) vp.scrollTop = vp.scrollHeight;
     };
@@ -3108,7 +3129,7 @@ function setupCreativeEvents() {
       const prev = terminalText.textContent || '';
       terminalText.style.display = 'block';
       if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
-      terminalText.textContent = prev + `\n⚡ Created std::queue<int> q; in C++`;
+      terminalText.textContent = prev + `\n[Created] std::queue<int> q; in C++`;
       const vp = document.getElementById('terminalViewport');
       if (vp) vp.scrollTop = vp.scrollHeight;
     };
