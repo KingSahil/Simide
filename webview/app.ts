@@ -3055,9 +3055,6 @@ function stopSpeech() {
   if (btnSpeakText) btnSpeakText.classList.remove('speaking');
   if (btnSpeakTextLabel) btnSpeakTextLabel.textContent = 'Listen';
 }
-  if (btnSpeakText) btnSpeakText.classList.remove('speaking');
-  if (btnSpeakTextLabel) btnSpeakTextLabel.textContent = 'Listen';
-}
 
 if (btnSpeakText) {
   btnSpeakText.onclick = () => {

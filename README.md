@@ -46,7 +46,7 @@ Open a supported, compilable C++ file, open **SimIDE** from the Activity Bar, an
 - **Previous** reviews recorded snapshots; it does not reverse the running C++ process.
 - **Auto Play** steps through execution automatically with configurable playback speeds (1x, 1.5x, 2.5x).
 - **Restart** begins a new execution session.
-- **Step explanations & Audio TTS** connect supported allocations, mutations, traversals, and deletions with plain-English descriptions and live Web Speech voice narration.
+- **Step explanations & Audio TTS** connect supported allocations, mutations, traversals, and deletions with plain-English descriptions and live Web Speech voice narration (supported out-of-the-box on Windows & macOS; Linux voice support is currently in testing phase).
 - A program-output panel displays supported output alongside the diagram.
 - Draggable nodes, background panning, zoom, and layout reset help navigate larger structures.
 
@@ -228,6 +228,7 @@ Native integration tests require the local compiler and debugger toolchain. For 
 - The primary execution workflow targets standalone C++17 programs. Judge-only snippets need a compilable entry point and any required definitions.
 - Source discovery and Creative Mode synchronization recognize supported patterns; arbitrary C++ syntax and every container implementation are not covered.
 - **Previous** replays saved snapshots. It does not undo memory changes in the executing process.
+- **Voice Narration (TTS)** uses the host system's Web Speech engine with dynamic cross-platform voice fallbacks. Fully supported on Windows (Microsoft SAPI/OneCore) and macOS (AVSpeechSynthesizer); Linux voice support is currently in the testing phase and requires `speech-dispatcher` or `espeak-ng`.
 - Debugger behavior and available values depend on the installed toolchain and adapter. Compilation with `-O0` reduces optimization-related inspection problems.
 
 ### Troubleshooting
