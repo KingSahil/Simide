@@ -564,7 +564,6 @@ let startPanClientY = 0;
 let initialPanX = 0;
 let initialPanY = 0;
 let isSpacePressed = false;
-let isHandToolActive = false;
 let graphFitPending = false;
 
 function applyCameraTransform(smooth: boolean = false) {
@@ -698,7 +697,7 @@ function updateBadge(status: 'idle' | 'running' | 'paused' | 'error' | 'terminat
 function makeDraggable(el: HTMLElement, id: string, onTap?: (id: string, clickedEl?: HTMLElement) => void) {
   el.onpointerdown = (e: PointerEvent) => {
     // Left click only (Right click and middle click are for panning)
-    if (e.button !== 0 || isSpacePressed || isHandToolActive) return;
+    if (e.button !== 0 || isSpacePressed) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -1263,8 +1262,8 @@ function renderArrows() {
  */
 function makeArrayElementDraggable(cellEl: HTMLElement, isElevated: boolean) {
   cellEl.onpointerdown = (e: PointerEvent) => {
-    // Only left click (button 0) and not during spacebar or hand tool camera panning
-    if (e.button !== 0 || isSpacePressed || isHandToolActive) return;
+    // Only left click (button 0) and not during spacebar camera panning
+    if (e.button !== 0 || isSpacePressed) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -1744,7 +1743,7 @@ function renderStringDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Li
  */
 function makeStackElementDraggable(blockEl: HTMLElement, isTop: boolean) {
   blockEl.onpointerdown = (e: PointerEvent) => {
-    if (e.button !== 0 || isSpacePressed || isHandToolActive) return;
+    if (e.button !== 0 || isSpacePressed) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -2834,21 +2833,8 @@ if (btnClearTerminal) {
 }
 
 // ==========================================
-// Viewport Pan Navigation (Hand Pan Tool, Drag Background, Right-Click Drag, Middle-Click, Space+Drag)
+// Viewport Pan Navigation (Drag Background, Right-Click Drag, Middle-Click, Space+Drag)
 // ==========================================
-const btnHandPan = document.getElementById('btnHandPan') as HTMLButtonElement | null;
-if (btnHandPan) {
-  btnHandPan.onclick = () => {
-    isHandToolActive = !isHandToolActive;
-    btnHandPan.classList.toggle('active', isHandToolActive);
-    graphViewport.classList.toggle('can-pan', isHandToolActive);
-    if (canvasHint) {
-      canvasHint.textContent = isHandToolActive
-        ? 'Hand Tool Active: Drag anywhere on canvas to pan • Click ✋ Pan button again to exit'
-        : 'Drag nodes to move • Drag background or right-click to pan • Scroll to zoom';
-    }
-  };
-}
 
 // Stop context menu so right-click is reserved for panning
 graphViewport.addEventListener('contextmenu', (e) => {
@@ -2864,10 +2850,10 @@ function isInteractiveCanvasElement(target: EventTarget | null): boolean {
 
 graphViewport.addEventListener('pointerdown', (e: PointerEvent) => {
   const isRightOrMiddle = e.button === 2 || e.button === 1;
-  const isHandOrSpace = (isHandToolActive || isSpacePressed) && e.button === 0;
+  const isSpace = isSpacePressed && e.button === 0;
   const isBackgroundClick = e.button === 0 && !isInteractiveCanvasElement(e.target);
 
-  if (isRightOrMiddle || isHandOrSpace || isBackgroundClick) {
+  if (isRightOrMiddle || isSpace || isBackgroundClick) {
     e.preventDefault();
     e.stopPropagation();
 
@@ -2965,9 +2951,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
   if (e.code === 'Space') {
     isSpacePressed = false;
-    if (!isHandToolActive) {
-      graphViewport.classList.remove('can-pan');
-    }
+    graphViewport.classList.remove('can-pan');
   }
 });
 
