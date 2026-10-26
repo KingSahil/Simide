@@ -22,4 +22,5 @@ dist/**
 !dist/webview.js
 !dist/webview.css
 !dist/webview.html
+!dist/cli/**
 node_modules/**

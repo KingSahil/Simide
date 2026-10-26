@@ -1,0 +1,94 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://simide.dev/schemas/v1/tutorial.schema.json",
+  "title": "SimIDE Tutorial Manifest",
+  "description": "Defines the structure of a SimIDE community tutorial repository.",
+  "type": "object",
+  "required": ["name", "version", "title", "structureType", "lessons"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "description": "Unique identifier slug for this tutorial."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+",
+      "description": "Semantic version of the tutorial (e.g. 1.0.0)."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable course title."
+    },
+    "author": {
+      "type": "string",
+      "description": "Author or organization name."
+    },
+    "description": {
+      "type": "string",
+      "description": "Short summary of what this tutorial teaches."
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": ["beginner", "intermediate", "advanced"],
+      "default": "beginner"
+    },
+    "structureType": {
+      "type": "string",
+      "enum": ["linked_list", "tree", "array", "stack", "queue", "graph"],
+      "description": "The primary data structure demonstrated."
+    },
+    "compiler": {
+      "type": "object",
+      "properties": {
+        "standard": {
+          "type": "string",
+          "enum": ["c++17", "c++20", "c++14"],
+          "default": "c++17"
+        },
+        "flags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["-g", "-O0"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "lessons": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "path"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "description": "Unique identifier for this lesson."
+          },
+          "title": {
+            "type": "string",
+            "description": "Title of the lesson."
+          },
+          "description": {
+            "type": "string",
+            "description": "Short summary of the lesson's concept."
+          },
+          "path": {
+            "type": "string",
+            "description": "Relative path to the C++ source file."
+          },
+          "guide": {
+            "type": "string",
+            "description": "Optional relative path to Markdown explanation guide."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

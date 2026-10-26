@@ -18,6 +18,9 @@
     "Education"
   ],
   "main": "./dist/extension.js",
+  "bin": {
+    "simide": "./bin/simide.js"
+  },
   "activationEvents": [
     "onLanguage:cpp"
   ],
@@ -71,6 +74,12 @@
         "title": "SimIDE: Restart Session",
         "category": "SimIDE",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "debug-mentor.importTutorial",
+        "title": "SimIDE: Import Tutorial from GitHub",
+        "category": "SimIDE",
+        "icon": "$(cloud-download)"
       }
     ]
   },

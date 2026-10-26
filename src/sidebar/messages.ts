@@ -1,6 +1,7 @@
 import { LinkedListSnapshot } from '../visualization/linkedListModel';
 import { GraphSnapshot, isGraphSnapshot } from '../visualization/graphModel';
 import { ExampleEntry } from './exampleCatalog';
+import { TutorialManifest } from '../tutorial/tutorialModel';
 
 interface UpdateStateBase {
   command: 'updateState';
@@ -57,7 +58,10 @@ export type WebviewMessage =
   | { command: 'restart' }
   | { command: 'retry' }
   | { command: 'clearTerminal' }
-  | { command: 'requestState' };
+  | { command: 'requestState' }
+  | { command: 'importTutorial'; url?: string }
+  | { command: 'selectLesson'; lessonId: string }
+  | { command: 'closeTutorial' };
 
 export type ExtensionMessage =
   | { command: 'examples'; examples: ExampleEntry[] }
@@ -87,4 +91,19 @@ export type ExtensionMessage =
   | {
       command: 'sessionEnded';
       reason?: string;
+    }
+  | {
+      command: 'tutorialLoaded';
+      manifest: TutorialManifest;
+      activeLessonId: string;
+      guideMarkdown?: string;
+      warnings?: string[];
+    }
+  | {
+      command: 'lessonChanged';
+      lessonId: string;
+      guideMarkdown?: string;
+    }
+  | {
+      command: 'tutorialClosed';
     };

@@ -13,6 +13,7 @@ This documentation is written in clear, plain language to provide human develope
 | Document | Purpose | Audience |
 | :--- | :--- | :--- |
 | **[System Architecture](file:///c:/Projects/vscode-extension/docs/architecture.md)** | High-level system overview, 4 core subsystems, physics canvas, technology stack, and state machine (Linked Lists, Binary Trees, Arrays, Stacks, and Circular Queues). | All Developers & AI Agents |
+| **[Tutorial Authoring Guide (AI & Educators)](./tutorial-authoring-guide.md)** | Complete specification for creating community DSA tutorials on GitHub, schema reference, and validator CLI. | AI Agents & Educators |
 | **[Component Deep-Dive](file:///c:/Projects/vscode-extension/docs/components.md)** | File-by-file breakdown of every module across debug, visualization, sidebar, and webview layers. | Developers extending features |
 | **[Data Flow & Lifecycles](file:///c:/Projects/vscode-extension/docs/data-flow.md)** | Step-by-step traces with sequence diagrams for session launch, stepping, traversals, deletions, stacks, and circular queues. | Debugging & Protocol Engineers |
 | **[AI Agent Guide](file:///c:/Projects/vscode-extension/docs/agent-guide.md)** | Guidelines, conventions, testing recipes, and instructions for adding new data structures (Trees, Arrays, Stacks, Queues). | AI Agents & Automations |

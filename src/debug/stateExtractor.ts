@@ -40,6 +40,7 @@ export class StateExtractor {
   private static deletedAddresses = new Set<string>();
   private static cachedDataField: string | null = null;
   private static cachedNextField: string | null = null;
+  private static cachedPrevField: string | null = null;
   private static cachedLeftField: string | null = null;
   private static cachedRightField: string | null = null;
   private static cachedStructureType: StructureType | null = null;
@@ -77,6 +78,7 @@ export class StateExtractor {
     this.deletedAddresses.clear();
     this.cachedDataField = null;
     this.cachedNextField = null;
+    this.cachedPrevField = null;
     this.cachedLeftField = null;
     this.cachedRightField = null;
     this.cachedStructureType = null;
@@ -398,7 +400,10 @@ export class StateExtractor {
           ['right', 'rchild', 'right_node', 'rc', 'pright', 'r'].includes(p.toLowerCase())
         );
         const hasNext = ptrMatches.find((p) =>
-          ['next', 'next_node', 'link', 'ptr', 'pnext', 'nxt'].includes(p.toLowerCase())
+          ['next', 'next_node', 'link', 'ptr', 'pnext', 'nxt', 'nextnode'].includes(p.toLowerCase())
+        );
+        const hasPrev = ptrMatches.find((p) =>
+          ['prev', 'prev_node', 'previous', 'back', 'pprev', 'prv', 'prevnode'].includes(p.toLowerCase())
         );
 
         if (hasLeft || hasRight || isTreeNamed) {
@@ -859,19 +864,44 @@ export class StateExtractor {
     const candidates = ['data', 'val', 'value', 'item', 'key', 'element', 'info', 'payload', 'num', 'x', 'd'];
     for (const c of candidates) {
       const res = await evalExpr(`${ptrExpr}->${c}`);
-      if (
-        res !== null &&
-        !res.includes('has no member') &&
-        !res.includes('error') &&
-        !res.includes('Cannot access') &&
-        !res.includes('not defined') &&
-        !res.includes('No symbol')
-      ) {
-        this.cachedDataField = c;
-        return c;
+      if (res !== null) {
+        const lower = res.toLowerCase();
+        if (
+          !lower.includes('no member') &&
+          !lower.includes('error') &&
+          !lower.includes('cannot access') &&
+          !lower.includes('not defined') &&
+          !lower.includes('no symbol')
+        ) {
+          this.cachedDataField = c;
+          return c;
+        }
       }
     }
     return 'data';
+  }
+
+  private static async resolvePrevField(
+    evalExpr: (expr: string) => Promise<string | null>,
+    ptrExpr: string
+  ): Promise<string | null> {
+    const candidates = ['prev', 'prev_node', 'previous', 'back', 'pPrev', 'prv', 'pred', 'prevNode'];
+    for (const c of candidates) {
+      const res = await evalExpr(`${ptrExpr}->${c}`);
+      if (res !== null) {
+        const lower = res.toLowerCase();
+        if (
+          !lower.includes('no member') &&
+          !lower.includes('error') &&
+          !lower.includes('cannot access') &&
+          !lower.includes('not defined') &&
+          !lower.includes('no symbol')
+        ) {
+          return c;
+        }
+      }
+    }
+    return null;
   }
 
   private static async resolveNextField(
@@ -882,16 +912,18 @@ export class StateExtractor {
     const candidates = ['next', 'next_node', 'link', 'ptr', 'pNext', 'nxt', 'succ'];
     for (const c of candidates) {
       const res = await evalExpr(`${ptrExpr}->${c}`);
-      if (
-        res !== null &&
-        !res.includes('has no member') &&
-        !res.includes('error') &&
-        !res.includes('Cannot access') &&
-        !res.includes('not defined') &&
-        !res.includes('No symbol')
-      ) {
-        this.cachedNextField = c;
-        return c;
+      if (res !== null) {
+        const lower = res.toLowerCase();
+        if (
+          !lower.includes('no member') &&
+          !lower.includes('error') &&
+          !lower.includes('cannot access') &&
+          !lower.includes('not defined') &&
+          !lower.includes('no symbol')
+        ) {
+          this.cachedNextField = c;
+          return c;
+        }
       }
     }
     return 'next';
@@ -905,16 +937,18 @@ export class StateExtractor {
     const candidates = ['left', 'lchild', 'left_node', 'lc', 'pLeft', 'l'];
     for (const c of candidates) {
       const res = await evalExpr(`${ptrExpr}->${c}`);
-      if (
-        res !== null &&
-        !res.includes('has no member') &&
-        !res.includes('error') &&
-        !res.includes('Cannot access') &&
-        !res.includes('not defined') &&
-        !res.includes('No symbol')
-      ) {
-        this.cachedLeftField = c;
-        return c;
+      if (res !== null) {
+        const lower = res.toLowerCase();
+        if (
+          !lower.includes('no member') &&
+          !lower.includes('error') &&
+          !lower.includes('cannot access') &&
+          !lower.includes('not defined') &&
+          !lower.includes('no symbol')
+        ) {
+          this.cachedLeftField = c;
+          return c;
+        }
       }
     }
     return 'left';
@@ -928,16 +962,18 @@ export class StateExtractor {
     const candidates = ['right', 'rchild', 'right_node', 'rc', 'pRight', 'r'];
     for (const c of candidates) {
       const res = await evalExpr(`${ptrExpr}->${c}`);
-      if (
-        res !== null &&
-        !res.includes('has no member') &&
-        !res.includes('error') &&
-        !res.includes('Cannot access') &&
-        !res.includes('not defined') &&
-        !res.includes('No symbol')
-      ) {
-        this.cachedRightField = c;
-        return c;
+      if (res !== null) {
+        const lower = res.toLowerCase();
+        if (
+          !lower.includes('no member') &&
+          !lower.includes('error') &&
+          !lower.includes('cannot access') &&
+          !lower.includes('not defined') &&
+          !lower.includes('no symbol')
+        ) {
+          this.cachedRightField = c;
+          return c;
+        }
       }
     }
     return 'right';
@@ -2705,14 +2741,36 @@ export class StateExtractor {
 
           const dataField = await this.resolveDataField(evalHeapExpr, ptrCast);
           const nextField = await this.resolveNextField(evalHeapExpr, ptrCast);
+          const prevField = await this.resolvePrevField(evalHeapExpr, ptrCast);
 
           const dataStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${dataField}`), `${ptrCast}->${dataField}`);
           const nextValStr = requireNodeValue(await evalHeapExpr(`${ptrCast}->${nextField}`), `${ptrCast}->${nextField}`, true);
           const nextAddr = this.parsePointer(nextValStr);
 
+          let prevAddr: string | null = null;
+          if (prevField) {
+            try {
+              const prevValStr = await evalHeapExpr(`${ptrCast}->${prevField}`);
+              if (
+                prevValStr &&
+                !prevValStr.toLowerCase().includes('no member') &&
+                !prevValStr.toLowerCase().includes('error') &&
+                !prevValStr.toLowerCase().includes('cannot access')
+              ) {
+                prevAddr = this.parsePointer(prevValStr);
+              }
+            } catch {
+              // optional prev link, do not throw inspection error
+            }
+          }
+
           const nextId =
             nextAddr && !this.deletedAddresses.has(nextAddr)
               ? this.getStableId(nextAddr)
+              : null;
+          const prevId =
+            prevAddr && !this.deletedAddresses.has(prevAddr)
+              ? this.getStableId(prevAddr)
               : null;
 
           const isNodeHead = currAddr === headAddr;
@@ -2723,6 +2781,8 @@ export class StateExtractor {
             data: this.parseData(dataStr),
             nextId,
             nextAddress: nextAddr,
+            prevId,
+            prevAddress: prevAddr,
             isHead: isNodeHead,
             isDetached: !isHeadChain && !isNodeHead,
             variableName: isNodeHead ? 'head' : depth === 1 ? associatedVar : undefined,

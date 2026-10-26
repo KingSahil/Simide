@@ -99,6 +99,89 @@ if (btnClearTerminal) {
 const btnInitialVisualize = document.getElementById('btnInitialVisualize') as HTMLButtonElement;
 const btnVisualizeText = document.getElementById('btnVisualizeText') as HTMLElement | null;
 const targetFileName = document.getElementById('targetFileName') as HTMLElement | null;
+const btnExampleStack = document.getElementById('btnExampleStack') as HTMLButtonElement | null;
+const btnExampleArray = document.getElementById('btnExampleArray') as HTMLButtonElement | null;
+const btnExampleLinkedList = document.getElementById('btnExampleLinkedList') as HTMLButtonElement | null;
+const btnExampleTree = document.getElementById('btnExampleTree') as HTMLButtonElement | null;
+const btnImportTutorial = document.getElementById('btnImportTutorial') as HTMLButtonElement | null;
+const tutorialDrawer = document.getElementById('tutorialDrawer') as HTMLElement | null;
+const tutorialTitle = document.getElementById('tutorialTitle') as HTMLElement | null;
+const btnCloseTutorial = document.getElementById('btnCloseTutorial') as HTMLButtonElement | null;
+const lessonSelect = document.getElementById('lessonSelect') as HTMLSelectElement | null;
+const lessonGuideCard = document.getElementById('lessonGuideCard') as HTMLElement | null;
+const lessonGuideToggle = document.getElementById('lessonGuideToggle') as HTMLElement | null;
+const lessonGuideIcon = document.getElementById('lessonGuideIcon') as HTMLElement | null;
+const lessonGuideBody = document.getElementById('lessonGuideBody') as HTMLElement | null;
+
+function renderSimpleMarkdown(md: string): string {
+  if (!md) return '';
+  const lines = md.split('\n');
+  const htmlLines: string[] = [];
+  let inList = false;
+
+  for (let rawLine of lines) {
+    let line = rawLine
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    // Headers
+    if (line.startsWith('### ')) {
+      if (inList) { htmlLines.push('</ul>'); inList = false; }
+      htmlLines.push(`<h4 class="guide-h4">${line.slice(4)}</h4>`);
+      continue;
+    }
+    if (line.startsWith('## ')) {
+      if (inList) { htmlLines.push('</ul>'); inList = false; }
+      htmlLines.push(`<h3 class="guide-h3">${line.slice(3)}</h3>`);
+      continue;
+    }
+    if (line.startsWith('# ')) {
+      if (inList) { htmlLines.push('</ul>'); inList = false; }
+      htmlLines.push(`<h2 class="guide-h2">${line.slice(2)}</h2>`);
+      continue;
+    }
+
+    // List items
+    const listMatch = line.match(/^\s*[-*]\s+(.*)$/);
+    if (listMatch) {
+      if (!inList) {
+        htmlLines.push('<ul class="guide-list">');
+        inList = true;
+      }
+      let content = listMatch[1]
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(/`([^`]+)`/g, '<code class="guide-code">$1</code>');
+      htmlLines.push(`<li>${content}</li>`);
+      continue;
+    } else {
+      if (inList) {
+        htmlLines.push('</ul>');
+        inList = false;
+      }
+    }
+
+    // Empty lines
+    if (!line.trim()) {
+      htmlLines.push('<div class="guide-spacer"></div>');
+      continue;
+    }
+
+    // Inline formatting for paragraphs
+    let formatted = line
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code class="guide-code">$1</code>');
+    htmlLines.push(`<p class="guide-p">${formatted}</p>`);
+  }
+
+  if (inList) {
+    htmlLines.push('</ul>');
+  }
+
+  return htmlLines.join('\n');
+}
 
 const btnPrev = document.getElementById('btnPrev') as HTMLButtonElement;
 const btnNext = document.getElementById('btnNext') as HTMLButtonElement;
@@ -947,6 +1030,28 @@ function renderArrows() {
         end.ny,
         false,
         '#0066FF'
+      );
+    }
+
+    // Node's prev port coordinates (Doubly Linked List): left edge of the card
+    if (node.prevId && nodePositions.has(node.prevId)) {
+      const prevPortX = nodePos.x;
+      const prevPortY = nodePos.y + nodePos.height * 0.75;
+      const prevTargetPos = nodePositions.get(node.prevId)!;
+      const prevTargetCenter = { x: prevTargetPos.x + prevTargetPos.width / 2, y: prevTargetPos.y + prevTargetPos.height / 2 };
+      const prevEnd = getPerimeterIntersection(prevTargetPos, { x: prevPortX, y: prevPortY });
+
+      drawBezierArrow(
+        prevPortX,
+        prevPortY,
+        -1,
+        0.3,
+        prevEnd.x,
+        prevEnd.y,
+        prevEnd.nx,
+        prevEnd.ny,
+        false,
+        '#36C779'
       );
     } else if (nodePositions.has(`badge-null-${node.id}`)) {
       const nullPos = nodePositions.get(`badge-null-${node.id}`)!;
@@ -2087,6 +2192,7 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
 
     nodeEl.innerHTML = `
       <div class="graph-node-body">
+        ${node.prevId !== undefined ? `<div class="graph-node-prev-cell" style="padding: 4px 6px; font-size: 10px; border-right: 1px solid var(--border-color); color: #36c779;"><span class="cell-label" style="display:block; font-size: 8px; opacity: 0.7;">PREV</span>${node.prevId ? '◀' : 'null'}</div>` : ''}
         <div class="graph-node-data-cell">
           <span class="cell-label">DATA</span>
           <span class="cell-val">${node.data}</span>
@@ -2262,6 +2368,28 @@ btnInitialVisualize.onclick = () => {
   homeRequested = false;
   vscode.postMessage({ command: 'visualize' });
 };
+
+if (btnImportTutorial) {
+  btnImportTutorial.onclick = () => vscode.postMessage({ command: 'importTutorial' });
+}
+if (btnCloseTutorial) {
+  btnCloseTutorial.onclick = () => vscode.postMessage({ command: 'closeTutorial' });
+}
+if (lessonSelect) {
+  lessonSelect.onchange = () => {
+    const val = lessonSelect.value;
+    if (val) {
+      vscode.postMessage({ command: 'selectLesson', lessonId: val });
+    }
+  };
+}
+if (lessonGuideToggle && lessonGuideBody && lessonGuideIcon) {
+  lessonGuideToggle.onclick = () => {
+    const isHidden = lessonGuideBody.style.display === 'none';
+    lessonGuideBody.style.display = isHidden ? 'block' : 'none';
+    lessonGuideIcon.textContent = isHidden ? 'Hide ▲' : 'Show ▼';
+  };
+}
 
 btnPrev.onclick = () => vscode.postMessage({ command: 'prev' });
 btnNext.onclick = () => vscode.postMessage({ command: 'next' });
@@ -2469,6 +2597,72 @@ window.addEventListener('message', (event) => {
       btnNext.disabled = true;
       btnRestart.disabled = false;
       explanationText.textContent = msg.reason || 'Debugging session finished.';
+      break;
+    }
+
+    case 'tutorialLoaded': {
+      if (loadingView.style.display !== 'none') {
+        showView('initial');
+        updateBadge('idle');
+      }
+      if (tutorialDrawer && tutorialTitle && lessonSelect) {
+        tutorialDrawer.style.display = 'block';
+        tutorialTitle.textContent = msg.manifest.title;
+        lessonSelect.innerHTML = '';
+        msg.manifest.lessons.forEach((l) => {
+          const opt = document.createElement('option');
+          opt.value = l.id;
+          opt.textContent = l.title;
+          if (l.id === msg.activeLessonId) {
+            opt.selected = true;
+          }
+          lessonSelect.appendChild(opt);
+        });
+      }
+      const activeLesson = msg.manifest.lessons.find((l) => l.id === msg.activeLessonId);
+      if (activeLesson && btnVisualizeText) {
+        btnVisualizeText.textContent = `Visualize ${activeLesson.title}`;
+      }
+      if (lessonGuideCard && lessonGuideBody) {
+        if (msg.guideMarkdown) {
+          lessonGuideCard.style.display = 'block';
+          lessonGuideBody.innerHTML = renderSimpleMarkdown(msg.guideMarkdown);
+        } else {
+          lessonGuideCard.style.display = 'none';
+        }
+      }
+      break;
+    }
+
+    case 'lessonChanged': {
+      if (lessonSelect) {
+        lessonSelect.value = msg.lessonId;
+        const opt = lessonSelect.options[lessonSelect.selectedIndex];
+        if (opt && btnVisualizeText) {
+          btnVisualizeText.textContent = `Visualize ${opt.textContent}`;
+        }
+      }
+      if (lessonGuideCard && lessonGuideBody) {
+        if (msg.guideMarkdown) {
+          lessonGuideCard.style.display = 'block';
+          lessonGuideBody.innerHTML = renderSimpleMarkdown(msg.guideMarkdown);
+        } else {
+          lessonGuideCard.style.display = 'none';
+        }
+      }
+      break;
+    }
+
+    case 'tutorialClosed': {
+      if (tutorialDrawer) {
+        tutorialDrawer.style.display = 'none';
+      }
+      if (lessonGuideCard) {
+        lessonGuideCard.style.display = 'none';
+      }
+      if (btnVisualizeText && targetFileName) {
+        btnVisualizeText.textContent = `Visualize ${targetFileName.textContent || 'Active Code'}`;
+      }
       break;
     }
   }

@@ -19,6 +19,7 @@ import { SnapshotManager } from '../visualization/snapshotManager';
 import { isGraphSnapshot, VisualizationSnapshot } from '../visualization/graphModel';
 import { selectVisualizationMode } from './visualizationMode';
 import { listExamples } from './exampleCatalog';
+import { TutorialManager } from '../tutorial/tutorialManager';
 
 export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'debug-mentor.sidebar';
@@ -339,6 +340,107 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  public async handleImportTutorial(inputUrl?: string): Promise<void> {
+    let url = inputUrl;
+    if (!url) {
+      url = await vscode.window.showInputBox({
+        prompt: 'Enter GitHub repository (e.g. "owner/repo" or "https://github.com/owner/repo")',
+        placeHolder: 'owner/repo',
+      });
+    }
+    if (!url) return;
+
+    this.postMessage({
+      command: 'status',
+      text: 'Downloading tutorial from GitHub...',
+      step: 'waiting',
+    });
+
+    const storagePath = this.exampleStorageUri.fsPath;
+    const result = await TutorialManager.importFromGitHub(url, storagePath);
+
+    if (!result.success || !result.tutorial) {
+      await vscode.window.showErrorMessage(result.error || 'Failed to import tutorial.');
+      this.postMessage({
+        command: 'error',
+        message: 'Import Failed',
+        details: result.error,
+        canRetry: true,
+      });
+      return;
+    }
+
+    const { tutorial, securityAudit } = result;
+
+    if (securityAudit && !securityAudit.isSafe) {
+      const choice = await vscode.window.showWarningMessage(
+        `Security Notice: This tutorial from "${tutorial.manifest.author || url}" contains sensitive headers or syscalls:\n` +
+          securityAudit.warnings.join(', ') +
+          '\n\nDo you want to proceed and allow compilation?',
+        { modal: true },
+        'Proceed',
+        'Cancel'
+      );
+      if (choice !== 'Proceed') {
+        TutorialManager.setActiveTutorial(null);
+        this.sendTargetFileUpdate();
+        return;
+      }
+    }
+
+    const firstLesson = tutorial.manifest.lessons[0];
+    const selection = TutorialManager.selectLesson(firstLesson.id);
+
+    if (selection) {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(selection.codePath));
+      await vscode.window.showTextDocument(doc, { preview: false });
+      CppCompiler.setLastActiveSourceFile(selection.codePath);
+      this.sendTargetFileUpdate();
+
+      this.postMessage({
+        command: 'tutorialLoaded',
+        manifest: tutorial.manifest,
+        activeLessonId: firstLesson.id,
+        guideMarkdown: selection.guideMarkdown,
+        warnings: securityAudit?.warnings,
+      });
+
+      // Auto-start visualization for seamless tutorial onboarding
+      await this.startVisualization(selection.codePath);
+    }
+  }
+
+  public async handleSelectLesson(lessonId: string): Promise<void> {
+    const selection = TutorialManager.selectLesson(lessonId);
+    if (!selection) return;
+
+    try {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(selection.codePath));
+      await vscode.window.showTextDocument(doc, { preview: false });
+      CppCompiler.setLastActiveSourceFile(selection.codePath);
+      this.sendTargetFileUpdate();
+
+      this.postMessage({
+        command: 'lessonChanged',
+        lessonId,
+        guideMarkdown: selection.guideMarkdown,
+      });
+
+      // Automatically launch visualization for the newly selected lesson
+      await this.startVisualization(selection.codePath);
+    } catch (err: any) {
+      await vscode.window.showErrorMessage(`Could not open lesson: ${err.message}`);
+    }
+  }
+
+  public async handleCloseTutorial(): Promise<void> {
+    TutorialManager.setActiveTutorial(null);
+    this.postMessage({
+      command: 'tutorialClosed',
+    });
+    this.sendTargetFileUpdate();
+  }
+
   private async handleMessage(message: WebviewMessage): Promise<void> {
     switch (message.command) {
       case 'getExamples': {
@@ -417,6 +519,18 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         if (curr) {
           this.broadcastState(curr);
         }
+        break;
+
+      case 'importTutorial':
+        await this.handleImportTutorial(message.url);
+        break;
+
+      case 'selectLesson':
+        await this.handleSelectLesson(message.lessonId);
+        break;
+
+      case 'closeTutorial':
+        await this.handleCloseTutorial();
         break;
     }
   }

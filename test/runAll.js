@@ -4,7 +4,7 @@ const { spawnSync } = require('child_process');
 
 console.log('Building test bundle...');
 esbuild.buildSync({
-  entryPoints: ['test/runTests.ts', 'test/gdbExecution.test.ts', 'test/startup.test.ts', 'test/examples.test.ts', 'test/graphModel.test.ts', 'test/graphStateExtractor.test.ts', 'test/graphRenderer.test.ts', 'test/graphIntegration.test.ts', 'test/debugOutput.test.ts', 'test/stateExtraction.test.ts', 'test/arrayIndices.test.ts', 'test/oopExtraction.test.ts', 'test/gfgExtraction.test.ts'],
+  entryPoints: ['test/runTests.ts', 'test/gdbExecution.test.ts', 'test/startup.test.ts', 'test/examples.test.ts', 'test/graphModel.test.ts', 'test/graphStateExtractor.test.ts', 'test/graphRenderer.test.ts', 'test/graphIntegration.test.ts', 'test/debugOutput.test.ts', 'test/stateExtraction.test.ts', 'test/arrayIndices.test.ts', 'test/oopExtraction.test.ts', 'test/gfgExtraction.test.ts', 'test/tutorialIngestion.test.ts', 'test/masterclassLessons.test.ts'],
   bundle: true,
   platform: 'node',
   outdir: 'dist',
@@ -38,6 +38,18 @@ console.log('Running test/gdbExecution.test.ts...');
 const res2 = spawnSync('node', ['dist/gdbExecution.test.js'], { stdio: 'inherit' });
 if (res2.status !== 0) {
   process.exit(res2.status || 1);
+}
+
+console.log('Running test/tutorialIngestion.test.ts...');
+const res3 = spawnSync('node', ['dist/tutorialIngestion.test.js'], { stdio: 'inherit' });
+if (res3.status !== 0) {
+  process.exit(res3.status || 1);
+}
+
+console.log('Running test/masterclassLessons.test.ts...');
+const res4 = spawnSync('node', ['dist/masterclassLessons.test.js'], { stdio: 'inherit' });
+if (res4.status !== 0) {
+  process.exit(res4.status || 1);
 }
 
 console.log('All tests completed successfully!');

@@ -40,6 +40,21 @@
       </div>
     </header>
 
+    <!-- Tutorial Curriculum Drawer (Global when tutorial loaded) -->
+    <div id="tutorialDrawer" class="tutorial-drawer" style="display: none;">
+      <div class="tutorial-header">
+        <div class="tutorial-meta">
+          <span class="tutorial-badge">TUTORIAL</span>
+          <span id="tutorialTitle" class="tutorial-title">Tutorial</span>
+        </div>
+        <button id="btnCloseTutorial" class="btn-text-action" title="Exit tutorial">✕ Exit</button>
+      </div>
+      <div class="tutorial-lessons-bar">
+        <label for="lessonSelect" class="lesson-label">Lesson:</label>
+        <select id="lessonSelect" class="lesson-dropdown"></select>
+      </div>
+    </div>
+
     <!-- Screen 1: Initial View -->
     <div id="initialView" class="initial-view">
       <svg class="initial-hero-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -66,6 +81,18 @@
       <section class="quick-examples-section" aria-label="C++ examples">
         <div class="quick-examples-title">Explore Examples</div>
         <div id="exampleCatalog" class="example-catalog" aria-live="polite">Loading examples…</div>
+      </section>
+
+      <section class="tutorial-import-section" aria-label="Community Tutorials">
+        <div class="quick-examples-title">Community Tutorials</div>
+        <button id="btnImportTutorial" class="btn btn-secondary btn-full" title="Import tutorial from GitHub">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          Import from GitHub...
+        </button>
       </section>
     </div>
 
@@ -110,6 +137,21 @@
             <div id="nodesLayer" class="nodes-layer"></div>
           </div>
         </div>
+      </div>
+
+      <!-- Lesson Guide & Checkpoints Card -->
+      <div id="lessonGuideCard" class="card lesson-guide-card" style="display: none;">
+        <div class="card-title-row" id="lessonGuideToggle" style="cursor: pointer;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0066FF" stroke-width="2">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+            </svg>
+            <span class="card-title" style="color: var(--primary-text); font-size: 11px;">Lesson Guide & Checkpoints</span>
+          </div>
+          <span id="lessonGuideIcon" class="btn-text-action">Hide ▲</span>
+        </div>
+        <div id="lessonGuideBody" class="lesson-guide-body"></div>
       </div>
 
       <!-- Explanation Card -->

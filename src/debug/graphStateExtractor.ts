@@ -238,7 +238,9 @@ export function discoverGraphLayout(source: string): GraphLayout | null {
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .replace(/\/\/.*$/gm, ' ');
   const graphBody = getTypeBody(sourceWithoutComments, 'Graph');
-  if (!graphBody) return null;
+  if (!graphBody) {
+    return null;
+  }
 
   const vertexHeadType = getMemberType(graphBody, 'vertexHead');
   const edgeHeadType = getMemberType(graphBody, 'edgeHead');

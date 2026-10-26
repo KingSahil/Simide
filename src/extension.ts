@@ -128,9 +128,19 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('debug-mentor.importTutorial', async () => {
+      await vscode.commands.executeCommand('debug-mentor.sidebar.focus');
+      await provider.handleImportTutorial();
+    })
+  );
+
   console.log('[DebugMentor] VS Code Debug Mentor successfully activated.');
 }
 
 export function deactivate() {
   DebugSessionManager.stopDebugging();
 }
+
+export { TutorialManager } from './tutorial/tutorialManager';
+export { TutorialValidator } from './cli/validator';
