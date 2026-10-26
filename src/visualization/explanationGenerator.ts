@@ -6,6 +6,8 @@ import {
   PointerVariable,
   QueueModel,
   StackModel,
+  StringVariable,
+  StringWindow,
   StructureType,
 } from './linkedListModel';
 
@@ -24,7 +26,9 @@ export class ExplanationGenerator {
     arrays: ArrayVariable[] = [],
     indexPointers: IndexPointer[] = [],
     stack?: StackModel,
-    queue?: QueueModel
+    queue?: QueueModel,
+    strings: StringVariable[] = [],
+    stringWindows: StringWindow[] = []
   ): { explanation: string; changeType: LinkedListSnapshot['changeType'] } {
     if (structureType === 'stack') {
       if (!hasHead || !stack) {
@@ -350,6 +354,200 @@ export class ExplanationGenerator {
 
       return {
         explanation: `Array '${mainArr.name}' state: ${defaultPreview}.`,
+        changeType: 'step',
+      };
+    }
+
+    if (structureType === 'string') {
+      if (!hasHead || strings.length === 0) {
+        return {
+          explanation: 'Program paused at main(). Click Next to allocate and initialize string.',
+          changeType: 'init',
+        };
+      }
+
+      if (printedInStep) {
+        const cleanPrint = printedInStep.replace(/\n$/, '');
+        const totalClean = (accumulatedOutput || '').trim();
+        const summaryText = totalClean.length > 0 ? ` Program output: ${totalClean}` : '';
+        return {
+          explanation: `Printed to terminal: "${cleanPrint}".${summaryText}`,
+          changeType: 'print',
+        };
+      }
+
+      const mainStr = strings[0];
+      const prevStr = previousSnapshot?.strings?.find(
+        (s) => s.name === mainStr.name
+      );
+
+      const getStrDisplay = (str: StringVariable) => {
+        return str.elements.filter((e) => !e.isNullTerminator).map((e) => e.char).join('');
+      };
+
+      // Case 1: Initial string creation
+      if (!prevStr || !previousSnapshot || !previousSnapshot.strings || previousSnapshot.strings.length === 0) {
+        const text = getStrDisplay(mainStr);
+        if (mainStr.type === 'std_string') {
+          return {
+            explanation: `Initialized string '${mainStr.name}' with "${text}" (length: ${mainStr.length}).`,
+            changeType: 'string_initialized',
+          };
+        } else {
+          const cap = mainStr.capacity || mainStr.length + 1;
+          return {
+            explanation: `Allocated character array '${mainStr.name}' of capacity ${cap}, containing "${text}" followed by null terminator '\\0'.`,
+            changeType: 'string_initialized',
+          };
+        }
+      }
+
+      // Check all strings for character updates / swaps / concats
+      for (const str of strings) {
+        const pStr = previousSnapshot?.strings?.find((s) => s.name === str.name);
+        if (!pStr) continue;
+
+        // Check for character modifications
+        const changedIndices: number[] = [];
+        const compareLen = Math.min(str.elements.length, pStr.elements.length);
+        for (let idx = 0; idx < compareLen; idx++) {
+          if (str.elements[idx].char !== pStr.elements[idx].char) {
+            changedIndices.push(idx);
+          }
+        }
+
+        // Case 2: Swapping 2 characters
+        if (changedIndices.length === 2) {
+          const [i, j] = changedIndices;
+          if (
+            pStr.elements[i].char === str.elements[j].char &&
+            pStr.elements[j].char === str.elements[i].char
+          ) {
+            return {
+              explanation: `Swapped characters ${str.name}[${i}] ('${str.elements[i].char}') and ${str.name}[${j}] ('${str.elements[j].char}') during in-place string reversal.`,
+              changeType: 'string_char_swapped',
+            };
+          }
+        }
+
+        // Case 3: Single character mutation
+        if (changedIndices.length === 1) {
+          const idx = changedIndices[0];
+          const oldChar = pStr.elements[idx].char;
+          const newChar = str.elements[idx].char;
+          return {
+            explanation: `Assigned '${newChar}' to ${str.name}[${idx}] (data updated: '${oldChar}' → '${newChar}').`,
+            changeType: 'string_char_updated',
+          };
+        }
+
+        // Case 4: Concatenation / string length change
+        if (str.length > pStr.length) {
+          return {
+            explanation: `String '${str.name}' concatenated/expanded from length ${pStr.length} to ${str.length}: "${getStrDisplay(str)}".`,
+            changeType: 'string_concatenated',
+          };
+        }
+      }
+
+      // Case 5: Sliding window resize / movement
+      if (stringWindows.length > 0) {
+        const currWin = stringWindows[0];
+        const prevWin = previousSnapshot?.stringWindows?.[0];
+        if (!prevWin || prevWin.startIndex !== currWin.startIndex || prevWin.endIndex !== currWin.endIndex) {
+          const targetStr = strings.find((s) => s.name === currWin.stringName) || mainStr;
+          const sub = targetStr.elements
+            .slice(currWin.startIndex, currWin.endIndex + 1)
+            .filter((e) => !e.isNullTerminator)
+            .map((e) => e.char)
+            .join('');
+
+          if (prevWin && currWin.startIndex > prevWin.startIndex) {
+            return {
+              explanation: `Duplicate character encountered! Shrinking window start from index ${prevWin.startIndex} to ${currWin.startIndex}: substring is "${sub}".`,
+              changeType: 'string_window_resized',
+            };
+          } else {
+            const addedChar = targetStr.elements[currWin.endIndex]?.char ?? '';
+            return {
+              explanation: `Window [start=${currWin.startIndex}..end=${currWin.endIndex}] expanded to include character '${addedChar}': substring is "${sub}".`,
+              changeType: 'string_window_resized',
+            };
+          }
+        }
+      }
+
+      // Case 6: Null terminator encountered by an index pointer
+      for (const currPtr of indexPointers) {
+        const targetStr = strings.find((s) => s.name === currPtr.targetArrayName) || mainStr;
+        const elem = targetStr.elements[currPtr.targetIndex];
+        if (elem?.isNullTerminator) {
+          const prevPtr = previousSnapshot?.indexPointers?.find((p) => p.name === currPtr.name);
+          if (!prevPtr || prevPtr.targetIndex !== currPtr.targetIndex) {
+            return {
+              explanation: `Encountered null terminator '\\0' at index ${currPtr.targetIndex}. String traversal loop terminates.`,
+              changeType: 'string_pointer_moved',
+            };
+          }
+        }
+      }
+
+      // Case 7: Two-pointer movements
+      if (previousSnapshot?.indexPointers && indexPointers.length >= 2) {
+        const leftPtr = indexPointers.find((p) => ['left', 'i', 'start'].includes(p.name.toLowerCase()));
+        const rightPtr = indexPointers.find((p) => ['right', 'j', 'end'].includes(p.name.toLowerCase()));
+        const prevLeft = previousSnapshot.indexPointers.find((p) => p.name === leftPtr?.name);
+        const prevRight = previousSnapshot.indexPointers.find((p) => p.name === rightPtr?.name);
+
+        if (
+          leftPtr &&
+          rightPtr &&
+          prevLeft &&
+          prevRight &&
+          (prevLeft.targetIndex !== leftPtr.targetIndex || prevRight.targetIndex !== rightPtr.targetIndex)
+        ) {
+          const cLeft = mainStr.elements[leftPtr.targetIndex]?.char ?? '';
+          const cRight = mainStr.elements[rightPtr.targetIndex]?.char ?? '';
+          return {
+            explanation: `Pointer '${leftPtr.name}' advanced to index ${leftPtr.targetIndex} ('${cLeft}'); pointer '${rightPtr.name}' moved inward to index ${rightPtr.targetIndex} ('${cRight}').`,
+            changeType: 'string_pointer_moved',
+          };
+        }
+      }
+
+      // Case 8: Single index pointer movement
+      if (previousSnapshot?.indexPointers) {
+        for (const currPtr of indexPointers) {
+          const prevPtr = previousSnapshot.indexPointers.find((p) => p.name === currPtr.name);
+          if (prevPtr && prevPtr.targetIndex !== currPtr.targetIndex) {
+            const targetStr = strings.find((s) => s.name === currPtr.targetArrayName) || mainStr;
+            const elemChar = targetStr.elements[currPtr.targetIndex]?.char;
+            const charInfo = elemChar !== undefined ? ` ('${elemChar}')` : '';
+            return {
+              explanation: `Index pointer '${currPtr.name}' moved to index ${currPtr.targetIndex}${charInfo}.`,
+              changeType: 'string_pointer_moved',
+            };
+          }
+        }
+      }
+
+      // Case 9: Two pointers comparing characters
+      if (indexPointers.length >= 2) {
+        const p1 = indexPointers[0];
+        const p2 = indexPointers[1];
+        const c1 = mainStr.elements[p1.targetIndex]?.char;
+        const c2 = mainStr.elements[p2.targetIndex]?.char;
+        if (c1 !== undefined && c2 !== undefined && c1 === c2 && p1.targetIndex <= p2.targetIndex) {
+          return {
+            explanation: `Pointers '${p1.name}' (index ${p1.targetIndex}, '${c1}') and '${p2.name}' (index ${p2.targetIndex}, '${c2}') comparing matching characters.`,
+            changeType: 'step',
+          };
+        }
+      }
+
+      const defaultText = getStrDisplay(mainStr);
+      return {
+        explanation: `String '${mainStr.name}': "${defaultText}" (length: ${mainStr.length}).`,
         changeType: 'step',
       };
     }

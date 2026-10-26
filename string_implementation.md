@@ -237,8 +237,8 @@ Ensure 100% test pass rate with both unit tests (mock DAP) and real GDB stepping
 
 - [x] Phase 1: Data Model & Type System Foundation (`StructureType`, `StringVariable`, `StringElement`, `StringWindow`, `ChangeType`).
 - [x] Phase 2: Static Source Analysis & Pattern Detection (`discoverStringDeclarations`).
-- [ ] Phase 3: High-Performance DAP Runtime Extraction Engine (`extractStrings`).
-- [ ] Phase 4: Pedagogical Explanation Engine (`generateStringExplanation`).
+- [x] Phase 3: High-Performance DAP Runtime Extraction Engine (`extractStrings`).
+- [x] Phase 4: Pedagogical Explanation Engine (`generateStringExplanation`).
 - [ ] Phase 5: Webview UI & Canvas Visualization (`renderStringDiagram`).
 - [ ] Phase 6: Test Suite & Example Fixtures (`examples/string-*.cpp`, `test/stringExtraction.test.ts`).
 
@@ -254,11 +254,11 @@ Ensure 100% test pass rate with both unit tests (mock DAP) and real GDB stepping
 | `1.4` | Extend `LinkedListSnapshot` with `strings` & `stringWindows` | Completed |
 | `2.1` | Implement `discoverStringDeclarations` in `SourceAnalysisCache` | Completed |
 | `2.2` | Implement string algorithm pattern heuristics (two-pointer, sliding window) | Completed |
-| `3.1` | Implement single-roundtrip string value fetching (`evalExpr(varName)`) | Pending |
-| `3.2` | Implement C-style character buffer extraction with `\0` detection | Pending |
-| `3.3` | Map active index pointers (`i`, `j`, `left`, `right`) to string elements | Pending |
-| `3.4` | Implement character mutation & in-place swap detection | Pending |
-| `4.1` | Generate pedagogical explanations for string lifecycle and operations | Pending |
+| `3.1` | Implement single-roundtrip string value fetching (`evalExpr(varName)`) | Completed |
+| `3.2` | Implement C-style character buffer extraction with `\0` detection | Completed |
+| `3.3` | Map active index pointers (`i`, `j`, `left`, `right`) to string elements | Completed |
+| `3.4` | Implement character mutation & in-place swap detection | Completed |
+| `4.1` | Generate pedagogical explanations for string lifecycle and operations | Completed |
 | `5.1` | Create `renderStringDiagram` component in `webview/app.ts` | Pending |
 | `5.2` | Implement character tiles, ASCII sub-labels, and `\0` null cell styling | Pending |
 | `5.3` | Implement sliding window highlight bracket and two-pointer badges | Pending |

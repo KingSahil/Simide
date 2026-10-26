@@ -14,6 +14,9 @@ import {
   StackElement,
   StackModel,
   StringDeclaration,
+  StringElement,
+  StringVariable,
+  StringWindow,
   StructureType,
 } from '../visualization/linkedListModel';
 import { GraphSnapshot } from '../visualization/graphModel';
@@ -1615,6 +1618,380 @@ export class StateExtractor {
     return { arrays: discoveredArrays, indexPointers };
   }
 
+  public static async extractStrings(
+    session: vscode.DebugSession,
+    frameId: number,
+    localVars: Record<
+      string,
+      { value: string; type?: string; variablesReference: number; isArgument: boolean }
+    >,
+    evalExpr: (expr: string, targetFrameId?: number) => Promise<string | null>,
+    rawLine: number,
+    varDecls: Map<string, number[]>,
+    funcRange: { name: string; startLine: number; endLine: number } | null,
+    resolvedFile?: string,
+    previousSnapshot?: LinkedListSnapshot
+  ): Promise<{
+    strings: StringVariable[];
+    indexPointers: IndexPointer[];
+    stringWindows: StringWindow[];
+  }> {
+    const discoveredStrings: StringVariable[] = [];
+    const indexPointers: IndexPointer[] = [];
+    const stringWindows: StringWindow[] = [];
+
+    const stringDeclList = this.discoverStringDeclarations(resolvedFile);
+    const stringDeclMap = new Map<string, StringDeclaration>();
+    for (const sd of stringDeclList) {
+      stringDeclMap.set(sd.name, sd);
+    }
+
+    // 1. Traverse candidate string variables in localVars or stringDeclList
+    const candidateNames = new Set<string>();
+    for (const sd of stringDeclList) {
+      candidateNames.add(sd.name);
+    }
+    for (const [varName, varInfo] of Object.entries(localVars)) {
+      if (
+        varName.startsWith('__') ||
+        varName === 'this' ||
+        varName === 'argc' ||
+        varName === 'argv' ||
+        varName === 'envp'
+      ) {
+        continue;
+      }
+      const typeStr = (varInfo.type || '').toLowerCase();
+      if (typeStr.includes('string') || typeStr.includes('char')) {
+        candidateNames.add(varName);
+      }
+    }
+
+    for (const varName of candidateNames) {
+      if (
+        varName.startsWith('__') ||
+        varName === 'this' ||
+        varName === 'argc' ||
+        varName === 'argv' ||
+        varName === 'envp'
+      ) {
+        continue;
+      }
+
+      const decl = stringDeclMap.get(varName);
+      const varInfo = localVars[varName];
+
+      // If not present in current frame's local variables, check if accessible in scope
+      if (!varInfo) {
+        const accessible = await evalExpr(varName);
+        if (!accessible) {
+          continue;
+        }
+      }
+
+      // Check declaration line bounds
+      if (!varInfo?.isArgument) {
+        if (decl && rawLine <= decl.line) {
+          continue;
+        }
+        if (varDecls.has(varName) && !this.isVariableInitialized(varName, rawLine, varDecls, funcRange)) {
+          continue;
+        }
+      }
+
+      // Determine string type
+      let stringType: 'std_string' | 'char_array' | 'char_pointer' = 'std_string';
+      if (decl) {
+        stringType = decl.type;
+      } else if (varInfo?.type) {
+        const t = varInfo.type.toLowerCase();
+        if (t.includes('[') && t.includes('char')) {
+          stringType = 'char_array';
+        } else if (t.includes('char*') || t.includes('char *')) {
+          stringType = 'char_pointer';
+        } else {
+          stringType = 'std_string';
+        }
+      }
+
+      // Single-roundtrip extraction: try value inspector first
+      let rawVal = varInfo?.value || '';
+      let parsedString: string | null = null;
+
+      // Extract quoted substring from value
+      const quoteMatch = rawVal.match(/"((?:\\.|[^"\\])*)"/);
+      if (quoteMatch) {
+        parsedString = quoteMatch[1];
+      }
+
+      // If not found or if value is a struct representation (e.g. {static npos = ...})
+      if (parsedString === null) {
+        const evalVal = await evalExpr(varName);
+        if (evalVal) {
+          const evalMatch = evalVal.match(/"((?:\\.|[^"\\])*)"/);
+          if (evalMatch) {
+            parsedString = evalMatch[1];
+          }
+        }
+      }
+
+      // If std_string and still null, fallback to s.c_str()
+      if (parsedString === null && stringType === 'std_string') {
+        const cstrVal = await evalExpr(`${varName}.c_str()`);
+        if (cstrVal) {
+          const cstrMatch = cstrVal.match(/"((?:\\.|[^"\\])*)"/);
+          if (cstrMatch) {
+            parsedString = cstrMatch[1];
+          }
+        }
+      }
+
+      // If char_array and still null, evalExpr((char*)varName)
+      if (parsedString === null && stringType === 'char_array') {
+        const castVal = await evalExpr(`(char*)${varName}`);
+        if (castVal) {
+          const castMatch = castVal.match(/"((?:\\.|[^"\\])*)"/);
+          if (castMatch) {
+            parsedString = castMatch[1];
+          }
+        }
+      }
+
+      // Fallback to initial value from static source if available
+      if (parsedString === null && decl?.initialValue !== undefined) {
+        parsedString = decl.initialValue;
+      }
+
+      if (parsedString === null) {
+        parsedString = '';
+      }
+
+      // Clean unescaped string
+      const cleanStr = parsedString
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t')
+        .replace(/\\r/g, '\r')
+        .replace(/\\\\/g, '\\')
+        .replace(/\\"/g, '"')
+        .replace(/\\0/g, '\0');
+
+      const length = cleanStr.length;
+      let capacity: number | undefined = undefined;
+
+      if (stringType === 'std_string') {
+        const capEval = await evalExpr(`${varName}.capacity()`);
+        if (capEval) {
+          const parsedCap = parseInt(capEval.match(/\d+/)?.[0] || '0', 10);
+          if (parsedCap >= length && parsedCap <= 256) {
+            capacity = parsedCap;
+          }
+        }
+        if (!capacity) {
+          capacity = Math.max(15, length);
+        }
+      } else {
+        capacity = decl?.size || length + 1;
+      }
+
+      // Memory address of the string buffer
+      let address: string | undefined;
+      const addrEval =
+        stringType === 'std_string'
+          ? await evalExpr(`${varName}.c_str()`)
+          : await evalExpr(`&${varName}`);
+      if (addrEval) {
+        address = this.parsePointer(addrEval) || undefined;
+      }
+
+      // Build character elements
+      const elements: StringElement[] = [];
+      const prevString = previousSnapshot?.strings?.find((s) => s.name === varName);
+
+      for (let idx = 0; idx < length; idx++) {
+        const ch = cleanStr[idx];
+        const ascii = ch.charCodeAt(0);
+        const prevElem = prevString?.elements[idx];
+        const isModified = prevElem !== undefined && prevElem.char !== ch;
+
+        elements.push({
+          index: idx,
+          char: ch,
+          ascii,
+          isModified,
+          isNullTerminator: false,
+        });
+      }
+
+      const hasNullTerminator = stringType !== 'std_string';
+      if (hasNullTerminator) {
+        elements.push({
+          index: length,
+          char: '\\0',
+          ascii: 0,
+          isModified: false,
+          isNullTerminator: true,
+        });
+      }
+
+      // Check for in-place swaps between previous snapshot and current elements
+      if (prevString) {
+        const changedIndices: number[] = [];
+        const checkLen = Math.min(elements.length, prevString.elements.length);
+        for (let i = 0; i < checkLen; i++) {
+          if (elements[i].char !== prevString.elements[i].char) {
+            changedIndices.push(i);
+          }
+        }
+        if (changedIndices.length === 2) {
+          const [i, j] = changedIndices;
+          if (
+            elements[i].char === prevString.elements[j].char &&
+            elements[j].char === prevString.elements[i].char
+          ) {
+            elements[i].isModified = true;
+            elements[j].isModified = true;
+          }
+        }
+      }
+
+      discoveredStrings.push({
+        name: varName,
+        type: stringType,
+        length,
+        capacity,
+        elements,
+        address,
+        hasNullTerminator,
+      });
+    }
+
+    if (discoveredStrings.length === 0) {
+      return { strings: [], indexPointers: [], stringWindows: [] };
+    }
+
+    const mainStr = discoveredStrings[0];
+
+    // 2. Map active index pointers (i, j, left, right, start, end, idx, windowStart, windowEnd)
+    let sourceHints = '';
+    try {
+      if (resolvedFile) {
+        sourceHints = fs.readFileSync(resolvedFile, 'utf8').replace(
+          /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g,
+          (text) => text.replace(/[^\n]/g, ' ')
+        );
+      }
+    } catch {
+      // ignore
+    }
+
+    const commonPtrNames = [
+      'left',
+      'right',
+      'i',
+      'j',
+      'start',
+      'end',
+      'k',
+      'idx',
+      'windowstart',
+      'windowend',
+      'low',
+      'high',
+    ];
+    for (const [vName, vInfo] of Object.entries(localVars)) {
+      if (
+        vName.startsWith('__') ||
+        vName === 'this' ||
+        vName === 'argc' ||
+        vName === 'argv' ||
+        discoveredStrings.some((s) => s.name === vName)
+      ) {
+        continue;
+      }
+
+      const isMatchingName = commonPtrNames.includes(vName.toLowerCase());
+      const hasSubscript =
+        sourceHints.length > 0 && new RegExp(`\\[\\s*${vName}\\s*\\]`).test(sourceHints);
+
+      if (!isMatchingName && !hasSubscript) {
+        continue;
+      }
+
+      // Check declaration line
+      const declLines = varDecls.get(vName);
+      if (!vInfo.isArgument && declLines && !declLines.some((l) => l < rawLine)) {
+        continue;
+      }
+
+      const matchNum = vInfo.value.match(/^[+-]?\d+/);
+      if (!matchNum) continue;
+      const indexVal = parseInt(matchNum[0], 10);
+      if (isNaN(indexVal) || indexVal < 0 || indexVal >= mainStr.elements.length) {
+        continue;
+      }
+
+      indexPointers.push({
+        name: vName,
+        targetIndex: indexVal,
+        targetArrayName: mainStr.name,
+        value: indexVal,
+      });
+
+      if (mainStr.elements[indexVal]) {
+        mainStr.elements[indexVal].isActive = true;
+      }
+    }
+
+    // 3. Mark comparison highlights if current line compares string elements (e.g. s[left] != s[right] or s[i] == s[j])
+    const currentLineText = sourceHints.split('\n')[rawLine - 1] || '';
+    if (
+      (currentLineText.includes('==') || currentLineText.includes('!=')) &&
+      (currentLineText.includes('[') || indexPointers.length >= 2)
+    ) {
+      for (const ptr of indexPointers) {
+        if (mainStr.elements[ptr.targetIndex]) {
+          mainStr.elements[ptr.targetIndex].isCompared = true;
+        }
+      }
+    }
+
+    // 4. Sliding window detection & highlight bracket
+    const startPtr = indexPointers.find((p) =>
+      ['windowstart', 'start', 'left', 'wstart'].includes(p.name.toLowerCase())
+    );
+    const endPtr = indexPointers.find((p) =>
+      ['windowend', 'end', 'right', 'wend'].includes(p.name.toLowerCase())
+    );
+
+    const patternInfo = this.detectStringAlgorithmPattern(resolvedFile);
+    if (
+      patternInfo.pattern === 'sliding_window' &&
+      startPtr &&
+      endPtr &&
+      startPtr.targetIndex <= endPtr.targetIndex
+    ) {
+      const sIdx = startPtr.targetIndex;
+      const eIdx = endPtr.targetIndex;
+      stringWindows.push({
+        stringName: mainStr.name,
+        startIndex: sIdx,
+        endIndex: eIdx,
+        label: 'Current Window',
+      });
+      for (let k = sIdx; k <= eIdx; k++) {
+        if (mainStr.elements[k]) {
+          mainStr.elements[k].isWindow = true;
+        }
+      }
+    }
+
+    return {
+      strings: discoveredStrings,
+      indexPointers,
+      stringWindows,
+    };
+  }
+
   public static async extractStackState(
     evalExpr: (expr: string, targetFrameId?: number) => Promise<string | null>,
     localVars: Record<string, any>,
@@ -2493,6 +2870,8 @@ export class StateExtractor {
           nodes: [],
           pointers: [],
           arrays: [],
+          strings: [],
+          stringWindows: [],
           indexPointers: [],
           explanation: initExplanation,
           changeType: 'init',
@@ -2628,6 +3007,8 @@ export class StateExtractor {
       }
 
       let arrays: ArrayVariable[] = [];
+      let strings: StringVariable[] = [];
+      let stringWindows: StringWindow[] = [];
       let indexPointers: IndexPointer[] = [];
       let allNodes: ListNode[] = [];
       let activePointers: PointerVariable[] = [];
@@ -2649,6 +3030,24 @@ export class StateExtractor {
         arrays = arrData.arrays;
         indexPointers = arrData.indexPointers;
         if (arrays.length > 0) {
+          this.hasInitializedList = true;
+        }
+      } else if (structureType === 'string') {
+        const strData = await this.extractStrings(
+          session,
+          frameId,
+          localVars,
+          evalExpr,
+          rawLine,
+          varDecls,
+          funcRange,
+          resolvedFile,
+          previousSnapshot
+        );
+        strings = strData.strings;
+        indexPointers = strData.indexPointers;
+        stringWindows = strData.stringWindows;
+        if (strings.length > 0) {
           this.hasInitializedList = true;
         }
       } else if (structureType === 'stack' || structureType === 'queue') {
@@ -3192,7 +3591,9 @@ export class StateExtractor {
         arrays,
         indexPointers,
         stackData,
-        queueData
+        queueData,
+        strings,
+        stringWindows
       );
 
       // If execution reached the return statement or end of main, mark as final
@@ -3233,6 +3634,8 @@ export class StateExtractor {
         nodes: allNodes,
         pointers: activePointers,
         arrays,
+        strings,
+        stringWindows,
         indexPointers,
         stack: stackData,
         queue: queueData,

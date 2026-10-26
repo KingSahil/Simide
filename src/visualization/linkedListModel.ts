@@ -29,6 +29,7 @@ export interface StringElement {
   isWindow?: boolean;       // Inside current sliding window [start..end]
   isNullTerminator?: boolean; // True for '\0'
   address?: string;         // Memory address of character slot
+  isActive?: boolean;       // Targeted by an active index pointer
 }
 
 export interface StringVariable {
@@ -46,6 +47,15 @@ export interface StringWindow {
   startIndex: number;
   endIndex: number;
   label?: string;           // e.g. "current window" or "match"
+}
+
+export interface StringDeclaration {
+  name: string;
+  line: number;
+  type: 'std_string' | 'char_array' | 'char_pointer';
+  size?: number;
+  initialValue?: string;
+  isDynamic?: boolean;
 }
 
 export interface IndexPointer {

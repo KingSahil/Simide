@@ -11,6 +11,8 @@ import {
   ListNode,
   StackModel,
   QueueModel,
+  StringVariable,
+  StringWindow,
 } from '../src/visualization/linkedListModel';
 import { DebugSessionManager } from '../src/debug/debugSessionManager';
 
@@ -639,6 +641,92 @@ async function runTests() {
   assert.ok(queueDeqRes.explanation.includes('Dequeued value 30'));
   console.log(`  ✓ Queue Dequeue state: "${queueDeqRes.explanation}"`);
 
+  // State 25 (String): Initialization
+  const strElem1: StringVariable = {
+    name: 'word',
+    type: 'std_string',
+    length: 7,
+    elements: 'racecar'.split('').map((c, i) => ({ index: i, char: c, ascii: c.charCodeAt(0) })),
+    hasNullTerminator: false,
+  };
+  const stringInitRes = ExplanationGenerator.generate(
+    [], null, undefined, true, [], null, '', 'string', null, undefined,
+    undefined, undefined, undefined, undefined, [strElem1]
+  );
+  assert.strictEqual(stringInitRes.changeType, 'string_initialized');
+  assert.ok(stringInitRes.explanation.includes("Initialized string 'word' with \"racecar\""));
+  console.log(`  ✓ String Initialized state: "${stringInitRes.explanation}"`);
+
+  // State 26 (String): Two-pointer movements
+  const strSnap1: LinkedListSnapshot = {
+    stepNumber: 1,
+    source: { file: 'string-palindrome.cpp', line: 18 },
+    hasHead: true,
+    headId: null,
+    nodes: [],
+    strings: [strElem1],
+    indexPointers: [
+      { name: 'left', targetIndex: 0, targetArrayName: 'word', value: 0 },
+      { name: 'right', targetIndex: 6, targetArrayName: 'word', value: 6 },
+    ],
+    explanation: stringInitRes.explanation,
+    changeType: 'string_initialized',
+  };
+
+  const stringTwoPtrRes = ExplanationGenerator.generate(
+    [], null, strSnap1, true, [], null, '', 'string', null, undefined,
+    undefined, [
+      { name: 'left', targetIndex: 1, targetArrayName: 'word', value: 1 },
+      { name: 'right', targetIndex: 5, targetArrayName: 'word', value: 5 },
+    ],
+    undefined, undefined, [strElem1]
+  );
+  assert.strictEqual(stringTwoPtrRes.changeType, 'string_pointer_moved');
+  assert.ok(stringTwoPtrRes.explanation.includes("Pointer 'left' advanced to index 1 ('a'); pointer 'right' moved inward to index 5 ('a')"));
+  console.log(`  ✓ String Two-Pointer Movement state: "${stringTwoPtrRes.explanation}"`);
+
+  // State 27 (String): Character swap
+  const strElemSwapped: StringVariable = {
+    name: 'word',
+    type: 'std_string',
+    length: 7,
+    elements: 'eacrcar'.split('').map((c, i) => ({ index: i, char: c, ascii: c.charCodeAt(0) })),
+    hasNullTerminator: false,
+  };
+  const stringSwapRes = ExplanationGenerator.generate(
+    [], null, strSnap1, true, [], null, '', 'string', null, undefined,
+    undefined, undefined, undefined, undefined, [strElemSwapped]
+  );
+  assert.strictEqual(stringSwapRes.changeType, 'string_char_swapped');
+  assert.ok(stringSwapRes.explanation.includes('Swapped characters word[0]'));
+  console.log(`  ✓ String Character Swapped state: "${stringSwapRes.explanation}"`);
+
+  // State 27b (String): Single character update
+  const strElemUpdated: StringVariable = {
+    name: 'word',
+    type: 'std_string',
+    length: 7,
+    elements: 'xacecar'.split('').map((c, i) => ({ index: i, char: c, ascii: c.charCodeAt(0) })),
+    hasNullTerminator: false,
+  };
+  const stringUpdateRes = ExplanationGenerator.generate(
+    [], null, strSnap1, true, [], null, '', 'string', null, undefined,
+    undefined, undefined, undefined, undefined, [strElemUpdated]
+  );
+  assert.strictEqual(stringUpdateRes.changeType, 'string_char_updated');
+  assert.ok(stringUpdateRes.explanation.includes("Assigned 'x' to word[0]"));
+  console.log(`  ✓ String Character Updated state: "${stringUpdateRes.explanation}"`);
+
+  // State 28 (String): Sliding window resize
+  const stringWinRes = ExplanationGenerator.generate(
+    [], null, strSnap1, true, [], null, '', 'string', null, undefined,
+    undefined, undefined, undefined, undefined, [strElem1],
+    [{ stringName: 'word', startIndex: 0, endIndex: 3, label: 'Current Window' }]
+  );
+  assert.strictEqual(stringWinRes.changeType, 'string_window_resized');
+  assert.ok(stringWinRes.explanation.includes('Window [start=0..end=3] expanded to include character \'e\': substring is "race"'));
+  console.log(`  ✓ String Sliding Window Resized state: "${stringWinRes.explanation}"`);
+
   // Test 4: SnapshotManager historical navigation
   console.log('\n[Test 4] Testing SnapshotManager Non-Destructive History...');
   const manager = new SnapshotManager();
@@ -761,6 +849,35 @@ async function runTests() {
   assert.strictEqual(slidingWinPattern.pattern, 'sliding_window');
 
   console.log('  ✓ Verified string structure discovery & algorithm pattern detection (two-pointer & sliding window)');
+
+  // Direct StateExtractor.extractStrings runtime extraction test
+  const mockLocalVars = {
+    word: { value: '"racecar"', type: 'std::string', variablesReference: 0, isArgument: false },
+    left: { value: '0', type: 'int', variablesReference: 0, isArgument: false },
+    right: { value: '6', type: 'int', variablesReference: 0, isArgument: false },
+  };
+  const mockVarDecls = new Map<string, number[]>([
+    ['word', [18]],
+    ['left', [5]],
+    ['right', [6]],
+  ]);
+  const extractedStrData = await StateExtractor.extractStrings(
+    {} as any,
+    1,
+    mockLocalVars,
+    async (expr) => (expr === 'word' ? '"racecar"' : null),
+    20,
+    mockVarDecls,
+    null,
+    stringPalinPath
+  );
+  assert.strictEqual(extractedStrData.strings.length, 1);
+  assert.strictEqual(extractedStrData.strings[0].name, 'word');
+  assert.strictEqual(extractedStrData.strings[0].length, 7);
+  assert.strictEqual(extractedStrData.strings[0].elements[0].char, 'r');
+  assert.strictEqual(extractedStrData.strings[0].elements[0].ascii, 114);
+  assert.strictEqual(extractedStrData.indexPointers.length, 2);
+  console.log('  ✓ Verified StateExtractor.extractStrings extracted std::string, length, elements, and two-pointer indices');
 
   // User defined functions discovery (including free functions and class member methods)
   const leetcodeFns = StateExtractor.getUserDefinedFunctions(leetcodePath);
