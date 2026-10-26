@@ -48,13 +48,14 @@ export class CreativeCodeManager {
     const stacks: CreativeStack[] = [];
     const queues: CreativeQueue[] = [];
 
-    // Parse Linked List Nodes: e.g. Node* head = new Node(10); or ListNode* n1 = new ListNode(20);
-    const nodeRegex = /(?:Node|ListNode)\s*\*\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*new\s+(?:Node|ListNode)\s*\(\s*(-?\d+)\s*\)\s*;/g;
+    // Parse Linked List Nodes: e.g. Node* head = new Node(10); or ListNode* n1 = new ListNode{20};
+    const nodeRegex = /(?:Node|ListNode)\s*\*\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*new\s+(?:Node|ListNode)(?:\s*(?:\(|\{)\s*(-?\d+)?\s*(?:\)|\}))?\s*;/g;
     let match: RegExpExecArray | null;
     let index = 0;
     while ((match = nodeRegex.exec(code)) !== null) {
       const varName = match[1];
-      const val = parseInt(match[2], 10);
+      const valStr = match[2];
+      const val = valStr !== undefined ? parseInt(valStr, 10) : 0;
       nodes.push({
         id: `node-${varName}`,
         varName,
@@ -71,9 +72,25 @@ export class CreativeCodeManager {
     while ((match = nextRegex.exec(code)) !== null) {
       const srcVar = match[1];
       const tgtVar = match[2];
-      const srcNode = nodes.find((n) => n.varName === srcVar);
-      if (srcNode) {
-        srcNode.nextVar = tgtVar;
+      if (tgtVar === 'nullptr' || tgtVar === 'NULL') {
+        const srcNode = nodes.find((n) => n.varName === srcVar);
+        if (srcNode) srcNode.nextVar = null;
+      } else {
+        const srcNode = nodes.find((n) => n.varName === srcVar);
+        if (srcNode) {
+          srcNode.nextVar = tgtVar;
+        }
+      }
+    }
+
+    // Parse explicit value mutations: e.g. head->data = 50; or head->val = 50;
+    const valUpdateRegex = /([a-zA-Z_][a-zA-Z0-9_]*)\s*->\s*(?:data|val)\s*=\s*(-?\d+)\s*;/g;
+    while ((match = valUpdateRegex.exec(code)) !== null) {
+      const varName = match[1];
+      const newVal = parseInt(match[2], 10);
+      const n = nodes.find((node) => node.varName === varName);
+      if (n && !isNaN(newVal)) {
+        n.value = newVal;
       }
     }
 
@@ -223,8 +240,8 @@ int main() {
     }
 
     // Otherwise, insert sourceVar->next = targetVar; inside main after both variables are declared
-    const sourceDeclIdx = text.indexOf(`${sourceVar} = new Node`);
-    const targetDeclIdx = text.indexOf(`${targetVar} = new Node`);
+    const sourceDeclIdx = text.search(new RegExp(`\\b${sourceVar}\\s*=\\s*new\\s+(?:Node|ListNode)`));
+    const targetDeclIdx = text.search(new RegExp(`\\b${targetVar}\\s*=\\s*new\\s+(?:Node|ListNode)`));
     const laterIdx = Math.max(sourceDeclIdx, targetDeclIdx);
 
     let insertPos: vscode.Position;

@@ -108,6 +108,9 @@ export type WebviewMessage =
     }
   | {
       command: 'creativeRequestSync';
+    }
+  | {
+      command: 'creativeStart';
     };
 
 export type ExtensionMessage =

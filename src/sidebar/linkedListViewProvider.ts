@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import {
   createUpdateStateMessage,
   ExtensionMessage,
@@ -36,6 +37,9 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   private starting = false;
   private openingExample = false;
   private visualizationMode: 'graph' | 'linked_list' = 'linked_list';
+
+  private isCreativeMode = false;
+  private creativeFilePath: string | null = null;
 
   // Wiring engine: parses the backing source file with clang and turns a visual
   // graph edge into a precise source-text edit.
@@ -93,6 +97,37 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
             editor.setDecorations(this.activeLineDecorationType, []);
           }
         }
+      })
+    );
+
+    // Live sync for Creative Mode: user typing in editor updates simulation in real-time
+    let syncDebounceTimer: NodeJS.Timeout | null = null;
+    this.disposables.push(
+      vscode.workspace.onDidChangeTextDocument((event) => {
+        if (!this.isCreativeMode) return;
+        const creativePath = this.creativeFilePath;
+        if (!creativePath) return;
+
+        const eventNorm = event.document.fileName.replace(/\\/g, '/').toLowerCase();
+        const targetNorm = creativePath.replace(/\\/g, '/').toLowerCase();
+        if (eventNorm !== targetNorm && !eventNorm.endsWith(path.basename(targetNorm))) {
+          return;
+        }
+
+        if (syncDebounceTimer) {
+          clearTimeout(syncDebounceTimer);
+        }
+        syncDebounceTimer = setTimeout(() => {
+          if (!this.isCreativeMode) return;
+          const code = event.document.getText();
+          const state = CreativeCodeManager.parseExistingCode(code);
+          this.postMessage({
+            command: 'creativeSyncState',
+            nodes: state.nodes,
+            stacks: state.stacks,
+            queues: state.queues,
+          });
+        }, 120);
       })
     );
 
@@ -472,6 +507,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       }
 
       case 'goHome':
+        this.isCreativeMode = false;
         if (DebugSessionManager.getActiveSession()) await DebugSessionManager.stopDebugging();
         this.clearEditorHighlight();
         this.snapshotManager.reset();
@@ -480,14 +516,17 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case 'visualize':
+        this.isCreativeMode = false;
         await this.startVisualization(message.filePath);
         break;
 
       case 'retry':
+        this.isCreativeMode = false;
         await this.startVisualization();
         break;
 
       case 'visualizeExample': {
+        this.isCreativeMode = false;
         if (this.starting || this.openingExample) break;
         this.openingExample = true;
         try {
@@ -685,10 +724,60 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
+
+      case 'creativeStart': {
+        this.isCreativeMode = true;
+        const wsFolders = vscode.workspace.workspaceFolders;
+        let creativeFile = '';
+        if (wsFolders && wsFolders.length > 0) {
+          creativeFile = path.join(wsFolders[0].uri.fsPath, 'creative.cpp');
+        } else {
+          creativeFile = path.join(os.tmpdir(), 'creative.cpp');
+        }
+
+        // The creative mode should be started with a blank cpp file always
+        fs.writeFileSync(creativeFile, '', 'utf8');
+        this.creativeFilePath = creativeFile;
+        CppCompiler.setLastActiveSourceFile(creativeFile);
+        this.sendTargetFileUpdate();
+
+        try {
+          const doc = await vscode.workspace.openTextDocument(creativeFile);
+          await vscode.window.showTextDocument(doc, {
+            viewColumn: vscode.ViewColumn.One,
+            preserveFocus: false,
+          });
+        } catch (err) {
+          console.error('[LinkedListViewProvider] Failed to open blank creative.cpp:', err);
+        }
+
+        this.postMessage({
+          command: 'creativeSyncState',
+          nodes: [],
+          stacks: [],
+          queues: [],
+        });
+        break;
+      }
     }
   }
 
   private async getOrCreateCppEditor(): Promise<vscode.TextEditor | null> {
+    if (this.isCreativeMode && this.creativeFilePath) {
+      const normCreative = this.creativeFilePath.replace(/\\/g, '/').toLowerCase();
+      for (const vis of vscode.window.visibleTextEditors) {
+        if (vis.document.fileName.replace(/\\/g, '/').toLowerCase() === normCreative) {
+          return vis;
+        }
+      }
+      try {
+        const doc = await vscode.workspace.openTextDocument(this.creativeFilePath);
+        return await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: true });
+      } catch {
+        // Fallback
+      }
+    }
+
     let editor = vscode.window.activeTextEditor;
     if (editor && /\.(cpp|cc|cxx|c\+\+|h|hpp)$/i.test(editor.document.fileName)) {
       return editor;

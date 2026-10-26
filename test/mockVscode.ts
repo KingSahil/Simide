@@ -40,6 +40,14 @@ export enum ConfigurationTarget {
   Workspace = 2,
 }
 
+export enum ViewColumn {
+  Active = -1,
+  Beside = -2,
+  One = 1,
+  Two = 2,
+  Three = 3,
+}
+
 export const Uri = {
   file: (fsPath: string) => ({ fsPath }),
   joinPath: (base: { fsPath: string }, ...parts: string[]) => ({
@@ -62,6 +70,7 @@ export const window = {
 
 export const workspace = {
   openTextDocument: async (uri: { fsPath: string }) => ({ fileName: uri.fsPath, languageId: 'cpp' }),
+  onDidChangeTextDocument: (_listener: unknown) => ({ dispose: () => {} }),
   workspaceFolders: [
     {
       uri: {
@@ -90,8 +99,10 @@ export default {
   Selection,
   TextEditorRevealType,
   OverviewRulerLane,
+  ViewColumn,
   window,
   workspace,
   extensions,
   debug,
+  commands,
 };
