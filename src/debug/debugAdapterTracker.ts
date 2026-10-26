@@ -71,13 +71,36 @@ export class DebugTrackerFactory implements vscode.DebugAdapterTrackerFactory {
     };
   }
 
+  private static processedMessageKeys = new Set<string>();
+
   public createDebugAdapterTracker(session: vscode.DebugSession): vscode.DebugAdapterTracker {
+    const sessionId = session.id;
+
     return {
+      onWillStopSession: () => {
+        for (const key of DebugTrackerFactory.processedMessageKeys) {
+          if (key.startsWith(sessionId + ':')) {
+            DebugTrackerFactory.processedMessageKeys.delete(key);
+          }
+        }
+      },
       onWillReceiveMessage: (m) => {
         // Can track client-sent requests if needed
       },
       onDidSendMessage: (m) => {
         if (!m) return;
+        const msgKey =
+          m.seq !== undefined
+            ? `${sessionId}:${m.seq}`
+            : `${sessionId}:${m.type}:${m.event || ''}:${JSON.stringify(m.body || '')}`;
+        if (DebugTrackerFactory.processedMessageKeys.has(msgKey)) {
+          return;
+        }
+        DebugTrackerFactory.processedMessageKeys.add(msgKey);
+        if (DebugTrackerFactory.processedMessageKeys.size > 2000) {
+          const it = DebugTrackerFactory.processedMessageKeys.values().next();
+          if (!it.done) DebugTrackerFactory.processedMessageKeys.delete(it.value);
+        }
         if (m.type === 'event') {
           if (m.event === 'stopped') {
             const threadId = m.body?.threadId ?? 1;
@@ -85,7 +108,9 @@ export class DebugTrackerFactory implements vscode.DebugAdapterTrackerFactory {
             DebugTrackerFactory.lastThreadId = threadId;
             for (const listener of DebugTrackerFactory.stopListeners) {
               try {
-                listener({ session, threadId, reason });
+                Promise.resolve(listener({ session, threadId, reason })).catch((e) => {
+                  console.error('[DebugTracker] Error in async stop listener', e);
+                });
               } catch (e) {
                 console.error('[DebugTracker] Error in stop listener', e);
               }

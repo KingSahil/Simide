@@ -64,7 +64,15 @@ export const window = {
   showErrorMessage: () => {},
   showInformationMessage: () => {},
   showTextDocument: async (document: any, _options?: any) => {
-    window.activeTextEditor = { document } as any;
+    const editor = {
+      document,
+      selection: new Selection(new Position(0, 0), new Position(0, 0)),
+      setDecorations: () => {},
+      revealRange: () => {},
+    } as any;
+    window.activeTextEditor = editor;
+    window.visibleTextEditors = [editor];
+    return editor;
   },
 };
 
@@ -87,6 +95,9 @@ export const extensions = {
 export const debug = {
   startDebugging: async () => true,
   stopDebugging: async () => {},
+  onDidChangeActiveStackItem: (_listener: unknown) => ({ dispose: () => {} }),
+  registerDebugAdapterTrackerFactory: (_type: string, _factory: unknown) => ({ dispose: () => {} }),
+  activeDebugSession: undefined as any,
 };
 
 export const commands = {

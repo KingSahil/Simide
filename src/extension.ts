@@ -50,9 +50,12 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Register Debug Adapter Tracker Factory to capture stopped/continued events from DAP
   const trackerFactory = new DebugTrackerFactory();
-  context.subscriptions.push(
-    vscode.debug.registerDebugAdapterTrackerFactory('*', trackerFactory)
-  );
+  const debugTypes = ['*', 'cppdbg', 'gdb', 'lldb', 'cppvsdbg'];
+  for (const dt of debugTypes) {
+    context.subscriptions.push(
+      vscode.debug.registerDebugAdapterTrackerFactory(dt, trackerFactory)
+    );
+  }
 
   // Monitor active debug sessions
   context.subscriptions.push(

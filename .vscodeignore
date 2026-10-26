@@ -24,3 +24,4 @@ dist/**
 !dist/webview.html
 !dist/cli/**
 node_modules/**
+resources/demo/*.mp4

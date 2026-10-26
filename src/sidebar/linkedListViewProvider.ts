@@ -134,145 +134,27 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     // Stopped listener
     this.disposables.push(
       DebugTrackerFactory.onStopped(async (event: DebuggerStopEvent) => {
-        ExecutionController.setPaused(true);
-        // Minimal delay to ensure DAP stack frames are completely populated
         await new Promise((r) => setTimeout(r, 10));
-        vscode.commands.executeCommand('workbench.action.closePanel');
-
-        // Inspect call stack to see if we stepped into library or CRT internals
-        try {
-          const stackRes = await event.session.customRequest('stackTrace', {
-            threadId: event.threadId,
-            startFrame: 0,
-            levels: 10,
-          });
-          const frames = stackRes?.stackFrames || [];
-          if (frames.length > 0) {
-            const topPath = frames[0].source?.path || frames[0].source?.name || '';
-            const topFunc = (frames[0].name || '').toLowerCase();
-            const isTopUser =
-              StateExtractor.isUserSource(topPath) &&
-              !topFunc.includes('crt') &&
-              !topFunc.includes('startup');
-            const hasUserCaller = frames.some((f: any) => {
-              const p = f.source?.path || f.source?.name || '';
-              const n = (f.name || '').toLowerCase();
-              return StateExtractor.isUserSource(p) && !n.includes('crt') && !n.includes('startup');
-            });
-
-            // If we are inside an internal library function (e.g. non-user file or CRT),
-            // automatically step out back into user source code
-            if (!isTopUser && hasUserCaller) {
-              await ExecutionController.stepOut();
-              return;
-            }
-          }
-        } catch {
-          // Ignore and continue
-        }
-
-        const previousSnapshot = this.snapshotManager.getLatestSnapshot();
-        let snapshot: VisualizationSnapshot | null = null;
-        let mode: 'graph' | 'linked_list' = 'linked_list';
-        const sourceFile = StateExtractor.resolveFilePath();
-
-        if (sourceFile) {
-          try {
-            mode = selectVisualizationMode(fs.readFileSync(sourceFile, 'utf8'));
-          } catch (error) {
-            console.warn(
-              `[LinkedListViewProvider] Could not inspect '${sourceFile}' for graph registry types.`,
-              error
-            );
-          }
-        }
-
-        const stepNumber = this.stepCounter++;
-        if (mode === 'graph') {
-          try {
-            const extractedGraphSnapshot = await StateExtractor.extractGraphState(
-              event.session,
-              event.threadId,
-              stepNumber
-            );
-            if (extractedGraphSnapshot) {
-              const graphSnapshot = preservePreviousGraphObjects(
-                previousSnapshot && isGraphSnapshot(previousSnapshot)
-                  ? previousSnapshot
-                  : undefined,
-                extractedGraphSnapshot
-              );
-              const graphChange = describeGraphSnapshotChange(
-                previousSnapshot && isGraphSnapshot(previousSnapshot)
-                  ? previousSnapshot
-                  : undefined,
-                graphSnapshot
-              );
-              snapshot = {
-                ...graphSnapshot,
-                ...graphChange,
-                terminalOutput: StateExtractor.getAccumulatedTerminalOutput(),
-              };
-            } else {
-              console.warn(
-                '[LinkedListViewProvider] Graph source detected, but no supported graph state was available at this debugger stop.'
-              );
-              if (previousSnapshot && isGraphSnapshot(previousSnapshot)) {
-                try {
-                  const stackResponse = await event.session.customRequest('stackTrace', {
-                    threadId: event.threadId,
-                    startFrame: 0,
-                    levels: 25,
-                  });
-                  const hasUserFrame = (stackResponse?.stackFrames || []).some((frame: any) => {
-                    const framePath = frame.source?.path || frame.source?.name || '';
-                    const frameName = (frame.name || '').toLowerCase();
-                    return (
-                      StateExtractor.isUserSource(framePath) &&
-                      !frameName.includes('crt') &&
-                      !frameName.includes('startup')
-                    );
-                  });
-                  if (!hasUserFrame) {
-                    snapshot = {
-                      ...previousSnapshot,
-                      stepNumber,
-                      explanation: 'Program execution completed. This is the final graph state.',
-                      changeType: 'final',
-                      terminalOutput: StateExtractor.getAccumulatedTerminalOutput(),
-                      isHistorical: false,
-                    };
-                  }
-                } catch (error) {
-                  console.warn(
-                    '[LinkedListViewProvider] Could not determine whether graph execution completed.',
-                    error
-                  );
-                }
-              }
-            }
-          } catch (error) {
-            console.error('[LinkedListViewProvider] Graph snapshot extraction failed.', error);
-          }
-        } else {
-          const previousListSnapshot =
-            previousSnapshot && !isGraphSnapshot(previousSnapshot)
-              ? previousSnapshot
-              : undefined;
-          snapshot = await StateExtractor.extractState(
-            event.session,
-            event.threadId,
-            stepNumber,
-            previousListSnapshot
-          );
-        }
-
-        if (snapshot) {
-          this.snapshotManager.addSnapshot(snapshot);
-          this.broadcastState(snapshot);
-        }
+        await this.extractAndBroadcastCurrentState(event.session, event.threadId, event.reason);
       })
     );
+
+    // Active stack item listener: triggers immediately when VS Code pauses at entry/breakpoint
+    if (typeof vscode.debug?.onDidChangeActiveStackItem === 'function') {
+      this.disposables.push(
+        vscode.debug.onDidChangeActiveStackItem(async () => {
+          const session = DebugSessionManager.getActiveSession();
+          if (session && this.snapshotManager.totalSnapshots === 0) {
+            try {
+              const threadId = DebugTrackerFactory.getLastThreadId();
+              await this.extractAndBroadcastCurrentState(session, threadId, 'entry');
+            } catch (err) {
+              console.warn('[LinkedListViewProvider] onDidChangeActiveStackItem extraction error:', err);
+            }
+          }
+        })
+      );
+    }
 
     this.disposables.push(
       DebugTrackerFactory.onOutput((session, output, category) => {
@@ -1157,11 +1039,236 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    this.postMessage({
-      command: 'status',
-      text: 'Waiting for debugger to pause at entry...',
-      step: 'waiting',
-    });
+    // If the debugger has already stopped and created a snapshot during launch,
+    // re-broadcast it now so the webview is never left in loading state.
+    const latestSnapshot = this.snapshotManager.getCurrentSnapshot();
+    if (latestSnapshot) {
+      this.broadcastState(latestSnapshot);
+    } else {
+      this.postMessage({
+        command: 'status',
+        text: 'Waiting for debugger to pause at entry...',
+        step: 'waiting',
+      });
+
+      // Polling safety watchdog: checks every 300ms (up to 18 attempts = ~5.4s).
+      // As soon as the debugger is paused at entry, extracts & broadcasts state.
+      let pollCount = 0;
+      const pollInterval = setInterval(async () => {
+        pollCount++;
+        if (this.snapshotManager.totalSnapshots > 0) {
+          clearInterval(pollInterval);
+          return;
+        }
+        const activeSession = DebugSessionManager.getActiveSession();
+        if (activeSession) {
+          try {
+            const threadId = DebugTrackerFactory.getLastThreadId();
+            const ok = await this.extractAndBroadcastCurrentState(activeSession, threadId, 'entry');
+            if (ok || this.snapshotManager.totalSnapshots > 0) {
+              clearInterval(pollInterval);
+              return;
+            }
+          } catch {
+            // keep trying until timeout
+          }
+        }
+        if (pollCount >= 18) {
+          clearInterval(pollInterval);
+          if (this.snapshotManager.totalSnapshots === 0) {
+            const fallbackSnapshot: VisualizationSnapshot = {
+              stepNumber: 1,
+              structureType: (this.visualizationMode === 'graph' ? 'graph' : 'linked_list') as any,
+              source: {
+                file: sourceFile || '',
+                line: 1,
+                functionName: 'main',
+              },
+              hasHead: false,
+              headId: null,
+              nodes: [],
+              pointers: [],
+              arrays: [],
+              indexPointers: [],
+              explanation: 'Program paused at start. Click Next to begin execution.',
+              changeType: 'init',
+              terminalOutput: '',
+              isHistorical: false,
+            };
+            this.snapshotManager.addSnapshot(fallbackSnapshot);
+            this.broadcastState(fallbackSnapshot);
+          }
+        }
+      }, 300);
+    }
+  }
+
+  public async extractAndBroadcastCurrentState(
+    session: vscode.DebugSession,
+    threadId: number,
+    reason?: string
+  ): Promise<boolean> {
+    ExecutionController.setPaused(true);
+    vscode.commands.executeCommand('workbench.action.closePanel');
+
+    // Inspect call stack to see if we stepped into library or CRT internals
+    try {
+      const stackRes = await session.customRequest('stackTrace', {
+        threadId,
+        startFrame: 0,
+        levels: 10,
+      });
+      const frames = stackRes?.stackFrames || [];
+      if (frames.length > 0) {
+        const topPath = frames[0].source?.path || frames[0].source?.name || '';
+        const topFunc = (frames[0].name || '').toLowerCase();
+        const isTopUser =
+          StateExtractor.isUserSource(topPath) &&
+          !topFunc.includes('crt') &&
+          !topFunc.includes('startup');
+        const hasUserCaller = frames.some((f: any) => {
+          const p = f.source?.path || f.source?.name || '';
+          const n = (f.name || '').toLowerCase();
+          return StateExtractor.isUserSource(p) && !n.includes('crt') && !n.includes('startup');
+        });
+
+        // If we are inside an internal library function (e.g. non-user file or CRT),
+        // automatically step out back into user source code (never at entry or initial stop)
+        if (this.snapshotManager.totalSnapshots > 0 && reason !== 'entry' && !isTopUser && hasUserCaller) {
+          await ExecutionController.stepOut();
+          return false;
+        }
+      }
+    } catch {
+      // Ignore and continue
+    }
+
+    const previousSnapshot = this.snapshotManager.getLatestSnapshot();
+    let snapshot: VisualizationSnapshot | null = null;
+    let mode: 'graph' | 'linked_list' = 'linked_list';
+    const sourceFile = StateExtractor.resolveFilePath();
+
+    if (sourceFile) {
+      try {
+        mode = selectVisualizationMode(fs.readFileSync(sourceFile, 'utf8'));
+      } catch (error) {
+        console.warn(
+          `[LinkedListViewProvider] Could not inspect '${sourceFile}' for graph registry types.`,
+          error
+        );
+      }
+    }
+
+    const stepNumber = this.stepCounter++;
+    if (mode === 'graph') {
+      try {
+        const extractedGraphSnapshot = await StateExtractor.extractGraphState(
+          session,
+          threadId,
+          stepNumber
+        );
+        if (extractedGraphSnapshot) {
+          const graphSnapshot = preservePreviousGraphObjects(
+            previousSnapshot && isGraphSnapshot(previousSnapshot)
+              ? previousSnapshot
+              : undefined,
+            extractedGraphSnapshot
+          );
+          const graphChange = describeGraphSnapshotChange(
+            previousSnapshot && isGraphSnapshot(previousSnapshot)
+              ? previousSnapshot
+              : undefined,
+            graphSnapshot
+          );
+          snapshot = {
+            ...graphSnapshot,
+            ...graphChange,
+            terminalOutput: StateExtractor.getAccumulatedTerminalOutput(),
+          };
+        } else {
+          console.warn(
+            '[LinkedListViewProvider] Graph source detected, but no supported graph state was available at this debugger stop.'
+          );
+          if (previousSnapshot && isGraphSnapshot(previousSnapshot)) {
+            try {
+              const stackResponse = await session.customRequest('stackTrace', {
+                threadId,
+                startFrame: 0,
+                levels: 25,
+              });
+              const hasUserFrame = (stackResponse?.stackFrames || []).some((frame: any) => {
+                const framePath = frame.source?.path || frame.source?.name || '';
+                const frameName = (frame.name || '').toLowerCase();
+                return (
+                  StateExtractor.isUserSource(framePath) &&
+                  !frameName.includes('crt') &&
+                  !frameName.includes('startup')
+                );
+              });
+              if (!hasUserFrame) {
+                snapshot = {
+                  ...previousSnapshot,
+                  stepNumber,
+                  explanation: 'Program execution completed. This is the final graph state.',
+                  changeType: 'final',
+                  terminalOutput: StateExtractor.getAccumulatedTerminalOutput(),
+                  isHistorical: false,
+                };
+              }
+            } catch (error) {
+              console.warn(
+                '[LinkedListViewProvider] Could not determine whether graph execution completed.',
+                error
+              );
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[LinkedListViewProvider] Graph snapshot extraction failed.', error);
+      }
+    } else {
+      const previousListSnapshot =
+        previousSnapshot && !isGraphSnapshot(previousSnapshot)
+          ? previousSnapshot
+          : undefined;
+      snapshot = await StateExtractor.extractState(
+        session,
+        threadId,
+        stepNumber,
+        previousListSnapshot
+      );
+    }
+
+    if (snapshot) {
+      this.snapshotManager.addSnapshot(snapshot);
+      this.broadcastState(snapshot);
+      return true;
+    } else if (this.snapshotManager.totalSnapshots === 0) {
+      // Fallback entry snapshot to guarantee the webview never hangs in loading state
+      const fallbackSnapshot: VisualizationSnapshot = {
+        stepNumber: 1,
+        structureType: (mode === 'graph' ? 'graph' : 'linked_list') as any,
+        source: {
+          file: sourceFile || '',
+          line: 1,
+          functionName: 'main',
+        },
+        hasHead: false,
+        headId: null,
+        nodes: [],
+        pointers: [],
+        arrays: [],
+        indexPointers: [],
+        explanation: 'Program paused at start. Click Next to begin execution.',
+        changeType: 'init',
+        terminalOutput: StateExtractor.getAccumulatedTerminalOutput(),
+        isHistorical: false,
+      };
+      this.snapshotManager.addSnapshot(fallbackSnapshot);
+      this.broadcastState(fallbackSnapshot);
+      return true;
+    }
+    return false;
   }
 
   public async restartSession(): Promise<void> {
@@ -1234,16 +1341,16 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
 
     let foundEditor = false;
     for (const editor of vscode.window.visibleTextEditors) {
+      const docName = editor.document?.fileName || '';
       const isMatchingDoc =
         !filePath ||
-        editor.document.fileName.endsWith(filePath) ||
-        path.basename(editor.document.fileName) === path.basename(filePath);
+        (docName && (docName.endsWith(filePath) || path.basename(docName) === path.basename(filePath)));
 
-      if (isMatchingDoc) {
+      if (isMatchingDoc && editor.setDecorations) {
         editor.setDecorations(this.activeLineDecorationType, [range]);
-        editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+        editor.revealRange?.(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 
-        if (editor.document.lineCount > targetLine) {
+        if (editor.document && editor.document.lineCount > targetLine) {
           const pos = new vscode.Position(targetLine, 0);
           editor.selection = new vscode.Selection(pos, pos);
         }
@@ -1254,8 +1361,10 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     if (!foundEditor && openIfNotVisible && filePath && fs.existsSync(filePath)) {
       vscode.workspace.openTextDocument(filePath).then((doc) => {
         vscode.window.showTextDocument(doc, { preserveFocus: true }).then((editor) => {
-          editor.setDecorations(this.activeLineDecorationType, [range]);
-          editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+          if (editor && typeof editor.setDecorations === 'function') {
+            editor.setDecorations(this.activeLineDecorationType, [range]);
+            editor.revealRange?.(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+          }
         });
       });
     }
@@ -1263,7 +1372,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
 
   private clearEditorHighlight(): void {
     for (const editor of vscode.window.visibleTextEditors) {
-      editor.setDecorations(this.activeLineDecorationType, []);
+      editor?.setDecorations?.(this.activeLineDecorationType, []);
     }
   }
 

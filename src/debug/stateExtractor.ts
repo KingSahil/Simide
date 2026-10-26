@@ -31,6 +31,7 @@ import {
 } from './graphStateExtractor';
 import { ExplanationGenerator } from '../visualization/explanationGenerator';
 import { isExplicitNull, isNodePointerType, resolveObjectHead, RuntimeVariable } from './objectHeadResolver';
+import { CppCompiler } from './compiler';
 
 class NodeInspectionError extends Error {}
 
@@ -105,6 +106,25 @@ export class StateExtractor {
     if (this.activeSourceFile && fs.existsSync(this.activeSourceFile)) {
       return this.activeSourceFile;
     }
+    const lastActive = CppCompiler.getLastActiveSourceFile() || vscode.window.activeTextEditor?.document.fileName;
+    if (lastActive && fs.existsSync(lastActive)) {
+      if (!sourceFilePath || path.basename(sourceFilePath) === path.basename(lastActive)) {
+        return lastActive;
+      }
+      const candidate = path.join(path.dirname(lastActive), path.basename(sourceFilePath));
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    if (sourceFilePath && this.activeSourceFile) {
+      const candidateInActiveDir = path.join(
+        path.dirname(this.activeSourceFile),
+        path.basename(sourceFilePath)
+      );
+      if (fs.existsSync(candidateInActiveDir)) {
+        return candidateInActiveDir;
+      }
+    }
 
     const folders = vscode.workspace.workspaceFolders;
     if (folders && folders.length > 0) {
@@ -142,11 +162,32 @@ export class StateExtractor {
     ) {
       return false;
     }
-    if (this.activeSourceFile) {
-      const activeNorm = this.activeSourceFile.replace(/\\/g, '/').toLowerCase();
-      if (norm === activeNorm || norm.endsWith('/' + path.basename(activeNorm))) {
+
+    const activeCandidates = [
+      this.activeSourceFile,
+      CppCompiler.getLastActiveSourceFile(),
+      vscode.window.activeTextEditor?.document.fileName,
+    ].filter(Boolean) as string[];
+
+    for (const af of activeCandidates) {
+      const activeNorm = af.replace(/\\/g, '/').toLowerCase();
+      const baseName = path.basename(activeNorm);
+      if (
+        norm === activeNorm ||
+        norm === baseName ||
+        norm.endsWith('/' + baseName)
+      ) {
         return true;
       }
+    }
+
+    if (
+      norm.includes('tutorials/') ||
+      norm.includes('lessons/') ||
+      norm.includes('simide-ide/') ||
+      norm.includes('.simide-ide')
+    ) {
+      return true;
     }
     const folders = vscode.workspace.workspaceFolders;
     if (folders) {

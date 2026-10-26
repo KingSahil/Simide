@@ -3041,6 +3041,10 @@ window.addEventListener('message', (event) => {
     case 'status': {
       isCreativeMode = false;
       if (creativePalette) creativePalette.style.display = 'none';
+      if (msg.step === 'waiting' && currentSnapshot) {
+        showView('active');
+        break;
+      }
       showView('loading');
       loadingText.textContent = msg.text;
       if (msg.step === 'compiling') {
