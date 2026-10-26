@@ -37,6 +37,9 @@
           </svg>
           Restart
         </button>
+        <button id="btnLinkMode" class="btn btn-secondary" title="Link Mode: click two nodes to wire them in source code" aria-pressed="false">
+          🔗 Link Nodes
+        </button>
       </div>
     </header>
 
@@ -71,12 +74,23 @@
         <span class="target-name" id="targetFileName">stack-operations.cpp</span>
       </div>
 
-      <button id="btnInitialVisualize" class="btn btn-primary btn-large">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-          <polygon points="5 3 19 12 5 21 5 3"/>
-        </svg>
-        <span id="btnVisualizeText">Visualize Active Code</span>
-      </button>
+      <div class="initial-btn-group">
+        <button id="btnInitialVisualize" class="btn btn-primary btn-large">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          <span id="btnVisualizeText">Visualize Active Code</span>
+        </button>
+        <button id="btnInitialCreative" class="btn btn-creative btn-large" title="Creative Mode: Drag & drop nodes, stacks, queues to build data structures visually and write C++ in real-time">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
+            <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
+            <path d="M2 2l7.586 7.586"></path>
+            <circle cx="11" cy="11" r="2"></circle>
+          </svg>
+          <span>Creative</span>
+        </button>
+      </div>
 
       <section class="quick-examples-section" aria-label="C++ examples">
         <div class="quick-examples-title">Explore Examples</div>
@@ -114,6 +128,26 @@
             <span id="stepChip" class="step-chip">Step 1</span>
           </div>
         </div>
+
+        <!-- Creative Component Dock (inside active canvas) -->
+        <div id="creativePalette" class="creative-palette-dock" style="display: none;">
+          <div class="dock-label-group">
+            <span class="dock-badge">🎨 Creative Palette:</span>
+            <span class="dock-sync-indicator">⚡ C++ Sync Active</span>
+          </div>
+          <div class="dock-actions">
+            <button id="dockAddNode" class="dock-btn dock-btn-node" draggable="true" title="Drag onto canvas or click to add a Linked List Node">
+              <span>🔗 + Node</span>
+            </button>
+            <button id="dockAddStack" class="dock-btn dock-btn-stack" draggable="true" title="Drag onto canvas or click to add a Stack">
+              <span>🥞 + Stack</span>
+            </button>
+            <button id="dockAddQueue" class="dock-btn dock-btn-queue" draggable="true" title="Drag onto canvas or click to add a Queue">
+              <span>🚶 + Queue</span>
+            </button>
+          </div>
+        </div>
+
         <div id="canvasHint" class="canvas-hint">Drag nodes to move • Right-click drag to pan • Scroll to zoom</div>
         <div id="graphViewport" class="graph-viewport">
           <div id="graphCanvas" class="graph-canvas">

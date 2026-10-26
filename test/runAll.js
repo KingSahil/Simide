@@ -4,7 +4,26 @@ const { spawnSync } = require('child_process');
 
 console.log('Building test bundle...');
 esbuild.buildSync({
-  entryPoints: ['test/runTests.ts', 'test/gdbExecution.test.ts', 'test/startup.test.ts', 'test/examples.test.ts', 'test/graphModel.test.ts', 'test/graphStateExtractor.test.ts', 'test/graphRenderer.test.ts', 'test/graphIntegration.test.ts', 'test/debugOutput.test.ts', 'test/stateExtraction.test.ts', 'test/arrayIndices.test.ts', 'test/oopExtraction.test.ts', 'test/gfgExtraction.test.ts', 'test/tutorialIngestion.test.ts', 'test/masterclassLessons.test.ts'],
+  entryPoints: [
+    'test/runTests.ts',
+    'test/gdbExecution.test.ts',
+    'test/startup.test.ts',
+    'test/examples.test.ts',
+    'test/graphModel.test.ts',
+    'test/graphStateExtractor.test.ts',
+    'test/graphRenderer.test.ts',
+    'test/graphIntegration.test.ts',
+    'test/debugOutput.test.ts',
+    'test/stateExtraction.test.ts',
+    'test/arrayIndices.test.ts',
+    'test/oopExtraction.test.ts',
+    'test/gfgExtraction.test.ts',
+    'test/tutorialIngestion.test.ts',
+    'test/masterclassLessons.test.ts',
+    'test/codePatcher.test.ts',
+    'test/edgeLinkHandler.test.ts',
+    'test/creativeCodeManager.test.ts',
+  ],
   bundle: true,
   platform: 'node',
   outdir: 'dist',
@@ -28,6 +47,15 @@ const oop = spawnSync('node', ['dist/oopExtraction.test.js'], { stdio: 'inherit'
 if (oop.status !== 0) process.exit(oop.status || 1);
 const gfg = spawnSync('node', ['dist/gfgExtraction.test.js'], { stdio: 'inherit' });
 if (gfg.status !== 0) process.exit(gfg.status || 1);
+console.log('Running test/codePatcher.test.ts...');
+const patcher = spawnSync('node', ['dist/codePatcher.test.js'], { stdio: 'inherit' });
+if (patcher.status !== 0) process.exit(patcher.status || 1);
+console.log('Running test/edgeLinkHandler.test.ts...');
+const edge = spawnSync('node', ['dist/edgeLinkHandler.test.js'], { stdio: 'inherit' });
+if (edge.status !== 0) process.exit(edge.status || 1);
+console.log('Running test/creativeCodeManager.test.ts...');
+const creative = spawnSync('node', ['dist/creativeCodeManager.test.js'], { stdio: 'inherit' });
+if (creative.status !== 0) process.exit(creative.status || 1);
 console.log('Running test/runTests.ts...');
 const res1 = spawnSync('node', ['dist/runTests.js'], { stdio: 'inherit' });
 if (res1.status !== 0) {

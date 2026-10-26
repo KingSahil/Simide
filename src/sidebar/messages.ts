@@ -2,6 +2,8 @@ import { LinkedListSnapshot } from '../visualization/linkedListModel';
 import { GraphSnapshot, isGraphSnapshot } from '../visualization/graphModel';
 import { ExampleEntry } from './exampleCatalog';
 import { TutorialManifest } from '../tutorial/tutorialModel';
+import type { GraphEdge, GraphNodeMeta, EdgeLinkResult } from './edgeLinkHandler';
+import type { SourceEdit } from '../visualization/codePatcher';
 
 interface UpdateStateBase {
   command: 'updateState';
@@ -61,7 +63,52 @@ export type WebviewMessage =
   | { command: 'requestState' }
   | { command: 'importTutorial'; url?: string }
   | { command: 'selectLesson'; lessonId: string }
-  | { command: 'closeTutorial' };
+  | { command: 'closeTutorial' }
+  | {
+      command: 'createEdge';
+      edge: GraphEdge;
+    }
+  | {
+      command: 'requestAST';
+      filePath: string;
+    }
+  | {
+      command: 'creativeAddNode';
+      nodeType: 'linkedlist' | 'stack' | 'queue';
+      varName: string;
+      value: number;
+    }
+  | {
+      command: 'creativeConnect';
+      sourceVar: string;
+      targetVar: string;
+    }
+  | {
+      command: 'creativeDisconnect';
+      sourceVar: string;
+    }
+  | {
+      command: 'creativeUpdateValue';
+      varName: string;
+      newValue: number;
+    }
+  | {
+      command: 'creativeDeleteNode';
+      varName: string;
+    }
+  | {
+      command: 'creativeStackPush';
+      varName: string;
+      value: number;
+    }
+  | {
+      command: 'creativeQueuePush';
+      varName: string;
+      value: number;
+    }
+  | {
+      command: 'creativeRequestSync';
+    };
 
 export type ExtensionMessage =
   | { command: 'examples'; examples: ExampleEntry[] }
@@ -106,4 +153,62 @@ export type ExtensionMessage =
     }
   | {
       command: 'tutorialClosed';
+    }
+  | {
+      command: 'edgeApplied';
+      filePath: string;
+      sourceNodeId?: string;
+      targetNodeId?: string;
+      edit: SourceEdit;
+      highlighted: { startLine: number; endLine: number };
+      message: string;
+    }
+  | {
+      command: 'edgeError';
+      message: string;
+      details?: string;
+    }
+  | {
+      command: 'astRefreshed';
+      filePath: string;
+      nodeCount: number;
+    }
+  | {
+      command: 'creativeSyncState';
+      nodes: Array<{ id: string; varName: string; value: number; x: number; y: number; nextVar?: string | null }>;
+      stacks: Array<{ id: string; varName: string; elements: number[]; x: number; y: number }>;
+      queues: Array<{ id: string; varName: string; elements: number[]; x: number; y: number }>;
+    }
+  | {
+      command: 'creativeFeedback';
+      ok: boolean;
+      message: string;
+      highlightLine?: number;
     };
+
+/**
+ * Convenience: narrow a GraphEdgeLinker result into the messages the extension
+ * host sends back to the webview UI.
+ */
+export function edgeResultMessages(result: EdgeLinkResult): ExtensionMessage[] {
+  if (!result.ok) {
+    return [
+      {
+        command: 'edgeError',
+        message: result.error ?? 'Link could not be applied to source code.',
+        details: result.message,
+      },
+    ];
+  }
+  return [
+    {
+      command: 'edgeApplied',
+      filePath: result.filePath!,
+      edit: result.edit!,
+      highlighted: result.highlighted!,
+      message: result.message ?? 'Edge wired into source code.',
+    },
+  ];
+}
+
+export type { GraphEdge, GraphNodeMeta, EdgeLinkResult };
