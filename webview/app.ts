@@ -308,21 +308,47 @@ const lessonGuideToggle = document.getElementById('lessonGuideToggle') as HTMLEl
 const lessonGuideIcon = document.getElementById('lessonGuideIcon') as HTMLElement | null;
 const lessonGuideBody = document.getElementById('lessonGuideBody') as HTMLElement | null;
 
+function formatInlineMarkdown(text: string): string {
+  return text
+    // LaTeX math symbols commonly output by LLMs
+    .replace(/\$\s*\\rightarrow\s*\$|\\rightarrow/g, '→')
+    .replace(/\$\s*\\leftarrow\s*\$|\\leftarrow/g, '←')
+    .replace(/\$\s*\\le(?:q)?\s*\$|\\le(?:q)?/g, '≤')
+    .replace(/\$\s*\\ge(?:q)?\s*\$|\\ge(?:q)?/g, '≥')
+    .replace(/\$\s*\\neq\s*\$|\\neq/g, '≠')
+    .replace(/\$([^$]+)\$/g, '<span class="math-tex">$1</span>')
+    // Bold & italic
+    .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    // Inline code: `code`
+    .replace(/`([^`]+)`/g, '<code class="guide-code">$1</code>');
+}
+
 function renderSimpleMarkdown(md: string): string {
   if (!md) return '';
   const lines = md.split('\n');
   const htmlLines: string[] = [];
-  let inList = false;
+  let inUl = false;
+  let inOl = false;
   let inCode = false;
 
+  const closeLists = () => {
+    if (inUl) { htmlLines.push('</ul>'); inUl = false; }
+    if (inOl) { htmlLines.push('</ol>'); inOl = false; }
+  };
+
   for (let rawLine of lines) {
-    if (rawLine.trim().startsWith('```')) {
+    const trimmed = rawLine.trim();
+
+    // Code blocks ```
+    if (trimmed.startsWith('```')) {
       if (inCode) {
         htmlLines.push('</code></pre>');
         inCode = false;
       } else {
-        if (inList) { htmlLines.push('</ul>'); inList = false; }
-        const lang = rawLine.trim().slice(3).trim();
+        closeLists();
+        const lang = trimmed.slice(3).trim();
         htmlLines.push(`<pre><code class="lang-${lang || 'cpp'}">`);
         inCode = true;
       }
@@ -338,67 +364,90 @@ function renderSimpleMarkdown(md: string): string {
       continue;
     }
 
+    // Horizontal Rule: ---, ***, ___
+    if (/^(\-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      closeLists();
+      htmlLines.push('<hr class="guide-hr">');
+      continue;
+    }
+
     let line = rawLine
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
+    const lineTrimmed = line.trim();
 
-    // Headers
-    if (line.startsWith('### ')) {
-      if (inList) { htmlLines.push('</ul>'); inList = false; }
-      htmlLines.push(`<h4 class="guide-h4">${line.slice(4)}</h4>`);
+    // Headers: #, ##, ###, ####, #####, ######
+    if (lineTrimmed.startsWith('###### ')) {
+      closeLists();
+      htmlLines.push(`<h6 class="guide-h6">${formatInlineMarkdown(lineTrimmed.slice(7))}</h6>`);
       continue;
     }
-    if (line.startsWith('## ')) {
-      if (inList) { htmlLines.push('</ul>'); inList = false; }
-      htmlLines.push(`<h3 class="guide-h3">${line.slice(3)}</h3>`);
+    if (lineTrimmed.startsWith('##### ')) {
+      closeLists();
+      htmlLines.push(`<h5 class="guide-h5">${formatInlineMarkdown(lineTrimmed.slice(6))}</h5>`);
       continue;
     }
-    if (line.startsWith('# ')) {
-      if (inList) { htmlLines.push('</ul>'); inList = false; }
-      htmlLines.push(`<h2 class="guide-h2">${line.slice(2)}</h2>`);
+    if (lineTrimmed.startsWith('#### ')) {
+      closeLists();
+      htmlLines.push(`<h5 class="guide-h5">${formatInlineMarkdown(lineTrimmed.slice(5))}</h5>`);
+      continue;
+    }
+    if (lineTrimmed.startsWith('### ')) {
+      closeLists();
+      htmlLines.push(`<h4 class="guide-h4">${formatInlineMarkdown(lineTrimmed.slice(4))}</h4>`);
+      continue;
+    }
+    if (lineTrimmed.startsWith('## ')) {
+      closeLists();
+      htmlLines.push(`<h3 class="guide-h3">${formatInlineMarkdown(lineTrimmed.slice(3))}</h3>`);
+      continue;
+    }
+    if (lineTrimmed.startsWith('# ')) {
+      closeLists();
+      htmlLines.push(`<h2 class="guide-h2">${formatInlineMarkdown(lineTrimmed.slice(2))}</h2>`);
       continue;
     }
 
-    // List items
-    const listMatch = line.match(/^\s*[-*]\s+(.*)$/);
-    if (listMatch) {
-      if (!inList) {
+    // Unordered List items (- or * or •)
+    const ulMatch = line.match(/^\s*[-*•]\s+(.*)$/);
+    if (ulMatch) {
+      if (inOl) { htmlLines.push('</ol>'); inOl = false; }
+      if (!inUl) {
         htmlLines.push('<ul class="guide-list">');
-        inList = true;
+        inUl = true;
       }
-      let content = listMatch[1]
-        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-        .replace(/`([^`]+)`/g, '<code class="guide-code">$1</code>');
-      htmlLines.push(`<li>${content}</li>`);
+      htmlLines.push(`<li>${formatInlineMarkdown(ulMatch[1])}</li>`);
       continue;
-    } else {
-      if (inList) {
-        htmlLines.push('</ul>');
-        inList = false;
+    }
+
+    // Ordered List items (1. , 2. , etc.)
+    const olMatch = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (olMatch) {
+      if (inUl) { htmlLines.push('</ul>'); inUl = false; }
+      if (!inOl) {
+        htmlLines.push('<ol class="guide-ol">');
+        inOl = true;
       }
+      htmlLines.push(`<li>${formatInlineMarkdown(olMatch[1])}</li>`);
+      continue;
     }
 
     // Empty lines
-    if (!line.trim()) {
+    if (!lineTrimmed) {
+      closeLists();
       htmlLines.push('<div class="guide-spacer"></div>');
       continue;
     }
 
-    // Inline formatting for paragraphs
-    let formatted = line
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-      .replace(/`([^`]+)`/g, '<code class="guide-code">$1</code>');
-    htmlLines.push(`<p class="guide-p">${formatted}</p>`);
+    // Paragraph
+    closeLists();
+    htmlLines.push(`<p class="guide-p">${formatInlineMarkdown(lineTrimmed)}</p>`);
   }
 
+  closeLists();
   if (inCode) {
     htmlLines.push('</code></pre>');
-  }
-  if (inList) {
-    htmlLines.push('</ul>');
   }
 
   return htmlLines.join('\n');

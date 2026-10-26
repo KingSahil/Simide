@@ -2978,8 +2978,50 @@ body.is-canvas-panning * {
   margin-bottom: 4px;
 }
 
+.guide-h5 {
+  font-size: 11px;
+  font-weight: 700;
+  color: #c084fc;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+.guide-h6 {
+  font-size: 10px;
+  font-weight: 700;
+  color: #f59e0b;
+  margin-top: 6px;
+  margin-bottom: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .guide-p {
   margin-bottom: 4px;
+}
+
+.guide-hr {
+  border: none;
+  border-top: 1px solid #30363d;
+  margin: 10px 0;
+}
+
+.math-tex {
+  font-style: italic;
+  color: #a5d6ff;
+  font-family: 'Cambria Math', 'Times New Roman', serif;
+  padding: 0 2px;
+}
+
+.guide-ol {
+  padding-left: 18px;
+  margin-bottom: 6px;
+  color: var(--primary-text);
+}
+
+.guide-ol li {
+  margin-bottom: 4px;
+  line-height: 1.5;
 }
 
 .guide-list {
