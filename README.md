@@ -267,16 +267,38 @@ For code contributions, read the [developer guide](docs/agent-guide.md), create 
 
 ## Authors & Maintainers
 
-SimIDE is actively designed, maintained, and developed by:
+SimIDE is collaboratively architected, engineered, and maintained by a passionate team of developers:
 
-- **[Sahil Gupta](https://github.com/KingSahil)**
-- **[Sparsh Khanna](https://github.com/Khanna-Sparsh)**
-- **[Yogita](https://github.com/Codewith-Yogita)**
-- **[Anubhav G.](https://github.com/anubhav-1207)**
-- **[Rivanshu Behal](https://github.com/Rivanshu88)**
-- **[FeV06](https://github.com/FeV06)**
+- **[Sahil Gupta (KingSahil)](https://github.com/KingSahil)** — *Project Lead & Core Maintainer*
+  - Conceived SimIDE core vision, extension lifecycle, and architecture.
+  - Engineered bidirectional Creative Mode (visual-to-code linked lists, stacks, and circular queues) and visual linking canvas.
+  - Built DAP debugger session engine, multi-file execution controller, GDB/LLDB launch configurations, and quick-launch examples dashboard.
+  - Authored project releases, packaging pipelines (VSIX), and interactive launch demos.
 
-Special thanks to all community contributors!
+- **[Sparsh Khanna](https://github.com/Khanna-Sparsh)** — *Core Architect & Full-Stack Developer*
+  - Engineered end-to-end `std::string` & C-string visual simulation engine (character arrays, ASCII/null-terminators, two-pointer movement, sliding window bounds, and static AST pattern detection).
+  - Designed and developed the AI Assistant, Problem Statement Tutor, and pedagogical guidance engine ("Where am I stuck?", "Explain State", "Generate Fix") with zero-spoiler Socratic tutoring.
+  - Built the cross-provider Settings Dashboard (⚙️) with secure OS keychain token management (`SecretStorage`) for Google Gemini, OpenAI, and local LLMs (Ollama / LM Studio).
+  - Created live Web Speech Audio Narration (TTS) with code-aware speech normalization and multi-speed Auto-Play simulation.
+  - Built native canvas background panning, camera auto-centering, rich markdown/math parser, and extensive headless GDB test suites.
+
+- **[Yogita (Codewith-Yogita)](https://github.com/Codewith-Yogita)** — *Frontend & Data Structure Visualizer Developer*
+  - Designed and implemented linear Array data structure simulation inspired by VisuAlgo, including indexed cells, in-place value mutations, and swap hop animations.
+  - Engineered interactive Stack simulation with LIFO behavior, vertical bottom-to-top layout, floating `TOP` pointer indicator, and overflow/underflow state handling.
+  - Built custom editor stack frame highlights, UI action chips, and active line styling.
+
+- **[Rivanshu Behal](https://github.com/Rivanshu88)** — *Graph Algorithms & Visual Modeling Contributor*
+  - Engineered end-to-end Graph data structure visualization (adjacency matrices, vertex-edge representations, directed and undirected weighted graphs).
+  - Integrated force-directed graph physics, stable vertex ID tracking, and graph runtime state extraction.
+
+- **[FeV06](https://github.com/FeV06)** — *Tutorial Platform & Security Contributor*
+  - Architected GitHub Tutorial Ingestion system, allowing live streaming and importing of remote DSA tutorials via GitHub repositories.
+  - Authored the Tutorial Author SDK, manifest schema validation (`simide.json`), in-memory zero-dependency tarball extractor, and C++ source security linter.
+
+- **[Anubhav G.](https://github.com/anubhav-1207)** — *Core State Extraction & Runtime Contributor*
+  - Contributed to `StateExtractor` improvements, runtime inspection, and debug state stability across helper function frames.
+
+Special thanks to all community contributors, testers, and educators who help make data structures intuitive!
 
 ## License
 

@@ -12,11 +12,12 @@ This documentation is written in clear, plain language to provide human develope
 
 | Document | Purpose | Audience |
 | :--- | :--- | :--- |
-| **[System Architecture](file:///c:/Projects/vscode-extension/docs/architecture.md)** | High-level system overview, 4 core subsystems, physics canvas, technology stack, and state machine (Linked Lists, Binary Trees, Arrays, Stacks, and Circular Queues). | All Developers & AI Agents |
+| **[System Architecture](./architecture.md)** | High-level system overview, 4 core subsystems, physics canvas, technology stack, and state machine (Linked Lists, Binary Trees, Arrays, Stacks, Circular Queues, Strings, and Graphs). | All Developers & AI Agents |
 | **[Tutorial Authoring Guide (AI & Educators)](./tutorial-authoring-guide.md)** | Complete specification for creating community DSA tutorials on GitHub, schema reference, and validator CLI. | AI Agents & Educators |
-| **[Component Deep-Dive](file:///c:/Projects/vscode-extension/docs/components.md)** | File-by-file breakdown of every module across debug, visualization, sidebar, and webview layers. | Developers extending features |
-| **[Data Flow & Lifecycles](file:///c:/Projects/vscode-extension/docs/data-flow.md)** | Step-by-step traces with sequence diagrams for session launch, stepping, traversals, deletions, stacks, and circular queues. | Debugging & Protocol Engineers |
-| **[AI Agent Guide](file:///c:/Projects/vscode-extension/docs/agent-guide.md)** | Guidelines, conventions, testing recipes, and instructions for adding new data structures (Trees, Arrays, Stacks, Queues). | AI Agents & Automations |
+| **[Component Deep-Dive](./components.md)** | File-by-file breakdown of every module across debug, visualization, AI service, audio TTS, sidebar, and webview layers. | Developers extending features |
+| **[Data Flow & Lifecycles](./data-flow.md)** | Step-by-step traces with sequence diagrams for session launch, stepping, traversals, deletions, stacks, and circular queues. | Debugging & Protocol Engineers |
+| **[Graph Visualization](./graph-visualization.md)** | Force-directed graph visualization, adjacency representations, and stable vertex tracking. | Algorithm & Graph Developers |
+| **[AI Agent Guide](./agent-guide.md)** | Guidelines, conventions, testing recipes, and instructions for adding new data structures (Trees, Arrays, Stacks, Queues, Strings). | AI Agents & Automations |
 
 ---
 
@@ -24,7 +25,7 @@ This documentation is written in clear, plain language to provide human develope
 
 **SimIDE** is a Visual Studio Code extension that bridges the gap between raw C++ debugging and visual data structure comprehension.
 
-When students or developers learn C++ data structures (like linked lists, trees, arrays, stacks, and queues), they often struggle with pointers, dynamic heap allocations (`new Node`), address assignments (`first->next = second;`), in-place pointer reversals (LeetCode 206), memory deletions (`delete temp;`), stack overflow/underflow, and circular queue pointer wrap-around (`(rear + 1) % capacity`). Traditional debuggers only show tabular hexadecimal memory addresses (such as `0x74a3b0`) and variable names in a small sidebar, which is hard for beginners to parse.
+When students or developers learn C++ data structures (like linked lists, trees, arrays, stacks, queues, strings, and graphs), they often struggle with pointers, dynamic heap allocations (`new Node`), address assignments (`first->next = second;`), in-place pointer reversals (LeetCode 206), memory deletions (`delete temp;`), stack overflow/underflow, and circular queue pointer wrap-around (`(rear + 1) % capacity`). Traditional debuggers only show tabular hexadecimal memory addresses (such as `0x74a3b0`) and variable names in a small sidebar, which is hard for beginners to parse.
 
 SimIDE solves this by:
 1. **Compiling real C++ code** with debug flags (`-g -O0 -std=c++17`).
@@ -37,11 +38,13 @@ SimIDE solves this by:
    - **Linear Arrays**: Interactive strip with cell elevation, value mutations, swapping animations, and active index pointers (`i`, `j`, `k`, `low`, `high`, `mid`).
    - **Stacks (LIFO)**: Vertical tray with spring elevation, active `TOP` pointer badge, push/pop animations, and overflow/underflow detection.
    - **Circular Queues (FIFO)**: Horizontal ring buffer with persistent `FRONT` and `REAR` badges across all function traversals, real-time wrap-around indicator (`(rear + 1) % capacity = 0`), and empty/full state protection.
+   - **Strings**: Character cell arrays with ASCII tags, null terminators, two-pointer movement tracking (`left`, `right`), and sliding window slice visualization.
+   - **Graphs**: Force-directed layout of vertices and weighted directed/undirected edges.
 6. **Live-streaming console output** from `std::cout` and `printf` in a dedicated sidebar terminal card.
 7. **Tracking heap memory freeing** via `delete`, visually explaining unlinking, bypassing, and deletions.
-8. **Seamless Multi-File Switching**: Effortlessly switch between different C++ files without editor tab hijacking or redirect loops.
-9. **Zero-Distraction Debugging**: Automatically suppresses internal debug console popups, build task terminals, and third-party AI sidebars.
-10. **Generating pedagogical teaching explanations** explaining pointer aliasing, heap allocations, tree branching, stack push/pop, queue enqueues, and circular wrap-around.
+8. **Audio Narration (TTS) & Auto-Play**: Synchronous speech synthesis describing mutations in natural English with variable simulation speeds (1x, 1.5x, 2.5x).
+9. **Pedagogical AI Tutor & Problem Statement Helper**: Socratic guidance ("Where am I stuck?", "Explain State", "Generate Fix") comparing the student's target problem statement with visual heap invariants and code.
+10. **Bidirectional Creative Mode**: Drag-and-drop visual data structure construction with real-time bidirectional C++ code generation.
 11. **Enabling non-destructive time-travel scrubbing**, allowing learners to walk backward and forward through previous snapshots without restarting the C++ process.
 
 ---

@@ -4,41 +4,42 @@ This document provides a component-by-component tour of the codebase. Each file'
 
 ---
 
-## Codebase Map
-
 ```
-c:\Projects\vscode-extension\
+Simide/
 ├── src/
 │   ├── extension.ts                 # Main extension activator & command registrar
+│   ├── ai/
+│   │   ├── aiService.ts             # Multi-provider LLM client (Gemini, OpenAI, Ollama), prompt builder
+│   │   └── secretManager.ts         # Encrypted API key storage via VS Code SecretStorage
+│   ├── creative/
+│   │   └── creativeCodeManager.ts   # Bidirectional visual-to-code sync (Lists, Stacks, Queues, Strings)
 │   ├── debug/
 │   │   ├── compiler.ts              # C++ compiler detection, build runner & file lock safety
 │   │   ├── debugSessionManager.ts   # Debugger discovery & cppdbg launch configuration
 │   │   ├── debugAdapterTracker.ts   # DAP message listener for stopped/continued events
 │   │   ├── executionController.ts   # Stepping, continuing & pausing operations
 │   │   └── stateExtractor.ts        # Dynamic pointer discovery, multi-function & terminal tracing
+│   ├── parser/
+│   │   └── clangAstParser.ts        # Clang AST inspection for struct models and variable scopes
+│   ├── tutorial/
+│   │   ├── tutorialManager.ts       # GitHub tarball downloader, path sanitizer, lesson manager
+│   │   └── tutorialModel.ts         # simide.json manifest schema validation & security auditing
+│   ├── cli/
+│   │   └── validator.ts             # CLI validator for standalone tutorial authors (bin/simide.js)
 │   ├── visualization/
-│   │   ├── linkedListModel.ts       # TypeScript interfaces (ListNode, PointerVariable, Snapshot)
+│   │   ├── linkedListModel.ts       # TypeScript interfaces (ListNode, Stack, Queue, String, Graph)
 │   │   ├── explanationGenerator.ts  # Pedagogical rule engine generating plain explanations
 │   │   └── snapshotManager.ts       # Time-travel buffer & history scrubbing engine
 │   └── sidebar/
 │       ├── linkedListViewProvider.ts# WebviewViewProvider, IPC dispatcher & editor decorator
 │       └── messages.ts              # Strongly typed message contracts between extension & UI
 ├── webview/
-│   ├── index.html                   # Sidebar HTML template with terminal & canvas
-│   ├── styles.css                   # Dark mode design tokens, dot-grid canvas & terminal styling
-│   └── app.ts                       # D3 force physics simulation, pan/zoom camera & live terminal
-├── test/
-│   ├── mockVscode.ts                # Standalone mock implementation of vscode API
-│   ├── runTests.ts                  # Unit & integration tests for compiler, model, GFG & LeetCode
-│   ├── gdbExecution.test.ts         # Real GDB stepping & LeetCode 206 reversal headless tests
-│   └── runAll.js                    # Test bundle builder & orchestrator
-├── examples/
-│   ├── linked-list.cpp              # Singly linked list with printList traversal
-│   ├── leetcode-206-reverse.cpp     # LeetCode 206 in-place three-pointer reversal
-│   ├── gfg-push-delete.cpp          # GeeksforGeeks push(&head_ref) and deleteNode
-│   ├── oop-linked-list.cpp          # Object-Oriented C++ class LinkedList
-│   └── bst-traversals.cpp           # BST insertion, traversals, visiting indicators & Case A deletion
-├── esbuild.js                       # Fast build script bundling extension and webview
+│   ├── index.html                   # Sidebar HTML template with AI drawer, settings modal, canvas
+│   ├── styles.css                   # Glassmorphic dark mode styling, typography, canvas tokens
+│   └── app.ts                       # D3 force physics, audio TTS, auto-play, AI assistant client
+├── test/                            # 19 standalone & integration test suites (GDB, AI, strings, etc.)
+├── examples/                        # Reference C++ DSA algorithms (lists, trees, arrays, stacks, strings)
+├── esbuild.js                       # Fast build script bundling extension, webview, and CLI validator
 └── package.json                     # Extension manifest, commands & dependencies
 ```
 
@@ -303,3 +304,38 @@ c:\Projects\vscode-extension\
     - **Pan**: Right-Click Drag, Middle-Click Drag, or Space + Left-Click Drag.
     - **Zoom**: Mouse wheel zooms smoothly centered on the cursor position (range: 0.35x to 2.5x).
     - **Reset**: Double-click canvas or click `↺ Reset` to return to default scale and origin.
+  - **Speech Synthesis (TTS) & Auto-Play Engine**:
+    - Generates spoken descriptions via `window.speechSynthesis` with code token normalization (`->` to "points to", `*` to "dereference", `[i]` to "at index i").
+    - Provides automatic forward stepping with 1x, 1.5x, and 2.5x speed options.
+  - **AI Assistant Drawer & Markdown Engine**:
+    - Dispatches Socratic queries ("Where am I stuck?", "Explain State", "Generate Fix") to `AiService`.
+    - Renders streaming responses using custom markdown parser supporting headers `h1-h6`, bullet/numbered lists, inline code, and LaTeX math symbols.
+    - Provides one-click `⚡ Apply to Code` button to patch fixes directly into the active editor.
+
+---
+
+## 6. AI Assistant & Security Subsystem (`src/ai/`)
+
+### [`src/ai/aiService.ts`](./src/ai/aiService.ts)
+* **What it does**: Multi-provider LLM orchestration engine connecting student problem statements with runtime C++ invariants.
+* **Key Features**:
+  - **Supported Providers**: Google Gemini (`gemini-2.5-flash`), OpenAI (`gpt-4o-mini`), and local OpenAI-compatible endpoints (Ollama, LM Studio).
+  - **Context Packaging**: Packages active source code, active execution line number, runtime visual DSA snapshot (pointer chains, stack/queue elements, string indices), and target problem statement.
+  - **Pedagogical Prompt Engine**: Enforces Socratic hints and invariant checking without prematurely revealing the solution unless explicitly asked via "Generate Fix".
+
+### [`src/ai/secretManager.ts`](./src/ai/secretManager.ts)
+* **What it does**: Secure OS keychain storage for sensitive AI API keys using VS Code's `SecretStorage` API.
+* **Key Features**:
+  - Protects user keys against plaintext exposure in settings files or git repositories.
+  - Supports key validation testing, updating, and revoking across providers.
+
+---
+
+## 7. Creative Mode Subsystem (`src/creative/`)
+
+### [`src/creative/creativeCodeManager.ts`](./src/creative/creativeCodeManager.ts)
+* **What it does**: Synchronizes visual canvas drag-and-drop actions with real-time C++ code generation and AST parsing.
+* **Key Features**:
+  - **Visual-to-Code**: Dragging nodes, connecting pointers (`first->next = second;`), pushing stack items, or typing characters in a string generates idiomatic C++ code.
+  - **Code-to-Visual**: Edits in the editor automatically rebuild the canvas layout.
+
