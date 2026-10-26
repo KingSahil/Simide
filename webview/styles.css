@@ -506,6 +506,13 @@ body.link-mode .graph-node:hover {
   background-color: #2ea043;
 }
 
+.btn-text-action.active {
+  background-color: var(--accent-tint);
+  border-color: var(--main-accent);
+  color: var(--main-accent);
+  font-weight: 600;
+}
+
 .graph-viewport {
   position: relative;
   width: 100%;
@@ -519,7 +526,7 @@ body.link-mode .graph-node:hover {
   overflow: hidden; /* REMOVE ALL SCROLLBARS */
   user-select: none;
   touch-action: none;
-  cursor: default;
+  cursor: grab;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
