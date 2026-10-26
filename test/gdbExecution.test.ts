@@ -8,6 +8,7 @@ import { CppCompiler } from '../src/debug/compiler';
 import { discoverGraphLayout, GraphStateExtractor } from '../src/debug/graphStateExtractor';
 
 const execFileAsync = promisify(execFile);
+const exeExt = process.platform === 'win32' ? '.exe' : '';
 
 function getWindowsShortPath(longPath: string): string {
   if (process.platform !== 'win32') {
@@ -28,7 +29,7 @@ async function testGdbExecution() {
   console.log('=== Running Real GDB Runtime Stepping & State Extraction Test ===\n');
 
   const debugMentorDir = getWindowsShortPath(path.resolve(process.cwd(), 'test/fixtures/.debug-mentor'));
-  const exeFile = 'bst-reference.exe';
+  const exeFile = `bst-reference${exeExt}`;
   const exePath = path.join(debugMentorDir, exeFile);
   assert.ok(fs.existsSync(exePath), 'Compiled executable must exist');
 
@@ -36,18 +37,14 @@ async function testGdbExecution() {
   assert.ok(debuggerInfo, 'GDB must be available');
 
   const gdbCmds = [
-    'break main',
+    'break bst-reference.cpp:131',
+    'break bst-reference.cpp:132',
+    'break bst-reference.cpp:133',
     'run',
-    // Node* root = nullptr;
-    'next',
-    // root = insert(root, 50);
-    'next',
     'print root->data',
-    // root = insert(root, 30);
-    'next',
+    'continue',
     'print root->left->data',
-    // root = insert(root, 70);
-    'next',
+    'continue',
     'print root->right->data',
     'quit',
   ];
@@ -80,7 +77,7 @@ async function testLeetcodeReverseGdb() {
   console.log('=== Running Real GDB Runtime Stepping on LeetCode 206 (Reverse Linked List) ===\n');
 
   const debugMentorDir = getWindowsShortPath(path.resolve(process.cwd(), 'examples/.debug-mentor'));
-  const exeFile = 'leetcode-206-reverse.exe';
+  const exeFile = `leetcode-206-reverse${exeExt}`;
   const exePath = path.join(debugMentorDir, exeFile);
   assert.ok(fs.existsSync(exePath), 'Compiled LeetCode executable must exist');
 
@@ -131,7 +128,7 @@ async function testBstTraversalsGdb() {
   console.log('=== Running Real GDB Stepping on BST Traversals (Preorder, Inorder, Postorder) ===\n');
 
   const debugMentorDir = getWindowsShortPath(path.resolve(process.cwd(), 'examples/.debug-mentor'));
-  const exeFile = 'bst-traversals.exe';
+  const exeFile = `bst-traversals${exeExt}`;
   const exePath = path.join(debugMentorDir, exeFile);
   assert.ok(fs.existsSync(exePath), 'Compiled BST executable must exist');
 
@@ -139,18 +136,14 @@ async function testBstTraversalsGdb() {
   assert.ok(debuggerInfo, 'GDB must be available');
 
   const gdbCmds = [
-    'break main',
+    'break bst-traversals.cpp:90',
+    'break bst-traversals.cpp:91',
+    'break bst-traversals.cpp:92',
     'run',
-    // Node* root = nullptr;
-    'next',
-    // root = insert(root, 50);
-    'next',
     'print root->data',
-    // root = insert(root, 30);
-    'next',
+    'continue',
     'print root->left->data',
-    // root = insert(root, 70);
-    'next',
+    'continue',
     'print root->right->data',
     // Break inside inorder traversal
     'break inorder',
@@ -197,7 +190,7 @@ async function testArrayOperationsGdb() {
   console.log('=== Running Real GDB Stepping on Array Operations (arr[5], updates, swaps, loop) ===\n');
 
   const debugMentorDir = getWindowsShortPath(path.resolve(process.cwd(), 'examples/.debug-mentor'));
-  const exeFile = 'array-operations.exe';
+  const exeFile = `array-operations${exeExt}`;
   const exePath = path.join(debugMentorDir, exeFile);
   assert.ok(fs.existsSync(exePath), 'Compiled Array executable must exist');
 
@@ -205,21 +198,15 @@ async function testArrayOperationsGdb() {
   assert.ok(debuggerInfo, 'GDB must be available');
 
   const gdbCmds = [
-    'break main',
+    'break array-operations.cpp:9',
+    'break array-operations.cpp:12',
+    'break array-operations.cpp:17',
     'run',
-    // Line 6: int arr[5] = {10, 20, 30, 40, 50};
-    'next',
     'print arr[0]',
     'print arr[2]',
-    // Line 9: arr[2] = 99;
-    'next',
+    'continue',
     'print arr[2]',
-    // Line 12: int temp = arr[0];
-    'next',
-    // Line 13: arr[0] = arr[1];
-    'next',
-    // Line 14: arr[1] = temp;
-    'next',
+    'continue',
     'print arr[0]',
     'print arr[1]',
     'quit',
@@ -277,7 +264,7 @@ async function testBstRecursiveReturnGdb() {
   ].join('\n'));
   try {
     const { stdout } = await execFileAsync(debuggerInfo.path,
-      ['-batch', '-x', path.basename(scriptPath), 'bst-traversals.exe'],
+      ['-batch', '-x', path.basename(scriptPath), `bst-traversals${exeExt}`],
       { cwd: debugMentorDir, timeout: 30000 });
     assert.ok(stdout.includes('BEFORE_RETURN:50,30,40,70,60'), stdout);
     assert.ok(stdout.includes('AFTER_RETURN:50,30,40,70,60'), stdout);
@@ -346,7 +333,7 @@ async function testStackOperationsGdb() {
   console.log('=== Running Real GDB Stepping on Stack Operations (LIFO, push, pop, peek) ===\n');
 
   const debugMentorDir = getWindowsShortPath(path.resolve(process.cwd(), 'examples/.debug-mentor'));
-  const exeFile = 'stack-operations.exe';
+  const exeFile = `stack-operations${exeExt}`;
   const exePath = path.join(debugMentorDir, exeFile);
   assert.ok(fs.existsSync(exePath), 'Compiled Stack executable must exist');
 
@@ -354,33 +341,31 @@ async function testStackOperationsGdb() {
   assert.ok(debuggerInfo, 'GDB must be available');
 
   const gdbCmds = [
-    'break main',
+    'break stack-operations.cpp:59',
+    'break stack-operations.cpp:60',
+    'break stack-operations.cpp:61',
+    'break stack-operations.cpp:64',
+    'break stack-operations.cpp:67',
+    'break stack-operations.cpp:70',
+    'break stack-operations.cpp:72',
     'run',
-    // Stack s;
-    'next',
     'print s.top',
     'print s.capacity',
-    // s.push(10);
-    'next',
+    'continue',
     'print s.top',
     'print s.arr[0]',
-    // s.push(20);
-    'next',
+    'continue',
     'print s.top',
     'print s.arr[1]',
-    // s.push(30);
-    'next',
+    'continue',
     'print s.top',
     'print s.arr[2]',
-    // int topVal = s.peek();
-    'next',
+    'continue',
     'print topVal',
-    // int poppedVal = s.pop();
-    'next',
+    'continue',
     'print poppedVal',
     'print s.top',
-    // s.push(40);
-    'next',
+    'continue',
     'print s.top',
     'print s.arr[2]',
     'quit',

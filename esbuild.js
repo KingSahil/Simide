@@ -31,6 +31,19 @@ async function build() {
     logLevel: 'info',
   });
 
+  // CLI Validator bundle (Node)
+  const cliContext = await esbuild.context({
+    entryPoints: ['src/cli/validator.ts'],
+    bundle: true,
+    format: 'cjs',
+    minify: false,
+    sourcemap: true,
+    platform: 'node',
+    outfile: 'dist/cli/validator.js',
+    external: ['vscode'],
+    logLevel: 'info',
+  });
+
   // Webview bundle (Browser)
   const webviewContext = await esbuild.context({
     entryPoints: ['webview/app.ts'],
@@ -46,11 +59,14 @@ async function build() {
   if (isWatch) {
     console.log('[esbuild] Watching for changes...');
     await extContext.watch();
+    await cliContext.watch();
     await webviewContext.watch();
   } else {
     await extContext.rebuild();
+    await cliContext.rebuild();
     await webviewContext.rebuild();
     await extContext.dispose();
+    await cliContext.dispose();
     await webviewContext.dispose();
     console.log('[esbuild] Build complete.');
   }

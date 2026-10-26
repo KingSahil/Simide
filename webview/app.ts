@@ -14,6 +14,7 @@ import {
   isGraphUpdateStateMessage,
   WebviewMessage,
 } from '../src/sidebar/messages';
+import type { GraphEdge } from '../src/sidebar/edgeLinkHandler';
 import {
   getGraphEdgeGeometry,
   getGraphEdgeLabel,
@@ -70,6 +71,158 @@ const explanationText = document.getElementById('explanationText') as HTMLDivEle
 const terminalPlaceholder = document.getElementById('terminalPlaceholder') as HTMLSpanElement;
 const terminalText = document.getElementById('terminalText') as HTMLPreElement;
 const btnClearTerminal = document.getElementById('btnClearTerminal') as HTMLButtonElement;
+// Creative Mode Palette & Action Buttons
+const btnInitialCreative = document.getElementById('btnInitialCreative') as HTMLButtonElement | null;
+const creativePalette = document.getElementById('creativePalette') as HTMLElement | null;
+const dockAddNode = document.getElementById('dockAddNode') as HTMLElement | null;
+const dockAddStack = document.getElementById('dockAddStack') as HTMLElement | null;
+const dockAddQueue = document.getElementById('dockAddQueue') as HTMLElement | null;
+
+// Visual Link Mode state: click NEXT cell or click two graph nodes to wire them in source code.
+let linkMode = false;
+let linkSourceId: string | null = null;
+
+function setLinkMode(on: boolean) {
+  linkMode = on;
+  document.body.classList.toggle('link-mode', on);
+  if (canvasHint) {
+    canvasHint.textContent = on
+      ? 'Link Mode: tap target node to connect next pointer (Esc to cancel)'
+      : 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
+  }
+  if (!on) clearLinkSelection();
+}
+
+function clearLinkSelection() {
+  linkSourceId = null;
+  document.querySelectorAll('.graph-node.link-source, .graph-node.link-target').forEach((el) => {
+    el.classList.remove('link-source', 'link-target');
+  });
+  document.querySelectorAll('.graph-node-next-cell.next-selected').forEach((el) => {
+    el.classList.remove('next-selected');
+  });
+  if (canvasHint && !linkMode) {
+    canvasHint.textContent = 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
+  }
+}
+
+/**
+ * Node tap handler: Handles clicking the NEXT cell to initiate linking,
+ * and selecting a target node to wire source->next = target in C++.
+ * ONLY active in Creative Mode!
+ */
+function onNodeTap(id: string, clickedEl?: HTMLElement) {
+  // Only allow interactive linking in creative mode!
+  if (!isCreativeMode) return;
+
+  const rawId = id.replace(/^node-/, '');
+  const nodeEl = document.getElementById(`node-${rawId}`) || document.getElementById(id);
+  const isNextCell = Boolean(
+    clickedEl?.closest('.graph-node-next-cell') ||
+    (nodeEl && clickedEl && (clickedEl === nodeEl || nodeEl.contains(clickedEl)) &&
+     (clickedEl.getBoundingClientRect().left - nodeEl.getBoundingClientRect().left > nodeEl.offsetWidth * 0.45))
+  );
+
+  // 1. If user tapped on the NEXT block:
+  if (isNextCell) {
+    if (linkSourceId === rawId || linkSourceId === id) {
+      clearLinkSelection();
+      setLinkMode(false);
+      return;
+    }
+    clearLinkSelection();
+    linkSourceId = rawId;
+    if (nodeEl) {
+      nodeEl.classList.add('link-source');
+      const nextCell = nodeEl.querySelector('.graph-node-next-cell');
+      if (nextCell) nextCell.classList.add('next-selected');
+    }
+    setLinkMode(true);
+    const listSnap = currentSnapshot && !isGraphSnapshot(currentSnapshot) ? currentSnapshot : null;
+    const srcNode = listSnap?.nodes.find((n: ListNode) => n.id === rawId || n.id === id || n.variableName === rawId);
+    const srcName = srcNode?.variableName || srcNode?.data || rawId;
+    if (canvasHint) {
+      canvasHint.textContent = `Linking from ${srcName}: now tap target node to connect next pointer (Esc to cancel)`;
+    }
+    return;
+  }
+
+  // 2. If no source node selected yet via NEXT cell:
+  if (!linkSourceId) {
+    return;
+  }
+
+  // If tapped the same node as source: cancel
+  if (linkSourceId === rawId || linkSourceId === id) {
+    clearLinkSelection();
+    setLinkMode(false);
+    return;
+  }
+
+  // We have both source and target nodes!
+  const listSnap = currentSnapshot && !isGraphSnapshot(currentSnapshot) ? currentSnapshot : null;
+  const sourceNode = listSnap?.nodes.find((n: ListNode) => n.id === linkSourceId || n.variableName === linkSourceId);
+  const targetNode = listSnap?.nodes.find((n: ListNode) => n.id === rawId || n.id === id || n.variableName === rawId);
+
+  if (!sourceNode || !targetNode || !currentSnapshot) {
+    clearLinkSelection();
+    setLinkMode(false);
+    return;
+  }
+
+  const filePath = currentSnapshot.source?.file || '';
+  const sName = sourceNode.variableName || String(sourceNode.data);
+  const tName = targetNode.variableName || String(targetNode.data);
+
+  // Connect them in local snapshot model immediately
+  sourceNode.nextId = targetNode.id;
+  targetNode.isDetached = false;
+
+  const edge: GraphEdge = {
+    source: {
+      id: sourceNode.id,
+      name: sName,
+      label: String(sourceNode.data),
+      data: sourceNode.data,
+      file: filePath,
+    },
+    target: {
+      id: targetNode.id,
+      name: tName,
+      label: String(targetNode.data),
+      data: targetNode.data,
+      file: filePath,
+    },
+    kind: 'member-bind',
+    wiringCode: `${sName}->next = ${tName};`,
+  };
+
+  vscode.postMessage({ command: 'createEdge', edge });
+  vscode.postMessage({ command: 'creativeConnect', sourceVar: sName, targetVar: tName });
+
+  // Update canvas instantly with the newly connected spring link!
+  renderDiagram(currentSnapshot, false);
+  clearLinkSelection();
+  setLinkMode(false);
+
+  // Flash connected nodes
+  const flash = (nid: string, cls: string) => {
+    const el = document.getElementById(`node-${nid}`) || document.getElementById(nid);
+    if (el) {
+      el.classList.add(cls);
+      setTimeout(() => el.classList.remove(cls), 2000);
+    }
+  };
+  flash(sourceNode.id, 'link-source');
+  flash(targetNode.id, 'link-target');
+
+  const prev = terminalText.textContent || '';
+  terminalText.style.display = 'block';
+  if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+  terminalText.textContent = prev + `\n[Linked] ${sName}->next = ${tName}; in C++`;
+  const vp = document.getElementById('terminalViewport');
+  if (vp) vp.scrollTop = vp.scrollHeight;
+}
 
 function updateTerminal(output?: string) {
   if (output && output.length > 0) {
@@ -99,6 +252,89 @@ if (btnClearTerminal) {
 const btnInitialVisualize = document.getElementById('btnInitialVisualize') as HTMLButtonElement;
 const btnVisualizeText = document.getElementById('btnVisualizeText') as HTMLElement | null;
 const targetFileName = document.getElementById('targetFileName') as HTMLElement | null;
+const btnExampleStack = document.getElementById('btnExampleStack') as HTMLButtonElement | null;
+const btnExampleArray = document.getElementById('btnExampleArray') as HTMLButtonElement | null;
+const btnExampleLinkedList = document.getElementById('btnExampleLinkedList') as HTMLButtonElement | null;
+const btnExampleTree = document.getElementById('btnExampleTree') as HTMLButtonElement | null;
+const btnImportTutorial = document.getElementById('btnImportTutorial') as HTMLButtonElement | null;
+const tutorialDrawer = document.getElementById('tutorialDrawer') as HTMLElement | null;
+const tutorialTitle = document.getElementById('tutorialTitle') as HTMLElement | null;
+const btnCloseTutorial = document.getElementById('btnCloseTutorial') as HTMLButtonElement | null;
+const lessonSelect = document.getElementById('lessonSelect') as HTMLSelectElement | null;
+const lessonGuideCard = document.getElementById('lessonGuideCard') as HTMLElement | null;
+const lessonGuideToggle = document.getElementById('lessonGuideToggle') as HTMLElement | null;
+const lessonGuideIcon = document.getElementById('lessonGuideIcon') as HTMLElement | null;
+const lessonGuideBody = document.getElementById('lessonGuideBody') as HTMLElement | null;
+
+function renderSimpleMarkdown(md: string): string {
+  if (!md) return '';
+  const lines = md.split('\n');
+  const htmlLines: string[] = [];
+  let inList = false;
+
+  for (let rawLine of lines) {
+    let line = rawLine
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    // Headers
+    if (line.startsWith('### ')) {
+      if (inList) { htmlLines.push('</ul>'); inList = false; }
+      htmlLines.push(`<h4 class="guide-h4">${line.slice(4)}</h4>`);
+      continue;
+    }
+    if (line.startsWith('## ')) {
+      if (inList) { htmlLines.push('</ul>'); inList = false; }
+      htmlLines.push(`<h3 class="guide-h3">${line.slice(3)}</h3>`);
+      continue;
+    }
+    if (line.startsWith('# ')) {
+      if (inList) { htmlLines.push('</ul>'); inList = false; }
+      htmlLines.push(`<h2 class="guide-h2">${line.slice(2)}</h2>`);
+      continue;
+    }
+
+    // List items
+    const listMatch = line.match(/^\s*[-*]\s+(.*)$/);
+    if (listMatch) {
+      if (!inList) {
+        htmlLines.push('<ul class="guide-list">');
+        inList = true;
+      }
+      let content = listMatch[1]
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(/`([^`]+)`/g, '<code class="guide-code">$1</code>');
+      htmlLines.push(`<li>${content}</li>`);
+      continue;
+    } else {
+      if (inList) {
+        htmlLines.push('</ul>');
+        inList = false;
+      }
+    }
+
+    // Empty lines
+    if (!line.trim()) {
+      htmlLines.push('<div class="guide-spacer"></div>');
+      continue;
+    }
+
+    // Inline formatting for paragraphs
+    let formatted = line
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code class="guide-code">$1</code>');
+    htmlLines.push(`<p class="guide-p">${formatted}</p>`);
+  }
+
+  if (inList) {
+    htmlLines.push('</ul>');
+  }
+
+  return htmlLines.join('\n');
+}
 
 const btnPrev = document.getElementById('btnPrev') as HTMLButtonElement;
 const btnNext = document.getElementById('btnNext') as HTMLButtonElement;
@@ -378,8 +614,14 @@ function showView(view: 'initial' | 'loading' | 'active' | 'error') {
   loadingView.style.display = view === 'loading' ? 'flex' : 'none';
   activeView.style.display = view === 'active' ? 'block' : 'none';
   errorView.style.display = view === 'error' ? 'flex' : 'none';
+
   btnRestart.style.display = view === 'active' || view === 'error' ? 'inline-flex' : 'none';
-  document.getElementById('btnHome')!.style.display = view === 'active' || view === 'error' ? 'inline-flex' : 'none';
+  const homeBtn = document.getElementById('btnHome');
+  if (homeBtn) homeBtn.style.display = view === 'active' || view === 'error' ? 'inline-flex' : 'none';
+
+  if (creativePalette) {
+    creativePalette.style.display = (view === 'active' && isCreativeMode) ? 'flex' : 'none';
+  }
 }
 
 // Satisfying physical spring overshoot bounce-back draggable for Stack and Queue elements
@@ -452,7 +694,7 @@ function updateBadge(status: 'idle' | 'running' | 'paused' | 'error' | 'terminat
 }
 
 // Make DOM elements draggable with live arrow updates & zoom support
-function makeDraggable(el: HTMLElement, id: string) {
+function makeDraggable(el: HTMLElement, id: string, onTap?: (id: string, clickedEl?: HTMLElement) => void) {
   el.onpointerdown = (e: PointerEvent) => {
     // Left click only (Right click and middle click are for panning)
     if (e.button !== 0 || isSpacePressed) return;
@@ -487,7 +729,7 @@ function makeDraggable(el: HTMLElement, id: string) {
     };
 
     let dragFinished = false;
-    const finishDrag = (pointerId: number) => {
+    const finishDrag = (pointerId: number, upEv?: PointerEvent) => {
       if (dragFinished) return;
       dragFinished = true;
       try {
@@ -508,6 +750,20 @@ function makeDraggable(el: HTMLElement, id: string) {
       activeSimulation.alphaTarget(0);
       activeSimulation.alpha(0.6).restart();
 
+      if (upEv) {
+        // A tap (press + release without meaningful drag) selects the node in Link Mode.
+        // Use a generous threshold (12px) so slight finger/mouse jitter doesn't cancel the tap.
+        const wasTap =
+          upEv.button === 0 &&
+          Math.abs(upEv.clientX - startMouseX) <= 12 &&
+          Math.abs(upEv.clientY - startMouseY) <= 12;
+        if (wasTap) {
+          const clickedEl =
+            (document.elementFromPoint(upEv.clientX, upEv.clientY) as HTMLElement) || (upEv.target as HTMLElement);
+          onTap?.(id, clickedEl);
+        }
+      }
+
       el.removeEventListener('pointermove', onPointerMove);
       el.removeEventListener('pointerup', onPointerUp);
       el.removeEventListener('pointercancel', onPointerUp);
@@ -515,7 +771,7 @@ function makeDraggable(el: HTMLElement, id: string) {
         cancelActiveNodeDrag = null;
       }
     };
-    const onPointerUp = (upEv: PointerEvent) => finishDrag(upEv.pointerId);
+    const onPointerUp = (upEv: PointerEvent) => finishDrag(upEv.pointerId, upEv);
     const cancelDrag = () => finishDrag(e.pointerId);
 
     cancelActiveNodeDrag = cancelDrag;
@@ -947,6 +1203,28 @@ function renderArrows() {
         end.ny,
         false,
         '#0066FF'
+      );
+    }
+
+    // Node's prev port coordinates (Doubly Linked List): left edge of the card
+    if (node.prevId && nodePositions.has(node.prevId)) {
+      const prevPortX = nodePos.x;
+      const prevPortY = nodePos.y + nodePos.height * 0.75;
+      const prevTargetPos = nodePositions.get(node.prevId)!;
+      const prevTargetCenter = { x: prevTargetPos.x + prevTargetPos.width / 2, y: prevTargetPos.y + prevTargetPos.height / 2 };
+      const prevEnd = getPerimeterIntersection(prevTargetPos, { x: prevPortX, y: prevPortY });
+
+      drawBezierArrow(
+        prevPortX,
+        prevPortY,
+        -1,
+        0.3,
+        prevEnd.x,
+        prevEnd.y,
+        prevEnd.nx,
+        prevEnd.ny,
+        false,
+        '#36C779'
       );
     } else if (nodePositions.has(`badge-null-${node.id}`)) {
       const nullPos = nodePositions.get(`badge-null-${node.id}`)!;
@@ -2014,18 +2292,28 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
   const activeIds = new Set<string>();
 
   if (cardTitle) {
-    if (snapshot.structureType === 'array') {
-      cardTitle.textContent = 'ARRAY';
-    } else if (snapshot.structureType === 'tree') {
-      cardTitle.textContent = 'BINARY TREE';
-    } else if (snapshot.structureType === 'stack') {
-      cardTitle.textContent = 'STACK (LIFO)';
-    } else if (snapshot.structureType === 'queue') {
-      cardTitle.textContent = 'CIRCULAR QUEUE (FIFO)';
-    } else if (snapshot.structureType === 'string') {
-      cardTitle.textContent = 'STRING';
+    if (isCreativeMode) {
+      if (snapshot.structureType === 'stack') {
+        cardTitle.textContent = 'Creative Studio (STACK)';
+      } else if (snapshot.structureType === 'queue') {
+        cardTitle.textContent = 'Creative Studio (QUEUE)';
+      } else {
+        cardTitle.textContent = 'Creative Studio (LINKED LIST)';
+      }
     } else {
-      cardTitle.textContent = 'LINKED LIST';
+      if (snapshot.structureType === 'string') {
+        cardTitle.textContent = 'STRING';
+      } else if (snapshot.structureType === 'array') {
+        cardTitle.textContent = 'ARRAY';
+      } else if (snapshot.structureType === 'tree') {
+        cardTitle.textContent = 'BINARY TREE';
+      } else if (snapshot.structureType === 'stack') {
+        cardTitle.textContent = 'STACK (LIFO)';
+      } else if (snapshot.structureType === 'queue') {
+        cardTitle.textContent = 'CIRCULAR QUEUE (FIFO)';
+      } else {
+        cardTitle.textContent = 'LINKED LIST';
+      }
     }
   }
 
@@ -2232,7 +2520,7 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
       }
 
       registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 46, 46, 'node', resetPositions);
-      makeDraggable(nodeEl, node.id);
+      makeDraggable(nodeEl, node.id, onNodeTap);
 
       if (node.leftId && nodes.some((n) => n.id === node.leftId)) {
         d3Links.push({
@@ -2302,14 +2590,23 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
     }
 
     const nextValDisplay = getNextAddressDisplay(node);
+    const isSelectedSource =
+      linkSourceId === node.id ||
+      (node.variableName && linkSourceId === node.variableName) ||
+      linkSourceId === `node-${node.id}`;
+
+    if (isSelectedSource) {
+      nodeEl.classList.add('link-source');
+    }
 
     nodeEl.innerHTML = `
       <div class="graph-node-body">
+        ${node.prevId !== undefined ? `<div class="graph-node-prev-cell" style="padding: 4px 6px; font-size: 10px; border-right: 1px solid var(--border-color); color: #36c779;"><span class="cell-label" style="display:block; font-size: 8px; opacity: 0.7;">PREV</span>${node.prevId ? '◀' : 'null'}</div>` : ''}
         <div class="graph-node-data-cell">
           <span class="cell-label">DATA</span>
           <span class="cell-val">${node.data}</span>
         </div>
-        <div class="graph-node-next-cell">
+        <div class="graph-node-next-cell ${isSelectedSource ? 'next-selected' : ''}" title="Press NEXT to link to another node">
           <span class="cell-label">NEXT</span>
           <span class="cell-next-val ${node.nextId ? 'has-target' : 'is-null'}">${nextValDisplay}</span>
         </div>
@@ -2320,7 +2617,7 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
     const targetCenterX = 180 + i * 165;
     const targetCenterY = 135;
     registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 126, 50, 'node', resetPositions);
-    makeDraggable(nodeEl, node.id);
+    makeDraggable(nodeEl, node.id, onNodeTap);
 
     const targetNodeExists = Boolean(node.nextId && nodes.some((n) => n.id === node.nextId));
     if (targetNodeExists) {
@@ -2356,7 +2653,8 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
   }
 
   // 3. Render Detached Unlinked Allocations
-  const detachedNodes = nodes.filter((n) => n.isDetached);
+  const renderedNodeIds = new Set(reachableNodes.map((n) => n.id));
+  const detachedNodes = nodes.filter((n) => !renderedNodeIds.has(n.id));
   for (let j = 0; j < detachedNodes.length; j++) {
     const node = detachedNodes[j];
     activeIds.add(node.id);
@@ -2366,6 +2664,14 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
     nodeEl.className = 'graph-node new-created';
 
     const nextValDisplay = getNextAddressDisplay(node);
+    const isDetachedSource =
+      linkSourceId === node.id ||
+      (node.variableName && linkSourceId === node.variableName) ||
+      linkSourceId === `node-${node.id}`;
+
+    if (isDetachedSource) {
+      nodeEl.classList.add('link-source');
+    }
 
     nodeEl.innerHTML = `
       <div class="graph-node-body">
@@ -2373,7 +2679,7 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
           <span class="cell-label">DATA</span>
           <span class="cell-val">${node.data}</span>
         </div>
-        <div class="graph-node-next-cell">
+        <div class="graph-node-next-cell ${isDetachedSource ? 'next-selected' : ''}" title="Press NEXT to link to another node">
           <span class="cell-label">NEXT</span>
           <span class="cell-next-val ${node.nextId ? 'has-target' : 'is-null'}">${nextValDisplay}</span>
         </div>
@@ -2385,7 +2691,7 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
     const targetCenterX = 180 + baseIdx * 165;
     const targetCenterY = 135;
     registerD3Node(node.id, nodeEl, targetCenterX, targetCenterY, 126, 50, 'node', resetPositions);
-    makeDraggable(nodeEl, node.id);
+    makeDraggable(nodeEl, node.id, onNodeTap);
 
     const targetExists = Boolean(node.nextId && nodes.some((n) => n.id === node.nextId));
     if (targetExists) {
@@ -2469,6 +2775,8 @@ const btnHome = document.getElementById('btnHome') as HTMLButtonElement;
 let homeRequested = false;
 btnHome.onclick = () => {
   homeRequested = true;
+  isCreativeMode = false;
+  if (creativePalette) creativePalette.style.display = 'none';
   cancelActiveNodeDrag?.();
   simulation?.stop();
   showView('initial');
@@ -2478,8 +2786,32 @@ btnHome.onclick = () => {
 };
 btnInitialVisualize.onclick = () => {
   homeRequested = false;
+  isCreativeMode = false;
+  if (creativePalette) creativePalette.style.display = 'none';
   vscode.postMessage({ command: 'visualize' });
 };
+
+if (btnImportTutorial) {
+  btnImportTutorial.onclick = () => vscode.postMessage({ command: 'importTutorial' });
+}
+if (btnCloseTutorial) {
+  btnCloseTutorial.onclick = () => vscode.postMessage({ command: 'closeTutorial' });
+}
+if (lessonSelect) {
+  lessonSelect.onchange = () => {
+    const val = lessonSelect.value;
+    if (val) {
+      vscode.postMessage({ command: 'selectLesson', lessonId: val });
+    }
+  };
+}
+if (lessonGuideToggle && lessonGuideBody && lessonGuideIcon) {
+  lessonGuideToggle.onclick = () => {
+    const isHidden = lessonGuideBody.style.display === 'none';
+    lessonGuideBody.style.display = isHidden ? 'block' : 'none';
+    lessonGuideIcon.textContent = isHidden ? 'Hide ▲' : 'Show ▼';
+  };
+}
 
 btnPrev.onclick = () => vscode.postMessage({ command: 'prev' });
 btnNext.onclick = () => vscode.postMessage({ command: 'next' });
@@ -2581,8 +2913,19 @@ graphViewport.addEventListener('dblclick', (e: MouseEvent) => {
   }
 });
 
+// Click background to cancel link mode if user clicked outside any node
+graphViewport.addEventListener('click', (e: MouseEvent) => {
+  if (linkMode && !(e.target as HTMLElement).closest('.graph-node')) {
+    setLinkMode(false);
+  }
+});
+
 // Spacebar hold for pan cursor
 window.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape' && linkMode) {
+    setLinkMode(false);
+    return;
+  }
   if (e.code === 'Space' && !isSpacePressed && document.activeElement?.tagName !== 'INPUT') {
     isSpacePressed = true;
     graphViewport.classList.add('can-pan');
@@ -2602,6 +2945,8 @@ window.addEventListener('message', (event) => {
 
   switch (msg.command) {
     case 'status': {
+      isCreativeMode = false;
+      if (creativePalette) creativePalette.style.display = 'none';
       showView('loading');
       loadingText.textContent = msg.text;
       if (msg.step === 'compiling') {
@@ -2621,6 +2966,8 @@ window.addEventListener('message', (event) => {
     }
 
     case 'home': {
+      isCreativeMode = false;
+      if (creativePalette) creativePalette.style.display = 'none';
       showView('initial');
       updateBadge('idle');
       btnInitialVisualize.disabled = false;
@@ -2630,6 +2977,8 @@ window.addEventListener('message', (event) => {
 
     case 'updateState': {
       if (homeRequested) break;
+      isCreativeMode = false;
+      if (creativePalette) creativePalette.style.display = 'none';
       showView('active');
       const { snapshot, canStepNext, canStepPrev, canRestart, isPaused, isRunning } = msg;
 
@@ -2655,6 +3004,44 @@ window.addEventListener('message', (event) => {
       explanationText.textContent = `${snapshot.explanation}${warningText}`;
       updateTerminal(snapshot.terminalOutput);
       renderDiagram(snapshot, false);
+      currentSnapshot = snapshot;
+      // A re-snapshot replaces all canvas elements, so drop any in-progress link selection.
+      clearLinkSelection();
+      break;
+    }
+
+    case 'edgeApplied': {
+      const { sourceNodeId, targetNodeId, highlighted, message } = msg;
+      const prev = terminalText.textContent || '';
+      terminalText.style.display = 'block';
+      if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+      terminalText.textContent =
+        prev +
+        `\n✓ ${message}\n   Wiring inserted at line ${highlighted.startLine}${
+          highlighted.endLine > highlighted.startLine ? `–${highlighted.endLine}` : ''
+        }`;
+      const vp = document.getElementById('terminalViewport');
+      if (vp) vp.scrollTop = vp.scrollHeight;
+      // Flash the linked nodes on canvas.
+      const flash = (id: string | undefined, cls: string) => {
+        if (!id) return;
+        const el = document.getElementById(`node-${id}`);
+        if (!el) return;
+        el.classList.add(cls);
+        setTimeout(() => el.classList.remove(cls), 2000);
+      };
+      flash(sourceNodeId, 'link-source');
+      flash(targetNodeId, 'link-target');
+      break;
+    }
+
+    case 'edgeError': {
+      const prev = terminalText.textContent || '';
+      terminalText.style.display = 'block';
+      if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+      terminalText.textContent = prev + `\n✗ Link error: ${msg.message}${msg.details ? `\n   ${msg.details}` : ''}`;
+      const vp = document.getElementById('terminalViewport');
+      if (vp) vp.scrollTop = vp.scrollHeight;
       break;
     }
 
@@ -2682,11 +3069,177 @@ window.addEventListener('message', (event) => {
       break;
     }
 
+    case 'creativeFeedback': {
+      const prev = terminalText.textContent || '';
+      terminalText.style.display = 'block';
+      if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+      terminalText.textContent = prev + `\n${msg.ok ? '✓' : '✗'} ${msg.message}`;
+      const vp = document.getElementById('terminalViewport');
+      if (vp) vp.scrollTop = vp.scrollHeight;
+      break;
+    }
+
+    case 'creativeSyncState': {
+      if (!isCreativeMode) break;
+      const snap: LinkedListSnapshot =
+        currentSnapshot && !isGraphSnapshot(currentSnapshot)
+          ? currentSnapshot
+          : createEmptySnapshot();
+      currentSnapshot = snap;
+
+      if (msg.stacks && msg.stacks.length > 0) {
+        const s = msg.stacks[0];
+        const capacity = Math.max(5, s.elements.length + 2);
+        snap.stack = {
+          name: s.varName,
+          elements: s.elements.map((val, idx) => ({
+            id: `stack-elem-${idx}`,
+            value: val,
+            index: idx,
+            isTop: idx === s.elements.length - 1,
+          })),
+          topIndex: s.elements.length - 1,
+          capacity,
+          activeMethod: s.elements.length > 0 ? 'push' : 'init',
+          methodParam: s.elements.length > 0 ? s.elements[s.elements.length - 1] : undefined,
+        };
+        snap.structureType = 'stack';
+        renderDiagram(snap, false);
+        break;
+      }
+
+      if (msg.queues && msg.queues.length > 0) {
+        const q = msg.queues[0];
+        const capacity = Math.max(5, q.elements.length + 2);
+        const slots: QueueSlot[] = [];
+        for (let i = 0; i < capacity; i++) {
+          const hasVal = i < q.elements.length;
+          slots.push({
+            index: i,
+            value: hasVal ? q.elements[i] : null,
+            hasValue: hasVal,
+            isFront: q.elements.length > 0 && i === 0,
+            isRear: q.elements.length > 0 && i === q.elements.length - 1,
+          });
+        }
+        snap.queue = {
+          name: q.varName,
+          slots,
+          front: q.elements.length > 0 ? 0 : -1,
+          rear: q.elements.length > 0 ? q.elements.length - 1 : -1,
+          capacity,
+          size: q.elements.length,
+          isCircular: false,
+          activeMethod: q.elements.length > 0 ? 'enqueue' : 'init',
+          methodParam: q.elements.length > 0 ? q.elements[q.elements.length - 1] : undefined,
+        };
+        snap.structureType = 'queue';
+        renderDiagram(snap, false);
+        break;
+      }
+
+      if (msg.nodes && msg.nodes.length > 0) {
+        snap.structureType = 'linked_list';
+        snap.nodes = msg.nodes.map((pn) => {
+          const isHead = pn.varName === 'head' || (!msg.nodes.some((o) => o.nextVar === pn.varName) && pn.varName !== 'second');
+          return {
+            id: pn.varName,
+            data: pn.value,
+            variableName: pn.varName,
+            nextId: pn.nextVar || undefined,
+            isHead,
+            isDetached: !isHead && !pn.nextVar && !msg.nodes.some((o) => o.nextVar === pn.varName),
+          };
+        });
+        const headNode = snap.nodes.find((n: ListNode) => n.isHead);
+        if (headNode) {
+          snap.hasHead = true;
+          snap.headId = headNode.id;
+        }
+        renderDiagram(snap, false);
+        break;
+      }
+
+      snap.nodes = [];
+      snap.stack = undefined;
+      snap.queue = undefined;
+      snap.hasHead = false;
+      snap.headId = null;
+      renderDiagram(snap, false);
+      break;
+    }
+
     case 'sessionEnded': {
       updateBadge('terminated');
       btnNext.disabled = true;
       btnRestart.disabled = false;
       explanationText.textContent = msg.reason || 'Debugging session finished.';
+      break;
+    }
+
+    case 'tutorialLoaded': {
+      if (loadingView.style.display !== 'none') {
+        showView('initial');
+        updateBadge('idle');
+      }
+      if (tutorialDrawer && tutorialTitle && lessonSelect) {
+        tutorialDrawer.style.display = 'block';
+        tutorialTitle.textContent = msg.manifest.title;
+        lessonSelect.innerHTML = '';
+        msg.manifest.lessons.forEach((l) => {
+          const opt = document.createElement('option');
+          opt.value = l.id;
+          opt.textContent = l.title;
+          if (l.id === msg.activeLessonId) {
+            opt.selected = true;
+          }
+          lessonSelect.appendChild(opt);
+        });
+      }
+      const activeLesson = msg.manifest.lessons.find((l) => l.id === msg.activeLessonId);
+      if (activeLesson && btnVisualizeText) {
+        btnVisualizeText.textContent = `Visualize ${activeLesson.title}`;
+      }
+      if (lessonGuideCard && lessonGuideBody) {
+        if (msg.guideMarkdown) {
+          lessonGuideCard.style.display = 'block';
+          lessonGuideBody.innerHTML = renderSimpleMarkdown(msg.guideMarkdown);
+        } else {
+          lessonGuideCard.style.display = 'none';
+        }
+      }
+      break;
+    }
+
+    case 'lessonChanged': {
+      if (lessonSelect) {
+        lessonSelect.value = msg.lessonId;
+        const opt = lessonSelect.options[lessonSelect.selectedIndex];
+        if (opt && btnVisualizeText) {
+          btnVisualizeText.textContent = `Visualize ${opt.textContent}`;
+        }
+      }
+      if (lessonGuideCard && lessonGuideBody) {
+        if (msg.guideMarkdown) {
+          lessonGuideCard.style.display = 'block';
+          lessonGuideBody.innerHTML = renderSimpleMarkdown(msg.guideMarkdown);
+        } else {
+          lessonGuideCard.style.display = 'none';
+        }
+      }
+      break;
+    }
+
+    case 'tutorialClosed': {
+      if (tutorialDrawer) {
+        tutorialDrawer.style.display = 'none';
+      }
+      if (lessonGuideCard) {
+        lessonGuideCard.style.display = 'none';
+      }
+      if (btnVisualizeText && targetFileName) {
+        btnVisualizeText.textContent = `Visualize ${targetFileName.textContent || 'Active Code'}`;
+      }
       break;
     }
   }
@@ -2724,13 +3277,242 @@ function renderExampleCatalog(examples: import('../src/sidebar/exampleCatalog').
     button.append(title, file);
     button.onclick = () => {
       homeRequested = false;
+      isCreativeMode = false;
+      if (creativePalette) creativePalette.style.display = 'none';
       vscode.postMessage({ command: 'visualizeExample', example: example.fileName });
     };
     group.appendChild(button);
   }
 }
 
-// Initial View
+// ==========================================
+// Creative Mode / Real-Time C++ Studio
+// ==========================================
+
+let isCreativeMode = false;
+
+function createEmptySnapshot(): LinkedListSnapshot {
+  return {
+    stepNumber: 1,
+    explanation: 'Creative Canvas',
+    hasHead: false,
+    headId: null,
+    nodes: [],
+    changeType: 'init',
+    source: { file: targetFileName?.textContent || '', line: 1 },
+  };
+}
+
+function getCreativeSnapshot(): LinkedListSnapshot {
+  if (!currentSnapshot || isGraphSnapshot(currentSnapshot)) {
+    const snap = createEmptySnapshot();
+    currentSnapshot = snap;
+    return snap;
+  }
+  return currentSnapshot;
+}
+
+function openCreativeStudio() {
+  isCreativeMode = true;
+  showView('active');
+  updateBadge('idle');
+
+  if (creativePalette) creativePalette.style.display = 'flex';
+  if (cardTitle) cardTitle.textContent = 'Creative Studio';
+  if (explanationText) {
+    explanationText.textContent =
+      'Creative Mode: Click "+ Node", "+ Stack", or "+ Queue" to build data structures visually and write C++ in real time!';
+  }
+
+  // Creative mode always starts with a blank C++ file and blank canvas
+  const snap = getCreativeSnapshot();
+  snap.structureType = 'linked_list';
+  snap.nodes = [];
+  snap.stack = undefined;
+  snap.queue = undefined;
+  snap.hasHead = false;
+  snap.headId = null;
+  renderDiagram(snap, false);
+
+  if (terminalText) {
+    terminalText.style.display = 'block';
+    if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+    terminalText.textContent =
+      'Creative Mode started with blank C++ file (creative.cpp).\nClick "+ Node", "+ Stack", or "+ Queue" to build data structures and generate C++ in real-time.';
+  }
+
+  vscode.postMessage({ command: 'creativeStart' });
+}
+
+function addCreativeNode() {
+  const snap = getCreativeSnapshot();
+  snap.structureType = 'linked_list';
+  const existing = snap.nodes;
+  let varName = 'head';
+  if (existing.length > 0) {
+    let idx = existing.length + 1;
+    varName = idx === 2 ? 'second' : `node${idx}`;
+    while (existing.some((n: ListNode) => n.variableName === varName || n.id === varName)) {
+      idx++;
+      varName = `node${idx}`;
+    }
+  }
+
+  const value = (existing.length + 1) * 10;
+  const newNode: ListNode = {
+    id: varName,
+    data: value,
+    variableName: varName,
+    isHead: existing.length === 0,
+    isNewlyCreated: true,
+    isDetached: existing.length > 0,
+  };
+
+  snap.nodes.push(newNode);
+  if (newNode.isHead) {
+    snap.hasHead = true;
+    snap.headId = newNode.id;
+  }
+  renderDiagram(snap, false);
+
+  vscode.postMessage({
+    command: 'creativeAddNode',
+    nodeType: 'linkedlist',
+    varName,
+    value,
+  });
+
+  const prev = terminalText.textContent || '';
+  terminalText.style.display = 'block';
+  if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+  terminalText.textContent =
+    prev +
+    `\n[Added] Node* ${varName} = new Node(${value}); in C++\nTap NEXT cell on any node, then tap another node to link them!`;
+  const vp = document.getElementById('terminalViewport');
+  if (vp) vp.scrollTop = vp.scrollHeight;
+}
+
+function addCreativeStack() {
+  const snap = getCreativeSnapshot();
+  const currentStack = snap.stack;
+  const currentCount = currentStack ? currentStack.elements.length : 0;
+  const value = (currentCount + 1) * 10;
+  const capacity = Math.max(5, currentCount + 3);
+
+  const elements: StackElement[] = currentStack ? [...currentStack.elements] : [];
+  elements.push({
+    id: `stack-elem-${currentCount}`,
+    value,
+    index: currentCount,
+    isTop: true,
+    isPushing: true,
+  });
+  if (elements.length > 1) {
+    elements[elements.length - 2].isTop = false;
+    elements[elements.length - 2].isPushing = false;
+  }
+
+  snap.structureType = 'stack';
+  snap.stack = {
+    name: 's',
+    elements,
+    topIndex: elements.length - 1,
+    capacity,
+    activeMethod: 'push',
+    methodParam: value,
+  };
+
+  renderDiagram(snap, false);
+
+  vscode.postMessage({
+    command: 'creativeStackPush',
+    varName: 's',
+    value,
+  });
+
+  const prev = terminalText.textContent || '';
+  terminalText.style.display = 'block';
+  if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+  terminalText.textContent = prev + `\n[Added] s.push(${value}); in C++`;
+  const vp = document.getElementById('terminalViewport');
+  if (vp) vp.scrollTop = vp.scrollHeight;
+}
+
+function addCreativeQueue() {
+  const snap = getCreativeSnapshot();
+  const currentQ = snap.queue;
+  const currentCount = currentQ ? currentQ.size : 0;
+  const value = (currentCount + 1) * 10;
+  const capacity = Math.max(5, currentCount + 3);
+
+  const elements: number[] = [];
+  if (currentQ) {
+    for (let i = 0; i < currentQ.capacity; i++) {
+      if (currentQ.slots[i] && currentQ.slots[i].hasValue && currentQ.slots[i].value !== null) {
+        elements.push(Number(currentQ.slots[i].value));
+      }
+    }
+  }
+  elements.push(value);
+
+  const slots: QueueSlot[] = [];
+  for (let i = 0; i < capacity; i++) {
+    const hasVal = i < elements.length;
+    slots.push({
+      index: i,
+      value: hasVal ? elements[i] : null,
+      hasValue: hasVal,
+      isFront: elements.length > 0 && i === 0,
+      isRear: elements.length > 0 && i === elements.length - 1,
+      isEnqueuing: i === elements.length - 1,
+    });
+  }
+
+  snap.structureType = 'queue';
+  snap.queue = {
+    name: 'q',
+    slots,
+    front: elements.length > 0 ? 0 : -1,
+    rear: elements.length > 0 ? elements.length - 1 : -1,
+    capacity,
+    size: elements.length,
+    isCircular: false,
+    activeMethod: 'enqueue',
+    methodParam: value,
+  };
+
+  renderDiagram(snap, false);
+
+  vscode.postMessage({
+    command: 'creativeQueuePush',
+    varName: 'q',
+    value,
+  });
+
+  const prev = terminalText.textContent || '';
+  terminalText.style.display = 'block';
+  if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+  terminalText.textContent = prev + `\n[Added] q.push(${value}); in C++`;
+  const vp = document.getElementById('terminalViewport');
+  if (vp) vp.scrollTop = vp.scrollHeight;
+}
+
+function setupCreativeEvents() {
+  if (btnInitialCreative) btnInitialCreative.onclick = openCreativeStudio;
+
+  if (dockAddNode) {
+    dockAddNode.onclick = () => addCreativeNode();
+  }
+  if (dockAddStack) {
+    dockAddStack.onclick = () => addCreativeStack();
+  }
+  if (dockAddQueue) {
+    dockAddQueue.onclick = () => addCreativeQueue();
+  }
+}
+
+// Initial View Setup
+setupCreativeEvents();
 showView('initial');
 updateBadge('idle');
 vscode.postMessage({ command: 'requestState' });

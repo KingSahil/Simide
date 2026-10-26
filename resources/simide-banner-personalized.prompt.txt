@@ -1,0 +1,4 @@
+Mode: built-in image generation tool
+Reference: user-provided SimIDE banner and resources/icon.png
+
+undefined

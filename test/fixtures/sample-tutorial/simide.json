@@ -1,0 +1,30 @@
+{
+  "$schema": "https://simide.dev/schemas/v1/tutorial.schema.json",
+  "name": "intro-binary-trees",
+  "version": "1.0.0",
+  "title": "Introduction to Binary Search Trees",
+  "author": "Open Source DSA Contributor",
+  "description": "Learn tree allocation, left/right pointers, and recursive in-order traversal.",
+  "difficulty": "beginner",
+  "structureType": "tree",
+  "compiler": {
+    "standard": "c++17",
+    "flags": ["-g", "-O0"]
+  },
+  "lessons": [
+    {
+      "id": "insert-root",
+      "title": "Lesson 1: Root & Child Insertion",
+      "description": "Understand how heap nodes are linked to root, left, and right.",
+      "path": "lessons/01-insert/main.cpp",
+      "guide": "lessons/01-insert/lesson.md"
+    },
+    {
+      "id": "inorder-traversal",
+      "title": "Lesson 2: Inorder Traversal",
+      "description": "Watch how recursion visits the left subtree, root, then right subtree.",
+      "path": "lessons/02-traversal/main.cpp",
+      "guide": "lessons/02-traversal/lesson.md"
+    }
+  ]
+}

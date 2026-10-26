@@ -121,6 +121,8 @@ export interface ListNode {
   // Linked list pointers
   nextId?: string | null;
   nextAddress?: string | null;
+  prevId?: string | null;
+  prevAddress?: string | null;
   // Binary tree pointers
   leftId?: string | null;
   leftAddress?: string | null;
