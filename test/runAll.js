@@ -24,6 +24,7 @@ esbuild.buildSync({
     'test/codePatcher.test.ts',
     'test/edgeLinkHandler.test.ts',
     'test/creativeCodeManager.test.ts',
+    'test/aiService.test.ts',
   ],
   bundle: true,
   platform: 'node',
@@ -82,6 +83,12 @@ console.log('Running test/masterclassLessons.test.ts...');
 const res4 = spawnSync('node', ['dist/masterclassLessons.test.js'], { stdio: 'inherit' });
 if (res4.status !== 0) {
   process.exit(res4.status || 1);
+}
+
+console.log('Running test/aiService.test.ts...');
+const resAi = spawnSync('node', ['dist/aiService.test.js'], { stdio: 'inherit' });
+if (resAi.status !== 0) {
+  process.exit(resAi.status || 1);
 }
 
 console.log('All tests completed successfully!');

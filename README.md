@@ -64,6 +64,16 @@ first->next = second;
 
 Edits to recognized source patterns refresh the Creative Mode canvas, letting students explore code and diagrams in both directions.
 
+### AI Assistant & Problem Statement Tutor
+
+SimIDE includes an integrated AI tutor that connects the student's target problem statement with active C++ code and real-time visual DSA canvas state:
+- **Problem Statement Input**: Paste assignment requirements or problem descriptions (e.g. LeetCode / HackerRank) directly into the AI Tutor drawer.
+- **Visual State Context**: The AI automatically inspects the visual canvas (pointer chains, stack elements, queue front/rear, string character tiles) and terminal output alongside the C++ code.
+- **Pedagogical Hint Mode ("Where am I stuck?")**: Offers Socratic guidance and flags violated invariants without immediately spoiling the full solution.
+- **Visual State Explainer ("Explain State")**: Explains why the data structure reached its current configuration at the active execution step.
+- **Solution Generator ("Generate Fix")**: Synthesizes working modern C++ code with one-click **⚡ Apply to Code** injection directly into the editor.
+- **Zero API Lock-in & Secure Storage**: Configure your own API key (Google Gemini free tier, OpenAI, or local Ollama / LM Studio) via the Settings Dashboard (⚙️). Keys are encrypted and securely stored in OS keychains using VS Code `SecretStorage`.
+
 ### Follow a GitHub tutorial
 
 Use the sidebar's GitHub import action or run **SimIDE: Import Tutorial from GitHub** from the Command Palette. Enter a compatible repository URL or `owner/repository`, select a lesson, and follow its Markdown guide while stepping through the program.

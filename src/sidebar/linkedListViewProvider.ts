@@ -26,6 +26,8 @@ import { AstCodePatcher } from '../visualization/codePatcher';
 import { ClangAstParser } from '../parser/clangAstParser';
 import { GraphEdgeLinker, GraphEdge } from './edgeLinkHandler';
 import { CreativeCodeManager } from '../creative/creativeCodeManager';
+import { AiSecretManager } from '../ai/secretManager';
+import { AiService } from '../ai/aiService';
 
 export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'debug-mentor.sidebar';
@@ -40,6 +42,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
 
   private isCreativeMode = false;
   private creativeFilePath: string | null = null;
+  private aiSecretManager: AiSecretManager;
 
   // Wiring engine: parses the backing source file with clang and turns a visual
   // graph edge into a precise source-text edit.
@@ -50,9 +53,12 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly exampleStorageUri: vscode.Uri = extensionUri,
-    edgeLinker?: GraphEdgeLinker
+    edgeLinker?: GraphEdgeLinker,
+    secrets?: vscode.SecretStorage,
+    globalState?: vscode.Memento
   ) {
     this.edgeLinker = edgeLinker ?? new GraphEdgeLinker(this.astParser, this.codePatcher);
+    this.aiSecretManager = new AiSecretManager(secrets, globalState);
     this.registerDebugListeners();
   }
 
@@ -227,6 +233,47 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     );
 
     this.sendTargetFileUpdate();
+    this.sendAiKeyStatus();
+  }
+
+  public async sendAiKeyStatus(): Promise<void> {
+    const config = await this.aiSecretManager.getConfig();
+    this.postMessage({
+      command: 'aiKeyStatus',
+      hasKey: Boolean(config && config.apiKey.length > 0),
+      provider: config?.provider,
+      model: config?.model,
+    });
+  }
+
+  private buildSnapshotSummary(snapshot: VisualizationSnapshot | null | undefined): string {
+    if (!snapshot) return 'No active debugger or visualization step.';
+    if (isGraphSnapshot(snapshot)) {
+      const v = snapshot.graph.vertices.map((vx) => `${vx.id}(val=${vx.value})`).join(', ');
+      const e = snapshot.graph.edges.map((ed) => `${ed.sourceId}->${ed.targetId}`).join(', ');
+      return `Graph (step ${snapshot.stepNumber}): Vertices: [${v}], Edges: [${e}]. Explanation: ${snapshot.explanation}`;
+    }
+    const snap = snapshot as LinkedListSnapshot;
+    const parts: string[] = [`Step ${snap.stepNumber}: ${snap.explanation}`];
+    if (snap.structureType === 'string' && snap.strings && snap.strings.length > 0) {
+      for (const s of snap.strings) {
+        const chars = s.elements.map((el) => `'${el.char}'`).join(', ');
+        parts.push(`String "${s.name}" (len ${s.length}): [${chars}]`);
+      }
+    } else if (snap.structureType === 'stack' && snap.stack) {
+      parts.push(`Stack "${snap.stack.name}" (topIndex=${snap.stack.topIndex}): [${snap.stack.elements.map(el => el.value).join(', ')}]`);
+    } else if (snap.structureType === 'queue' && snap.queue) {
+      const vals = snap.queue.slots.filter(sl => sl.hasValue).map(sl => sl.value).join(', ');
+      parts.push(`Queue "${snap.queue.name}" (front=${snap.queue.front}, rear=${snap.queue.rear}): [${vals}]`);
+    } else if (snap.structureType === 'array' && snap.arrays && snap.arrays.length > 0) {
+      for (const a of snap.arrays) {
+        parts.push(`Array "${a.name}": [${a.elements.map(el => el.value).join(', ')}]`);
+      }
+    } else if (snap.nodes && snap.nodes.length > 0) {
+      const chain = snap.nodes.map(n => `${n.variableName || n.id}(data=${n.data}, next=${n.nextId || 'null'})`).join(' -> ');
+      parts.push(`Linked List: ${chain}`);
+    }
+    return parts.join('\n');
   }
 
   public sendTargetFileUpdate(): void {
@@ -702,6 +749,117 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
           stacks: [],
           queues: [],
           strings: [],
+        });
+        break;
+      }
+
+      case 'aiCheckKeyStatus': {
+        await this.sendAiKeyStatus();
+        break;
+      }
+
+      case 'aiSaveKey': {
+        await this.aiSecretManager.saveConfig({
+          provider: message.provider,
+          apiKey: message.apiKey,
+          customEndpoint: message.customEndpoint,
+          model: message.model,
+        });
+        await this.sendAiKeyStatus();
+        this.postMessage({
+          command: 'aiTestResult',
+          ok: true,
+          message: 'AI API credentials saved securely!',
+        });
+        break;
+      }
+
+      case 'aiDeleteKey': {
+        await this.aiSecretManager.deleteConfig();
+        await this.sendAiKeyStatus();
+        this.postMessage({
+          command: 'aiTestResult',
+          ok: true,
+          message: 'AI API key removed.',
+        });
+        break;
+      }
+
+      case 'aiTestKey': {
+        const res = await AiService.testKey({
+          provider: message.provider,
+          apiKey: message.apiKey,
+          customEndpoint: message.customEndpoint,
+          model: message.model,
+        });
+        this.postMessage({
+          command: 'aiTestResult',
+          ok: res.ok,
+          message: res.message,
+        });
+        break;
+      }
+
+      case 'aiAsk': {
+        const config = await this.aiSecretManager.getConfig();
+        if (!config || !config.apiKey) {
+          this.postMessage({
+            command: 'aiError',
+            message: 'No API key configured. Click ⚙️ to configure your Gemini or OpenAI API key.',
+          });
+          break;
+        }
+
+        const editor = vscode.window.activeTextEditor || (await this.getOrCreateCppEditor());
+        const activeCode = editor?.document.getText() || '';
+        const fileName = editor
+          ? path.basename(editor.document.fileName)
+          : this.creativeFilePath
+          ? path.basename(this.creativeFilePath)
+          : 'source.cpp';
+        const snap = this.snapshotManager.getCurrentSnapshot();
+        const snapSummary = this.buildSnapshotSummary(snap);
+        const termOutput = StateExtractor.getAccumulatedTerminalOutput();
+
+        try {
+          const answer = await AiService.ask(config, {
+            problemStatement: message.problemStatement,
+            promptType: message.promptType,
+            userMessage: message.userMessage,
+            activeCode,
+            fileName,
+            visualSnapshotSummary: snapSummary,
+            terminalOutput: termOutput,
+          });
+          this.postMessage({
+            command: 'aiResponse',
+            text: answer,
+            promptType: message.promptType,
+          });
+        } catch (err: any) {
+          this.postMessage({
+            command: 'aiError',
+            message: err.message || 'AI request failed.',
+          });
+        }
+        break;
+      }
+
+      case 'aiApplyCode': {
+        const editor = vscode.window.activeTextEditor || (await this.getOrCreateCppEditor());
+        if (!editor) {
+          this.postMessage({
+            command: 'aiError',
+            message: 'No active C++ editor found to insert solution.',
+          });
+          break;
+        }
+        const fullRange = new vscode.Range(0, 0, editor.document.lineCount, 0);
+        const success = await editor.edit((b) => b.replace(fullRange, message.code));
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: success,
+          message: success ? 'AI solution applied to editor!' : 'Could not apply code to editor.',
         });
         break;
       }

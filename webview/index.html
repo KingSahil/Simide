@@ -26,6 +26,17 @@
       </div>
       <div class="header-actions">
         <button id="btnHome" class="btn btn-restart" title="End this simulation and return Home" style="display: none;">← Home</button>
+        <button id="btnAiTutorToggle" class="btn-ai-header" title="Simide AI Assistant & Problem Statement Tutor">
+          <span class="ai-sparkle-icon">✨</span>
+          <span>AI Tutor</span>
+          <span id="aiKeyIndicator" class="ai-key-indicator" title="API Key Status"></span>
+        </button>
+        <button id="btnOpenAiSettings" class="btn-icon-header" title="AI Settings & API Key Configuration">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
         <div id="sessionBadge" class="session-badge">
           <span id="badgeDot" class="badge-dot"></span>
           <span id="badgeText">Idle</span>
@@ -39,6 +50,137 @@
         </button>
       </div>
     </header>
+
+    <!-- AI Settings Modal (Dashboard for API Key Management) -->
+    <div id="aiSettingsModal" class="ai-modal-backdrop" style="display: none;">
+      <div class="ai-modal-dialog">
+        <div class="ai-modal-header">
+          <div class="ai-modal-title-group">
+            <span class="ai-sparkle-glyph">✨</span>
+            <span class="ai-modal-title">AI Provider & API Key Setup</span>
+          </div>
+          <button id="btnCloseAiSettings" class="btn-modal-close" title="Close Settings">✕</button>
+        </div>
+        
+        <div class="ai-modal-body">
+          <p class="ai-modal-desc">
+            Configure your AI key to enable live solution synthesis, bug localization, and real-time visual DSA tutoring.
+          </p>
+
+          <div class="ai-form-group">
+            <label for="aiProviderSelect" class="ai-label">AI Provider</label>
+            <select id="aiProviderSelect" class="ai-input ai-select">
+              <option value="gemini">Google Gemini (Recommended — Generous Free Tier)</option>
+              <option value="openai">OpenAI (GPT-4o / GPT-4o-mini)</option>
+              <option value="custom">Custom / Local LLM (Ollama, LM Studio)</option>
+            </select>
+          </div>
+
+          <div class="ai-form-group" id="aiEndpointGroup" style="display: none;">
+            <label for="aiCustomEndpoint" class="ai-label">Custom Endpoint URL</label>
+            <input type="text" id="aiCustomEndpoint" class="ai-input" placeholder="http://localhost:11434/v1">
+            <span class="ai-input-hint">OpenAI-compatible server URL (e.g. Ollama or LM Studio)</span>
+          </div>
+
+          <div class="ai-form-group">
+            <label for="aiApiKeyInput" class="ai-label">API Key</label>
+            <div class="ai-input-password-row">
+              <input type="password" id="aiApiKeyInput" class="ai-input" placeholder="Paste your API key here...">
+              <button id="btnToggleApiKeyMask" class="btn-toggle-mask" type="button" title="Show / Hide Key">👁</button>
+            </div>
+            <div class="ai-key-help-row">
+              <a id="aiKeyHelpLink" href="https://aistudio.google.com/app/apikey" target="_blank" class="ai-link">
+                Get a free Google Gemini API key ↗
+              </a>
+              <span id="aiKeyStoredBadge" class="ai-badge-encrypted">🔒 Saved in VS Code Secrets</span>
+            </div>
+          </div>
+
+          <div class="ai-form-group">
+            <label for="aiModelInput" class="ai-label">Model Name <span class="ai-optional">(Optional)</span></label>
+            <input type="text" id="aiModelInput" class="ai-input" placeholder="gemini-1.5-flash (default)">
+          </div>
+
+          <div id="aiTestFeedback" class="ai-feedback-banner" style="display: none;"></div>
+        </div>
+
+        <div class="ai-modal-footer">
+          <button id="btnAiDeleteKey" class="btn btn-secondary btn-danger-subtle" title="Delete stored API key">
+            Remove Key
+          </button>
+          <div class="ai-footer-primary-actions">
+            <button id="btnAiTestKey" class="btn btn-secondary" title="Verify key connectivity">
+              🧪 Test Connection
+            </button>
+            <button id="btnAiSaveKey" class="btn btn-primary" title="Save API credentials">
+              💾 Save Key
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI Solution & Problem Statement Tutor Drawer -->
+    <div id="aiTutorDrawer" class="ai-tutor-drawer" style="display: none;">
+      <div class="ai-drawer-header">
+        <div class="ai-drawer-title-row">
+          <span class="ai-sparkle-glyph">✨</span>
+          <span class="ai-drawer-title">Simide AI Tutor</span>
+        </div>
+        <div class="ai-drawer-header-actions">
+          <button id="btnOpenAiSettingsFromDrawer" class="btn-icon-subtle" title="AI Settings">⚙️</button>
+          <button id="btnCloseAiDrawer" class="btn-icon-subtle" title="Close AI Assistant">✕</button>
+        </div>
+      </div>
+
+      <div class="ai-drawer-body">
+        <!-- Problem Statement Section -->
+        <div class="ai-section">
+          <div class="ai-section-title-row">
+            <label for="aiProblemInput" class="ai-section-title">Problem Statement & Requirements</label>
+            <span class="ai-tag">Target Goal</span>
+          </div>
+          <textarea id="aiProblemInput" class="ai-textarea" rows="3" placeholder="Paste your problem description or assignment prompt here (e.g., 'Given a singly linked list, reverse it in-place and return the new head...')."></textarea>
+        </div>
+
+        <!-- Attached Context Indicator -->
+        <div class="ai-context-indicator">
+          <div class="ai-context-dot"></div>
+          <span class="ai-context-text">Context: <code id="aiContextFileName">active code</code> + Visual Canvas State</span>
+        </div>
+
+        <!-- Quick AI Mode Actions -->
+        <div class="ai-action-buttons">
+          <button id="btnAiHint" class="btn-ai-action btn-ai-hint" title="Socratic guidance without spoiling the answer">
+            💡 Where am I stuck?
+          </button>
+          <button id="btnAiExplain" class="btn-ai-action btn-ai-explain" title="Explain why current visual data structure state is at this step">
+            🔍 Explain State
+          </button>
+          <button id="btnAiSolve" class="btn-ai-action btn-ai-solve" title="Generate the complete working C++ solution">
+            ⚡ Generate Fix
+          </button>
+        </div>
+
+        <!-- Custom Question Prompt -->
+        <div class="ai-custom-prompt-row">
+          <input type="text" id="aiCustomInput" class="ai-custom-input" placeholder="Ask specific question about your code or pointers...">
+          <button id="btnAiAskCustom" class="btn btn-secondary btn-sm">Ask</button>
+        </div>
+
+        <!-- AI Response Container -->
+        <div id="aiResponseContainer" class="ai-response-container" style="display: none;">
+          <div class="ai-response-header">
+            <span class="ai-response-badge" id="aiResponseBadge">Response</span>
+            <div class="ai-response-actions">
+              <button id="btnAiCopyCode" class="btn-text-action" style="display: none;" title="Copy Code">📋 Copy</button>
+              <button id="btnAiApplyCode" class="btn-text-action btn-apply-action" style="display: none;" title="Inject solution into editor">⚡ Apply to Code</button>
+            </div>
+          </div>
+          <div id="aiResponseContent" class="ai-response-content"></div>
+        </div>
+      </div>
+    </div>
 
     <!-- Tutorial Curriculum Drawer (Global when tutorial loaded) -->
     <div id="tutorialDrawer" class="tutorial-drawer" style="display: none;">

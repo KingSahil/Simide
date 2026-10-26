@@ -131,6 +131,32 @@ export type WebviewMessage =
     }
   | {
       command: 'creativeStart';
+    }
+  | { command: 'aiCheckKeyStatus' }
+  | {
+      command: 'aiSaveKey';
+      provider: 'gemini' | 'openai' | 'custom';
+      apiKey: string;
+      customEndpoint?: string;
+      model?: string;
+    }
+  | { command: 'aiDeleteKey' }
+  | {
+      command: 'aiTestKey';
+      provider: 'gemini' | 'openai' | 'custom';
+      apiKey: string;
+      customEndpoint?: string;
+      model?: string;
+    }
+  | {
+      command: 'aiAsk';
+      problemStatement: string;
+      promptType: 'hint' | 'explain' | 'solve' | 'custom';
+      userMessage?: string;
+    }
+  | {
+      command: 'aiApplyCode';
+      code: string;
     };
 
 export type ExtensionMessage =
@@ -208,6 +234,26 @@ export type ExtensionMessage =
       ok: boolean;
       message: string;
       highlightLine?: number;
+    }
+  | {
+      command: 'aiKeyStatus';
+      hasKey: boolean;
+      provider?: 'gemini' | 'openai' | 'custom';
+      model?: string;
+    }
+  | {
+      command: 'aiTestResult';
+      ok: boolean;
+      message: string;
+    }
+  | {
+      command: 'aiResponse';
+      text: string;
+      promptType: string;
+    }
+  | {
+      command: 'aiError';
+      message: string;
     };
 
 /**

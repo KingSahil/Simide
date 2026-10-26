@@ -35,7 +35,13 @@ export function activate(context: vscode.ExtensionContext) {
   const edgeLinker = new GraphEdgeLinker(astParser, codePatcher);
 
   // Register Webview Provider for the sidebar view
-  const provider = new LinkedListViewProvider(context.extensionUri, context.globalStorageUri, edgeLinker);
+  const provider = new LinkedListViewProvider(
+    context.extensionUri,
+    context.globalStorageUri,
+    edgeLinker,
+    context.secrets,
+    context.globalState
+  );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       LinkedListViewProvider.viewType,

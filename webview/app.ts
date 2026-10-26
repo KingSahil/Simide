@@ -81,6 +81,45 @@ const dockAddStack = document.getElementById('dockAddStack') as HTMLElement | nu
 const dockAddQueue = document.getElementById('dockAddQueue') as HTMLElement | null;
 const dockAddString = document.getElementById('dockAddString') as HTMLElement | null;
 
+// AI Tutor & Dashboard DOM Elements
+const btnAiTutorToggle = document.getElementById('btnAiTutorToggle') as HTMLButtonElement | null;
+const aiKeyIndicator = document.getElementById('aiKeyIndicator') as HTMLSpanElement | null;
+const btnOpenAiSettings = document.getElementById('btnOpenAiSettings') as HTMLButtonElement | null;
+
+const aiSettingsModal = document.getElementById('aiSettingsModal') as HTMLDivElement | null;
+const btnCloseAiSettings = document.getElementById('btnCloseAiSettings') as HTMLButtonElement | null;
+const aiProviderSelect = document.getElementById('aiProviderSelect') as HTMLSelectElement | null;
+const aiEndpointGroup = document.getElementById('aiEndpointGroup') as HTMLDivElement | null;
+const aiCustomEndpoint = document.getElementById('aiCustomEndpoint') as HTMLInputElement | null;
+const aiApiKeyInput = document.getElementById('aiApiKeyInput') as HTMLInputElement | null;
+const btnToggleApiKeyMask = document.getElementById('btnToggleApiKeyMask') as HTMLButtonElement | null;
+const aiKeyHelpLink = document.getElementById('aiKeyHelpLink') as HTMLAnchorElement | null;
+const aiKeyStoredBadge = document.getElementById('aiKeyStoredBadge') as HTMLSpanElement | null;
+const aiModelInput = document.getElementById('aiModelInput') as HTMLInputElement | null;
+const aiTestFeedback = document.getElementById('aiTestFeedback') as HTMLDivElement | null;
+const btnAiDeleteKey = document.getElementById('btnAiDeleteKey') as HTMLButtonElement | null;
+const btnAiTestKey = document.getElementById('btnAiTestKey') as HTMLButtonElement | null;
+const btnAiSaveKey = document.getElementById('btnAiSaveKey') as HTMLButtonElement | null;
+
+const aiTutorDrawer = document.getElementById('aiTutorDrawer') as HTMLDivElement | null;
+const btnCloseAiDrawer = document.getElementById('btnCloseAiDrawer') as HTMLButtonElement | null;
+const btnOpenAiSettingsFromDrawer = document.getElementById('btnOpenAiSettingsFromDrawer') as HTMLButtonElement | null;
+const aiProblemInput = document.getElementById('aiProblemInput') as HTMLTextAreaElement | null;
+const aiContextFileName = document.getElementById('aiContextFileName') as HTMLElement | null;
+const btnAiHint = document.getElementById('btnAiHint') as HTMLButtonElement | null;
+const btnAiExplain = document.getElementById('btnAiExplain') as HTMLButtonElement | null;
+const btnAiSolve = document.getElementById('btnAiSolve') as HTMLButtonElement | null;
+const aiCustomInput = document.getElementById('aiCustomInput') as HTMLInputElement | null;
+const btnAiAskCustom = document.getElementById('btnAiAskCustom') as HTMLButtonElement | null;
+const aiResponseContainer = document.getElementById('aiResponseContainer') as HTMLDivElement | null;
+const aiResponseBadge = document.getElementById('aiResponseBadge') as HTMLSpanElement | null;
+const aiResponseContent = document.getElementById('aiResponseContent') as HTMLDivElement | null;
+const btnAiCopyCode = document.getElementById('btnAiCopyCode') as HTMLButtonElement | null;
+const btnAiApplyCode = document.getElementById('btnAiApplyCode') as HTMLButtonElement | null;
+
+let hasAiKey = false;
+let lastExtractedCode: string | null = null;
+
 // Visual Link Mode state: click NEXT cell or click two graph nodes to wire them in source code.
 let linkMode = false;
 let linkSourceId: string | null = null;
@@ -274,8 +313,31 @@ function renderSimpleMarkdown(md: string): string {
   const lines = md.split('\n');
   const htmlLines: string[] = [];
   let inList = false;
+  let inCode = false;
 
   for (let rawLine of lines) {
+    if (rawLine.trim().startsWith('```')) {
+      if (inCode) {
+        htmlLines.push('</code></pre>');
+        inCode = false;
+      } else {
+        if (inList) { htmlLines.push('</ul>'); inList = false; }
+        const lang = rawLine.trim().slice(3).trim();
+        htmlLines.push(`<pre><code class="lang-${lang || 'cpp'}">`);
+        inCode = true;
+      }
+      continue;
+    }
+
+    if (inCode) {
+      const codeLine = rawLine
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      htmlLines.push(codeLine);
+      continue;
+    }
+
     let line = rawLine
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -332,6 +394,9 @@ function renderSimpleMarkdown(md: string): string {
     htmlLines.push(`<p class="guide-p">${formatted}</p>`);
   }
 
+  if (inCode) {
+    htmlLines.push('</code></pre>');
+  }
   if (inList) {
     htmlLines.push('</ul>');
   }
@@ -3494,6 +3559,9 @@ window.addEventListener('message', (event) => {
       if (targetFileName) {
         targetFileName.textContent = msg.fileName;
       }
+      if (aiContextFileName) {
+        aiContextFileName.textContent = msg.fileName;
+      }
       if (btnVisualizeText) {
         btnVisualizeText.textContent = `Visualize ${msg.fileName}`;
       }
@@ -3507,6 +3575,81 @@ window.addEventListener('message', (event) => {
       terminalText.textContent = prev + `\n${msg.ok ? '✓' : '✗'} ${msg.message}`;
       const vp = document.getElementById('terminalViewport');
       if (vp) vp.scrollTop = vp.scrollHeight;
+      break;
+    }
+
+    case 'aiKeyStatus': {
+      hasAiKey = msg.hasKey;
+      if (aiKeyIndicator) {
+        aiKeyIndicator.classList.toggle('configured', hasAiKey);
+      }
+      if (aiKeyStoredBadge) {
+        aiKeyStoredBadge.style.display = hasAiKey ? 'inline-flex' : 'none';
+      }
+      if (btnAiDeleteKey) {
+        btnAiDeleteKey.style.display = hasAiKey ? 'inline-flex' : 'none';
+      }
+      if (msg.provider && aiProviderSelect) {
+        aiProviderSelect.value = msg.provider;
+        if (aiEndpointGroup) {
+          aiEndpointGroup.style.display = msg.provider === 'custom' ? 'flex' : 'none';
+        }
+      }
+      if (msg.model && aiModelInput) {
+        aiModelInput.value = msg.model;
+      }
+      break;
+    }
+
+    case 'aiTestResult': {
+      if (aiTestFeedback) {
+        aiTestFeedback.style.display = 'block';
+        aiTestFeedback.className = `ai-feedback-banner ${msg.ok ? 'success' : 'error'}`;
+        aiTestFeedback.textContent = msg.message;
+      }
+      if (btnAiTestKey) {
+        btnAiTestKey.disabled = false;
+        btnAiTestKey.textContent = '🧪 Test Connection';
+      }
+      if (btnAiSaveKey) {
+        btnAiSaveKey.disabled = false;
+      }
+      break;
+    }
+
+    case 'aiResponse': {
+      setAiButtonsLoading(false);
+      if (aiResponseContainer && aiResponseContent && aiResponseBadge) {
+        aiResponseContainer.style.display = 'flex';
+        aiResponseBadge.textContent = msg.promptType.toUpperCase();
+        aiResponseContent.innerHTML = renderSimpleMarkdown(msg.text);
+
+        // Check if there is a C++ code block in the markdown
+        const codeBlockMatch = /```(?:cpp|c\+\+|c)?\s*([\s\S]*?)```/i.exec(msg.text);
+        if (codeBlockMatch && codeBlockMatch[1].trim()) {
+          lastExtractedCode = codeBlockMatch[1].trim();
+          if (btnAiApplyCode) btnAiApplyCode.style.display = 'inline-flex';
+          if (btnAiCopyCode) btnAiCopyCode.style.display = 'inline-flex';
+        } else {
+          lastExtractedCode = null;
+          if (btnAiApplyCode) btnAiApplyCode.style.display = 'none';
+          if (btnAiCopyCode) btnAiCopyCode.style.display = 'none';
+        }
+        aiResponseContainer.scrollTop = 0;
+      }
+      break;
+    }
+
+    case 'aiError': {
+      setAiButtonsLoading(false);
+      if (aiResponseContainer && aiResponseContent && aiResponseBadge) {
+        aiResponseContainer.style.display = 'flex';
+        aiResponseBadge.textContent = 'ERROR';
+        aiResponseContent.innerHTML = `<span style="color: #ff7b72;">✗ ${escapeHtml(msg.message)}</span>`;
+      }
+      if (!hasAiKey && aiSettingsModal) {
+        openAiSettingsModal();
+      }
       break;
     }
 
@@ -4041,8 +4184,265 @@ function setupCreativeEvents() {
   }
 }
 
+// ==========================================
+// AI Tutor & Settings Event Handlers
+// ==========================================
+
+function setAiButtonsLoading(loading: boolean, actionLabel?: string) {
+  if (btnAiHint) btnAiHint.disabled = loading;
+  if (btnAiExplain) btnAiExplain.disabled = loading;
+  if (btnAiSolve) btnAiSolve.disabled = loading;
+  if (btnAiAskCustom) btnAiAskCustom.disabled = loading;
+
+  if (loading && aiResponseContainer && aiResponseContent && aiResponseBadge) {
+    aiResponseContainer.style.display = 'flex';
+    aiResponseBadge.textContent = 'THINKING...';
+    aiResponseContent.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:#94a3b8;padding:8px 0;"><div class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block;"></div><span>${escapeHtml(actionLabel || 'Analyzing problem, code & visual DSA state...')}</span></div>`;
+  }
+}
+
+function openAiSettingsModal() {
+  if (aiSettingsModal) {
+    aiSettingsModal.style.display = 'flex';
+    if (aiTestFeedback) aiTestFeedback.style.display = 'none';
+    if (aiApiKeyInput) aiApiKeyInput.focus();
+  }
+}
+
+function closeAiSettingsModal() {
+  if (aiSettingsModal) {
+    aiSettingsModal.style.display = 'none';
+  }
+}
+
+function askAi(promptType: 'hint' | 'explain' | 'solve' | 'custom', userMessage?: string) {
+  if (!hasAiKey) {
+    openAiSettingsModal();
+    if (aiTestFeedback) {
+      aiTestFeedback.style.display = 'block';
+      aiTestFeedback.className = 'ai-feedback-banner pending';
+      aiTestFeedback.textContent = 'Please configure your API key below first to use the AI Assistant.';
+    }
+    return;
+  }
+
+  const problemStatement = aiProblemInput?.value.trim() || '';
+  if (!problemStatement && promptType !== 'explain') {
+    if (aiProblemInput) {
+      aiProblemInput.focus();
+      aiProblemInput.placeholder = '⚠️ Please paste your problem statement or requirements here first!';
+      setTimeout(() => {
+        if (aiProblemInput) {
+          aiProblemInput.placeholder = "Paste your problem description or assignment prompt here (e.g., 'Given a singly linked list, reverse it in-place and return the new head...').";
+        }
+      }, 3000);
+    }
+  }
+
+  const labelMap = {
+    hint: 'Formulating pedagogical hint based on canvas state...',
+    explain: 'Connecting visual data structures to execution state...',
+    solve: 'Synthesizing complete C++ solution...',
+    custom: 'Processing question...',
+  };
+
+  setAiButtonsLoading(true, labelMap[promptType]);
+
+  vscode.postMessage({
+    command: 'aiAsk',
+    problemStatement,
+    promptType,
+    userMessage,
+  });
+}
+
+function setupAiEvents() {
+  if (btnAiTutorToggle) {
+    btnAiTutorToggle.onclick = () => {
+      if (!hasAiKey) {
+        openAiSettingsModal();
+      } else {
+        if (aiTutorDrawer) {
+          const isOpen = aiTutorDrawer.style.display !== 'none';
+          aiTutorDrawer.style.display = isOpen ? 'none' : 'flex';
+          if (!isOpen && aiContextFileName && targetFileName) {
+            aiContextFileName.textContent = targetFileName.textContent || 'active code';
+          }
+        }
+      }
+    };
+  }
+
+  if (btnOpenAiSettings) {
+    btnOpenAiSettings.onclick = openAiSettingsModal;
+  }
+  if (btnOpenAiSettingsFromDrawer) {
+    btnOpenAiSettingsFromDrawer.onclick = openAiSettingsModal;
+  }
+  if (btnCloseAiSettings) {
+    btnCloseAiSettings.onclick = closeAiSettingsModal;
+  }
+  if (btnCloseAiDrawer) {
+    btnCloseAiDrawer.onclick = () => {
+      if (aiTutorDrawer) aiTutorDrawer.style.display = 'none';
+    };
+  }
+
+  if (btnToggleApiKeyMask && aiApiKeyInput) {
+    btnToggleApiKeyMask.onclick = () => {
+      aiApiKeyInput.type = aiApiKeyInput.type === 'password' ? 'text' : 'password';
+      btnToggleApiKeyMask.textContent = aiApiKeyInput.type === 'password' ? '👁' : '🔒';
+    };
+  }
+
+  if (aiProviderSelect) {
+    aiProviderSelect.onchange = () => {
+      const val = aiProviderSelect.value;
+      if (aiEndpointGroup) {
+        aiEndpointGroup.style.display = val === 'custom' ? 'flex' : 'none';
+      }
+      if (aiKeyHelpLink) {
+        if (val === 'gemini') {
+          aiKeyHelpLink.href = 'https://aistudio.google.com/app/apikey';
+          aiKeyHelpLink.textContent = 'Get a free Google Gemini API key ↗';
+          if (aiModelInput) aiModelInput.placeholder = 'gemini-1.5-flash (default)';
+        } else if (val === 'openai') {
+          aiKeyHelpLink.href = 'https://platform.openai.com/api-keys';
+          aiKeyHelpLink.textContent = 'Get an OpenAI API key ↗';
+          if (aiModelInput) aiModelInput.placeholder = 'gpt-4o-mini (default)';
+        } else {
+          aiKeyHelpLink.href = 'https://ollama.com/';
+          aiKeyHelpLink.textContent = 'Ollama / Local LLM guide ↗';
+          if (aiModelInput) aiModelInput.placeholder = 'e.g. llama3, qwen2.5-coder';
+        }
+      }
+    };
+  }
+
+  if (btnAiTestKey) {
+    btnAiTestKey.onclick = () => {
+      const apiKey = aiApiKeyInput?.value.trim() || '';
+      if (!apiKey && !hasAiKey) {
+        if (aiTestFeedback) {
+          aiTestFeedback.style.display = 'block';
+          aiTestFeedback.className = 'ai-feedback-banner error';
+          aiTestFeedback.textContent = 'Please enter an API key to test.';
+        }
+        return;
+      }
+      if (aiTestFeedback) {
+        aiTestFeedback.style.display = 'block';
+        aiTestFeedback.className = 'ai-feedback-banner pending';
+        aiTestFeedback.textContent = 'Testing connection with provider...';
+      }
+      btnAiTestKey.disabled = true;
+      btnAiTestKey.textContent = 'Testing...';
+
+      vscode.postMessage({
+        command: 'aiTestKey',
+        provider: (aiProviderSelect?.value as any) || 'gemini',
+        apiKey,
+        customEndpoint: aiCustomEndpoint?.value.trim() || undefined,
+        model: aiModelInput?.value.trim() || undefined,
+      });
+    };
+  }
+
+  if (btnAiSaveKey) {
+    btnAiSaveKey.onclick = () => {
+      const apiKey = aiApiKeyInput?.value.trim() || '';
+      if (!apiKey) {
+        if (aiTestFeedback) {
+          aiTestFeedback.style.display = 'block';
+          aiTestFeedback.className = 'ai-feedback-banner error';
+          aiTestFeedback.textContent = 'API key cannot be empty.';
+        }
+        return;
+      }
+      if (aiTestFeedback) {
+        aiTestFeedback.style.display = 'block';
+        aiTestFeedback.className = 'ai-feedback-banner pending';
+        aiTestFeedback.textContent = 'Saving API key securely in VS Code Secrets...';
+      }
+      vscode.postMessage({
+        command: 'aiSaveKey',
+        provider: (aiProviderSelect?.value as any) || 'gemini',
+        apiKey,
+        customEndpoint: aiCustomEndpoint?.value.trim() || undefined,
+        model: aiModelInput?.value.trim() || undefined,
+      });
+    };
+  }
+
+  if (btnAiDeleteKey) {
+    btnAiDeleteKey.onclick = () => {
+      if (aiApiKeyInput) aiApiKeyInput.value = '';
+      if (aiTestFeedback) {
+        aiTestFeedback.style.display = 'block';
+        aiTestFeedback.className = 'ai-feedback-banner pending';
+        aiTestFeedback.textContent = 'Removing stored API key...';
+      }
+      vscode.postMessage({ command: 'aiDeleteKey' });
+    };
+  }
+
+  if (btnAiHint) {
+    btnAiHint.onclick = () => askAi('hint');
+  }
+  if (btnAiExplain) {
+    btnAiExplain.onclick = () => askAi('explain');
+  }
+  if (btnAiSolve) {
+    btnAiSolve.onclick = () => askAi('solve');
+  }
+  if (btnAiAskCustom) {
+    btnAiAskCustom.onclick = () => {
+      const q = aiCustomInput?.value.trim();
+      if (q) {
+        askAi('custom', q);
+      }
+    };
+  }
+  if (aiCustomInput) {
+    aiCustomInput.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        const q = aiCustomInput.value.trim();
+        if (q) askAi('custom', q);
+      }
+    };
+  }
+
+  if (btnAiCopyCode) {
+    btnAiCopyCode.onclick = () => {
+      if (lastExtractedCode) {
+        navigator.clipboard.writeText(lastExtractedCode);
+        const originalText = btnAiCopyCode.textContent;
+        btnAiCopyCode.textContent = '✓ Copied!';
+        setTimeout(() => {
+          if (btnAiCopyCode) btnAiCopyCode.textContent = originalText;
+        }, 1800);
+      }
+    };
+  }
+
+  if (btnAiApplyCode) {
+    btnAiApplyCode.onclick = () => {
+      if (lastExtractedCode) {
+        vscode.postMessage({
+          command: 'aiApplyCode',
+          code: lastExtractedCode,
+        });
+      }
+    };
+  }
+
+  // Request initial AI key status on load
+  vscode.postMessage({ command: 'aiCheckKeyStatus' });
+}
+
 // Initial View Setup
 setupCreativeEvents();
+setupAiEvents();
 showView('initial');
 updateBadge('idle');
 vscode.postMessage({ command: 'requestState' });
