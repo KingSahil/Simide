@@ -94,13 +94,13 @@ export class CreativeCodeManager {
       }
     }
 
-    // Parse Stacks: std::stack<int> s;
-    const stackRegex = /std::stack\s*<\s*int\s*>\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*;/g;
+    // Parse Stacks: std::stack<int> s; or stack<int> s;
+    const stackRegex = /(?:\bstd::)?stack\s*<\s*int\s*>\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*;/g;
     let stackIdx = 0;
     while ((match = stackRegex.exec(code)) !== null) {
       const varName = match[1];
-      // Find pushes for this stack: s.push(10);
-      const pushRegex = new RegExp(`\\b${varName}\\.push\\s*\\(\\s*(-?\\d+)\\s*\\)\\s*;`, 'g');
+      // Find pushes for this stack: s.push(10); or s.emplace(10);
+      const pushRegex = new RegExp(`\\b${varName}\\.(?:push|emplace)\\s*\\(\\s*(-?\\d+)\\s*\\)\\s*;`, 'g');
       const elements: number[] = [];
       let pushMatch: RegExpExecArray | null;
       while ((pushMatch = pushRegex.exec(code)) !== null) {
@@ -116,12 +116,12 @@ export class CreativeCodeManager {
       stackIdx++;
     }
 
-    // Parse Queues: std::queue<int> q;
-    const queueRegex = /std::queue\s*<\s*int\s*>\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*;/g;
+    // Parse Queues: std::queue<int> q; or queue<int> q;
+    const queueRegex = /(?:\bstd::)?queue\s*<\s*int\s*>\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*;/g;
     let queueIdx = 0;
     while ((match = queueRegex.exec(code)) !== null) {
       const varName = match[1];
-      const pushRegex = new RegExp(`\\b${varName}\\.push\\s*\\(\\s*(-?\\d+)\\s*\\)\\s*;`, 'g');
+      const pushRegex = new RegExp(`\\b${varName}\\.(?:push|emplace)\\s*\\(\\s*(-?\\d+)\\s*\\)\\s*;`, 'g');
       const elements: number[] = [];
       let pushMatch: RegExpExecArray | null;
       while ((pushMatch = pushRegex.exec(code)) !== null) {
@@ -380,28 +380,44 @@ int main() {
     const doc = editor.document;
     let text = doc.getText();
 
-    // Ensure #include <stack> is present
-    if (!text.includes('#include <stack>')) {
+    // 1. If file is completely empty or has no main(), scaffold a complete runnable program
+    if (!text.trim() || !text.includes('main(')) {
+      const boilerplate = `#include <iostream>
+#include <stack>
+
+int main() {
+    std::stack<int> ${varName};
+    ${varName}.push(${value});
+
+    return 0;
+}
+`;
+      const fullRange = new vscode.Range(0, 0, doc.lineCount, 0);
+      const applied = await editor.edit((b) => b.replace(fullRange, boilerplate));
+      if (!applied) return { ok: false, error: 'Failed to write C++ stack boilerplate' };
+      return { ok: true, message: `Created std::stack<int> ${varName} and pushed ${value}`, highlightLine: 6 };
+    }
+
+    // 2. File exists and has main(). Ensure #include <stack> is present at top
+    let workingText = text;
+    if (!workingText.includes('#include <stack>')) {
       await editor.edit((b) => b.insert(new vscode.Position(0, 0), '#include <stack>\n'));
-      text = editor.document.getText();
+      workingText = editor.document.getText();
     }
 
-    // Ensure std::stack<int> varName; exists in main()
-    const stackDeclRegex = new RegExp(`\\bstd::stack\\s*<\\s*int\\s*>\\s*${varName}\\s*;`);
-    if (!stackDeclRegex.test(text)) {
-      const mainPos = this.findMainInsertionPosition(editor.document);
-      if (!mainPos) return { ok: false, error: 'Could not find main() for stack declaration' };
-      await editor.edit((b) => {
-        b.insert(mainPos.position, `    std::stack<int> ${varName};\n`);
-      });
-    }
-
-    // Insert varName.push(value);
+    // 3. Insert declaration (if missing) and push statement in main()
+    const stackDeclRegex = new RegExp(`\\b(?:std::)?stack\\s*<\\s*int\\s*>\\s*${varName}\\s*;`);
     const mainPos = this.findMainInsertionPosition(editor.document);
     if (!mainPos) return { ok: false, error: 'Could not find insertion position in main()' };
-    const pushStmt = `    ${varName}.push(${value});\n`;
+
+    let codeToInsert = '';
+    if (!stackDeclRegex.test(workingText)) {
+      codeToInsert += `    std::stack<int> ${varName};\n`;
+    }
+    codeToInsert += `    ${varName}.push(${value});\n`;
+
     const success = await editor.edit((b) => {
-      b.insert(mainPos.position, pushStmt);
+      b.insert(mainPos.position, codeToInsert);
     });
 
     return {
@@ -422,28 +438,44 @@ int main() {
     const doc = editor.document;
     let text = doc.getText();
 
-    // Ensure #include <queue> is present
-    if (!text.includes('#include <queue>')) {
+    // 1. If file is completely empty or has no main(), scaffold a complete runnable program
+    if (!text.trim() || !text.includes('main(')) {
+      const boilerplate = `#include <iostream>
+#include <queue>
+
+int main() {
+    std::queue<int> ${varName};
+    ${varName}.push(${value});
+
+    return 0;
+}
+`;
+      const fullRange = new vscode.Range(0, 0, doc.lineCount, 0);
+      const applied = await editor.edit((b) => b.replace(fullRange, boilerplate));
+      if (!applied) return { ok: false, error: 'Failed to write C++ queue boilerplate' };
+      return { ok: true, message: `Created std::queue<int> ${varName} and pushed ${value}`, highlightLine: 6 };
+    }
+
+    // 2. File exists and has main(). Ensure #include <queue> is present at top
+    let workingText = text;
+    if (!workingText.includes('#include <queue>')) {
       await editor.edit((b) => b.insert(new vscode.Position(0, 0), '#include <queue>\n'));
-      text = editor.document.getText();
+      workingText = editor.document.getText();
     }
 
-    // Ensure std::queue<int> varName; exists in main()
-    const queueDeclRegex = new RegExp(`\\bstd::queue\\s*<\\s*int\\s*>\\s*${varName}\\s*;`);
-    if (!queueDeclRegex.test(text)) {
-      const mainPos = this.findMainInsertionPosition(editor.document);
-      if (!mainPos) return { ok: false, error: 'Could not find main() for queue declaration' };
-      await editor.edit((b) => {
-        b.insert(mainPos.position, `    std::queue<int> ${varName};\n`);
-      });
-    }
-
-    // Insert varName.push(value);
+    // 3. Insert declaration (if missing) and push statement in main()
+    const queueDeclRegex = new RegExp(`\\b(?:std::)?queue\\s*<\\s*int\\s*>\\s*${varName}\\s*;`);
     const mainPos = this.findMainInsertionPosition(editor.document);
     if (!mainPos) return { ok: false, error: 'Could not find insertion position in main()' };
-    const pushStmt = `    ${varName}.push(${value});\n`;
+
+    let codeToInsert = '';
+    if (!queueDeclRegex.test(workingText)) {
+      codeToInsert += `    std::queue<int> ${varName};\n`;
+    }
+    codeToInsert += `    ${varName}.push(${value});\n`;
+
     const success = await editor.edit((b) => {
-      b.insert(mainPos.position, pushStmt);
+      b.insert(mainPos.position, codeToInsert);
     });
 
     return {

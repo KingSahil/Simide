@@ -2079,16 +2079,26 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
   const activeIds = new Set<string>();
 
   if (cardTitle) {
-    if (snapshot.structureType === 'array') {
-      cardTitle.textContent = 'ARRAY';
-    } else if (snapshot.structureType === 'tree') {
-      cardTitle.textContent = 'BINARY TREE';
-    } else if (snapshot.structureType === 'stack') {
-      cardTitle.textContent = 'STACK (LIFO)';
-    } else if (snapshot.structureType === 'queue') {
-      cardTitle.textContent = 'CIRCULAR QUEUE (FIFO)';
+    if (isCreativeMode) {
+      if (snapshot.structureType === 'stack') {
+        cardTitle.textContent = 'Creative Studio (STACK)';
+      } else if (snapshot.structureType === 'queue') {
+        cardTitle.textContent = 'Creative Studio (QUEUE)';
+      } else {
+        cardTitle.textContent = 'Creative Studio (LINKED LIST)';
+      }
     } else {
-      cardTitle.textContent = 'LINKED LIST';
+      if (snapshot.structureType === 'array') {
+        cardTitle.textContent = 'ARRAY';
+      } else if (snapshot.structureType === 'tree') {
+        cardTitle.textContent = 'BINARY TREE';
+      } else if (snapshot.structureType === 'stack') {
+        cardTitle.textContent = 'STACK (LIFO)';
+      } else if (snapshot.structureType === 'queue') {
+        cardTitle.textContent = 'CIRCULAR QUEUE (FIFO)';
+      } else {
+        cardTitle.textContent = 'LINKED LIST';
+      }
     }
   }
 
@@ -2859,30 +2869,84 @@ window.addEventListener('message', (event) => {
           : createEmptySnapshot();
       currentSnapshot = snap;
 
-      if (!msg.nodes || msg.nodes.length === 0) {
-        snap.nodes = [];
-        snap.hasHead = false;
-        snap.headId = null;
+      if (msg.stacks && msg.stacks.length > 0) {
+        const s = msg.stacks[0];
+        const capacity = Math.max(5, s.elements.length + 2);
+        snap.stack = {
+          name: s.varName,
+          elements: s.elements.map((val, idx) => ({
+            id: `stack-elem-${idx}`,
+            value: val,
+            index: idx,
+            isTop: idx === s.elements.length - 1,
+          })),
+          topIndex: s.elements.length - 1,
+          capacity,
+          activeMethod: s.elements.length > 0 ? 'push' : 'init',
+          methodParam: s.elements.length > 0 ? s.elements[s.elements.length - 1] : undefined,
+        };
+        snap.structureType = 'stack';
         renderDiagram(snap, false);
         break;
       }
 
-      snap.nodes = msg.nodes.map((pn) => {
-        const isHead = pn.varName === 'head' || (!msg.nodes.some((o) => o.nextVar === pn.varName) && pn.varName !== 'second');
-        return {
-          id: pn.varName,
-          data: pn.value,
-          variableName: pn.varName,
-          nextId: pn.nextVar || undefined,
-          isHead,
-          isDetached: !isHead && !pn.nextVar && !msg.nodes.some((o) => o.nextVar === pn.varName),
+      if (msg.queues && msg.queues.length > 0) {
+        const q = msg.queues[0];
+        const capacity = Math.max(5, q.elements.length + 2);
+        const slots: QueueSlot[] = [];
+        for (let i = 0; i < capacity; i++) {
+          const hasVal = i < q.elements.length;
+          slots.push({
+            index: i,
+            value: hasVal ? q.elements[i] : null,
+            hasValue: hasVal,
+            isFront: q.elements.length > 0 && i === 0,
+            isRear: q.elements.length > 0 && i === q.elements.length - 1,
+          });
+        }
+        snap.queue = {
+          name: q.varName,
+          slots,
+          front: q.elements.length > 0 ? 0 : -1,
+          rear: q.elements.length > 0 ? q.elements.length - 1 : -1,
+          capacity,
+          size: q.elements.length,
+          isCircular: false,
+          activeMethod: q.elements.length > 0 ? 'enqueue' : 'init',
+          methodParam: q.elements.length > 0 ? q.elements[q.elements.length - 1] : undefined,
         };
-      });
-      const headNode = snap.nodes.find((n: ListNode) => n.isHead);
-      if (headNode) {
-        snap.hasHead = true;
-        snap.headId = headNode.id;
+        snap.structureType = 'queue';
+        renderDiagram(snap, false);
+        break;
       }
+
+      if (msg.nodes && msg.nodes.length > 0) {
+        snap.structureType = 'linked_list';
+        snap.nodes = msg.nodes.map((pn) => {
+          const isHead = pn.varName === 'head' || (!msg.nodes.some((o) => o.nextVar === pn.varName) && pn.varName !== 'second');
+          return {
+            id: pn.varName,
+            data: pn.value,
+            variableName: pn.varName,
+            nextId: pn.nextVar || undefined,
+            isHead,
+            isDetached: !isHead && !pn.nextVar && !msg.nodes.some((o) => o.nextVar === pn.varName),
+          };
+        });
+        const headNode = snap.nodes.find((n: ListNode) => n.isHead);
+        if (headNode) {
+          snap.hasHead = true;
+          snap.headId = headNode.id;
+        }
+        renderDiagram(snap, false);
+        break;
+      }
+
+      snap.nodes = [];
+      snap.stack = undefined;
+      snap.queue = undefined;
+      snap.hasHead = false;
+      snap.headId = null;
       renderDiagram(snap, false);
       break;
     }
@@ -3039,12 +3103,15 @@ function openCreativeStudio() {
   if (cardTitle) cardTitle.textContent = 'Creative Studio';
   if (explanationText) {
     explanationText.textContent =
-      'Creative Mode: Click "+ Node" or type in editor to create nodes. Tap NEXT block on any node, then tap another node to link them! Code updates in real time.';
+      'Creative Mode: Click "+ Node", "+ Stack", or "+ Queue" to build data structures visually and write C++ in real time!';
   }
 
   // Creative mode always starts with a blank C++ file and blank canvas
   const snap = getCreativeSnapshot();
+  snap.structureType = 'linked_list';
   snap.nodes = [];
+  snap.stack = undefined;
+  snap.queue = undefined;
   snap.hasHead = false;
   snap.headId = null;
   renderDiagram(snap, false);
@@ -3053,7 +3120,7 @@ function openCreativeStudio() {
     terminalText.style.display = 'block';
     if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
     terminalText.textContent =
-      'Creative Mode started with blank C++ file (creative.cpp).\nClick "+ Node" or type in editor to create nodes, then click NEXT cell to link them!';
+      'Creative Mode started with blank C++ file (creative.cpp).\nClick "+ Node", "+ Stack", or "+ Queue" to build data structures and generate C++ in real-time.';
   }
 
   vscode.postMessage({ command: 'creativeStart' });
@@ -3061,6 +3128,7 @@ function openCreativeStudio() {
 
 function addCreativeNode() {
   const snap = getCreativeSnapshot();
+  snap.structureType = 'linked_list';
   const existing = snap.nodes;
   let varName = 'head';
   if (existing.length > 0) {
@@ -3106,6 +3174,111 @@ function addCreativeNode() {
   if (vp) vp.scrollTop = vp.scrollHeight;
 }
 
+function addCreativeStack() {
+  const snap = getCreativeSnapshot();
+  const currentStack = snap.stack;
+  const currentCount = currentStack ? currentStack.elements.length : 0;
+  const value = (currentCount + 1) * 10;
+  const capacity = Math.max(5, currentCount + 3);
+
+  const elements: StackElement[] = currentStack ? [...currentStack.elements] : [];
+  elements.push({
+    id: `stack-elem-${currentCount}`,
+    value,
+    index: currentCount,
+    isTop: true,
+    isPushing: true,
+  });
+  if (elements.length > 1) {
+    elements[elements.length - 2].isTop = false;
+    elements[elements.length - 2].isPushing = false;
+  }
+
+  snap.structureType = 'stack';
+  snap.stack = {
+    name: 's',
+    elements,
+    topIndex: elements.length - 1,
+    capacity,
+    activeMethod: 'push',
+    methodParam: value,
+  };
+
+  renderDiagram(snap, false);
+
+  vscode.postMessage({
+    command: 'creativeStackPush',
+    varName: 's',
+    value,
+  });
+
+  const prev = terminalText.textContent || '';
+  terminalText.style.display = 'block';
+  if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+  terminalText.textContent = prev + `\n[Added] s.push(${value}); in C++`;
+  const vp = document.getElementById('terminalViewport');
+  if (vp) vp.scrollTop = vp.scrollHeight;
+}
+
+function addCreativeQueue() {
+  const snap = getCreativeSnapshot();
+  const currentQ = snap.queue;
+  const currentCount = currentQ ? currentQ.size : 0;
+  const value = (currentCount + 1) * 10;
+  const capacity = Math.max(5, currentCount + 3);
+
+  const elements: number[] = [];
+  if (currentQ) {
+    for (let i = 0; i < currentQ.capacity; i++) {
+      if (currentQ.slots[i] && currentQ.slots[i].hasValue && currentQ.slots[i].value !== null) {
+        elements.push(Number(currentQ.slots[i].value));
+      }
+    }
+  }
+  elements.push(value);
+
+  const slots: QueueSlot[] = [];
+  for (let i = 0; i < capacity; i++) {
+    const hasVal = i < elements.length;
+    slots.push({
+      index: i,
+      value: hasVal ? elements[i] : null,
+      hasValue: hasVal,
+      isFront: elements.length > 0 && i === 0,
+      isRear: elements.length > 0 && i === elements.length - 1,
+      isEnqueuing: i === elements.length - 1,
+    });
+  }
+
+  snap.structureType = 'queue';
+  snap.queue = {
+    name: 'q',
+    slots,
+    front: elements.length > 0 ? 0 : -1,
+    rear: elements.length > 0 ? elements.length - 1 : -1,
+    capacity,
+    size: elements.length,
+    isCircular: false,
+    activeMethod: 'enqueue',
+    methodParam: value,
+  };
+
+  renderDiagram(snap, false);
+
+  vscode.postMessage({
+    command: 'creativeQueuePush',
+    varName: 'q',
+    value,
+  });
+
+  const prev = terminalText.textContent || '';
+  terminalText.style.display = 'block';
+  if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+  terminalText.textContent = prev + `\n[Added] q.push(${value}); in C++`;
+  const vp = document.getElementById('terminalViewport');
+  if (vp) vp.scrollTop = vp.scrollHeight;
+}
+
 function setupCreativeEvents() {
   if (btnInitialCreative) btnInitialCreative.onclick = openCreativeStudio;
 
@@ -3113,26 +3286,10 @@ function setupCreativeEvents() {
     dockAddNode.onclick = () => addCreativeNode();
   }
   if (dockAddStack) {
-    dockAddStack.onclick = () => {
-      vscode.postMessage({ command: 'creativeStackPush', varName: 's', value: 10 });
-      const prev = terminalText.textContent || '';
-      terminalText.style.display = 'block';
-      if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
-      terminalText.textContent = prev + `\n[Created] std::stack<int> s; in C++`;
-      const vp = document.getElementById('terminalViewport');
-      if (vp) vp.scrollTop = vp.scrollHeight;
-    };
+    dockAddStack.onclick = () => addCreativeStack();
   }
   if (dockAddQueue) {
-    dockAddQueue.onclick = () => {
-      vscode.postMessage({ command: 'creativeQueuePush', varName: 'q', value: 10 });
-      const prev = terminalText.textContent || '';
-      terminalText.style.display = 'block';
-      if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
-      terminalText.textContent = prev + `\n[Created] std::queue<int> q; in C++`;
-      const vp = document.getElementById('terminalViewport');
-      if (vp) vp.scrollTop = vp.scrollHeight;
-    };
+    dockAddQueue.onclick = () => addCreativeQueue();
   }
 }
 

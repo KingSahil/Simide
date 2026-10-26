@@ -61,7 +61,80 @@ int main() {
   assert.strictEqual(state.queues[0].varName, 'q');
   assert.deepStrictEqual(state.queues[0].elements, [1, 2]);
 
-  console.log('✓ CreativeCodeManager parsing tests passed!');
+  // 4. Test handleStackPush in a completely blank file
+  const blankDoc = new (class {
+    text = '';
+    getText() { return this.text; }
+    get lineCount() { return this.text.split('\n').length; }
+    positionAt(offset: number) {
+      const lines = this.text.substring(0, offset).split('\n');
+      return { line: lines.length - 1, character: lines[lines.length - 1].length };
+    }
+  })();
+  const blankEditor: any = {
+    document: blankDoc,
+    edit: async (cb: any) => {
+      const b = {
+        replace: (_range: any, val: string) => { blankDoc.text = val; },
+        insert: (pos: any, val: string) => {
+          const lines = blankDoc.text.split('\n');
+          const line = lines[pos.line] || '';
+          lines[pos.line] = line.slice(0, pos.character) + val + line.slice(pos.character);
+          blankDoc.text = lines.join('\n');
+        },
+      };
+      cb(b);
+      return true;
+    },
+  };
+
+  const stackRes = await CreativeCodeManager.handleStackPush(blankEditor, 's', 10);
+  assert.strictEqual(stackRes.ok, true, 'Stack push to blank file should succeed');
+  assert.ok(blankDoc.text.includes('std::stack<int> s;'), 'Should create stack declaration');
+  assert.ok(blankDoc.text.includes('s.push(10);'), 'Should insert initial push');
+
+  // Push second element
+  const stackRes2 = await CreativeCodeManager.handleStackPush(blankEditor, 's', 20);
+  assert.strictEqual(stackRes2.ok, true, 'Second stack push should succeed');
+  assert.ok(blankDoc.text.includes('s.push(20);'), 'Should insert second push');
+
+  // 5. Test handleQueuePush in a completely blank file
+  const blankQueueDoc = new (class {
+    text = '';
+    getText() { return this.text; }
+    get lineCount() { return this.text.split('\n').length; }
+    positionAt(offset: number) {
+      const lines = this.text.substring(0, offset).split('\n');
+      return { line: lines.length - 1, character: lines[lines.length - 1].length };
+    }
+  })();
+  const blankQueueEditor: any = {
+    document: blankQueueDoc,
+    edit: async (cb: any) => {
+      const b = {
+        replace: (_range: any, val: string) => { blankQueueDoc.text = val; },
+        insert: (pos: any, val: string) => {
+          const lines = blankQueueDoc.text.split('\n');
+          const line = lines[pos.line] || '';
+          lines[pos.line] = line.slice(0, pos.character) + val + line.slice(pos.character);
+          blankQueueDoc.text = lines.join('\n');
+        },
+      };
+      cb(b);
+      return true;
+    },
+  };
+
+  const queueRes = await CreativeCodeManager.handleQueuePush(blankQueueEditor, 'q', 10);
+  assert.strictEqual(queueRes.ok, true, 'Queue push to blank file should succeed');
+  assert.ok(blankQueueDoc.text.includes('std::queue<int> q;'), 'Should create queue declaration');
+  assert.ok(blankQueueDoc.text.includes('q.push(10);'), 'Should insert initial push');
+
+  const parsedQueue = CreativeCodeManager.parseExistingCode(blankQueueDoc.text);
+  assert.strictEqual(parsedQueue.queues.length, 1);
+  assert.strictEqual(parsedQueue.queues[0].elements[0], 10);
+
+  console.log('✓ CreativeCodeManager parsing & code generation tests passed!');
 }
 
 run().catch((err) => {
