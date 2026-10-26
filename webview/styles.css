@@ -2447,22 +2447,27 @@ body.is-canvas-panning * {
 .string-board-container {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 28px;
-  padding: 24px 16px;
-  width: 100%;
+  padding: 24px 28px;
+  position: absolute;
+  top: 10px;
+  left: 20px;
+  pointer-events: none;
+  overflow: visible !important;
 }
 
 .string-board {
-  display: flex;
+  display: inline-flex;
   flex-direction: column;
-  align-items: center;
-  background: rgba(15, 23, 42, 0.65);
+  align-items: flex-start;
+  background: rgba(15, 23, 42, 0.75);
   backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
-  padding: 20px 24px;
+  padding: 18px 22px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.36), 0 0 1px 1px rgba(255, 255, 255, 0.05);
+  pointer-events: none;
 }
 
 .string-name-simple {
@@ -2585,7 +2590,8 @@ body.is-canvas-panning * {
   position: relative;
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
-  cursor: default;
+  cursor: grab;
+  pointer-events: auto;
 }
 
 .string-cell:hover {

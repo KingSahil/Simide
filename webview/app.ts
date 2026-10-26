@@ -1707,6 +1707,9 @@ function renderStringDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Li
 
       col.appendChild(cell);
       strip.appendChild(col);
+
+      // Enable interactive dragging with physical spring-back
+      makeStringElementDraggable(cell, Boolean(elem.isActive || elem.isModified || matchingPointers.length > 0));
     }
 
     stripWrapper.appendChild(strip);
@@ -1735,6 +1738,81 @@ function renderStringDiagram(snapshot: LinkedListSnapshot, previousSnapshot?: Li
   }
 
   nodesLayer.appendChild(container);
+
+  // Auto-focus camera on the active string or pointers if outside viewport
+  requestAnimationFrame(() => {
+    const activeCell = container.querySelector('.string-cell.active, .string-cell.modified, .string-cell.compared') as HTMLElement | null;
+    const targetElement = activeCell || container.querySelector('.string-board') as HTMLElement | null;
+    if (targetElement && graphViewport) {
+      const vpRect = graphViewport.getBoundingClientRect();
+      const elRect = targetElement.getBoundingClientRect();
+      if (elRect.left < vpRect.left || elRect.right > vpRect.right || elRect.top < vpRect.top || elRect.bottom > vpRect.bottom) {
+        // Element is partially or completely outside viewport; center it
+        const offsetLeft = targetElement.offsetLeft || 0;
+        const offsetTop = targetElement.offsetTop || 0;
+        const targetX = Math.max(0, (vpRect.width - (targetElement.offsetWidth || 150)) / 2) - offsetLeft;
+        const targetY = Math.max(0, (vpRect.height - (targetElement.offsetHeight || 120)) / 2) - offsetTop;
+        cameraPanX = targetX;
+        cameraPanY = targetY;
+        applyCameraTransform(true);
+      }
+    }
+  });
+}
+
+/**
+ * Enables smooth dragging on a string character cell with an elastic spring bounce-back.
+ */
+function makeStringElementDraggable(cellEl: HTMLElement, isElevated: boolean) {
+  cellEl.onpointerdown = (e: PointerEvent) => {
+    if (e.button !== 0 || isSpacePressed) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    cellEl.style.animation = 'none';
+    (cellEl.style as any).webkitAnimation = 'none';
+    cellEl.setPointerCapture(e.pointerId);
+    cellEl.classList.add('dragging');
+    cellEl.style.zIndex = '10000';
+    cellEl.style.transition = 'none';
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const initialBaseY = isElevated ? -12 : 0;
+
+    const onPointerMove = (moveEv: PointerEvent) => {
+      moveEv.preventDefault();
+      const dx = (moveEv.clientX - startX) / cameraZoom;
+      const dy = (moveEv.clientY - startY) / cameraZoom;
+      cellEl.style.transform = `translate(${dx}px, ${initialBaseY + dy}px) scale(1.12)`;
+    };
+
+    const onPointerUp = (upEv: PointerEvent) => {
+      try {
+        cellEl.releasePointerCapture(upEv.pointerId);
+      } catch {}
+
+      cellEl.classList.remove('dragging');
+      cellEl.style.transition = 'transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease';
+      cellEl.style.transform = isElevated ? 'translate(0px, -12px) scale(1.05)' : 'translate(0px, 0px) scale(1)';
+
+      setTimeout(() => {
+        if (!cellEl.classList.contains('dragging')) {
+          cellEl.style.zIndex = '';
+          cellEl.style.transition = '';
+          cellEl.style.transform = '';
+        }
+      }, 550);
+
+      cellEl.removeEventListener('pointermove', onPointerMove);
+      cellEl.removeEventListener('pointerup', onPointerUp);
+      cellEl.removeEventListener('pointercancel', onPointerUp);
+    };
+
+    cellEl.addEventListener('pointermove', onPointerMove);
+    cellEl.addEventListener('pointerup', onPointerUp);
+    cellEl.addEventListener('pointercancel', onPointerUp);
+  };
 }
 
 /**
@@ -2844,7 +2922,7 @@ graphViewport.addEventListener('contextmenu', (e) => {
 function isInteractiveCanvasElement(target: EventTarget | null): boolean {
   if (!target || !(target instanceof HTMLElement || target instanceof SVGElement)) return false;
   return !!target.closest(
-    '.graph-node, .array-cell, .stack-element-block, .queue-element-block, button, input, select, a, .dock-btn, .creative-palette-dock, .lesson-guide-card, .canvas-controls-overlay, .cell-next-val, .cell-data'
+    '.graph-node, .array-cell, .string-cell, .stack-element-block, .queue-element-block, button, input, select, a, .dock-btn, .creative-palette-dock, .lesson-guide-card, .canvas-controls-overlay, .cell-next-val, .cell-data'
   );
 }
 

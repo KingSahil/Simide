@@ -13,7 +13,7 @@ void reverseString(std::string &s) {
   }
 }
 
-nd e aint main() {
+int main() {
   std::string str = "algorithm";
   reverseString(str);
   std::cout << "Reversed string: " << str << std::endl;
