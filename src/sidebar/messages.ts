@@ -23,6 +23,43 @@ export type WebviewMessage =
   | {
       command: 'requestAST';
       filePath: string;
+    }
+  | {
+      command: 'creativeAddNode';
+      nodeType: 'linkedlist' | 'stack' | 'queue';
+      varName: string;
+      value: number;
+    }
+  | {
+      command: 'creativeConnect';
+      sourceVar: string;
+      targetVar: string;
+    }
+  | {
+      command: 'creativeDisconnect';
+      sourceVar: string;
+    }
+  | {
+      command: 'creativeUpdateValue';
+      varName: string;
+      newValue: number;
+    }
+  | {
+      command: 'creativeDeleteNode';
+      varName: string;
+    }
+  | {
+      command: 'creativeStackPush';
+      varName: string;
+      value: number;
+    }
+  | {
+      command: 'creativeQueuePush';
+      varName: string;
+      value: number;
+    }
+  | {
+      command: 'creativeRequestSync';
     };
 
 export type ExtensionMessage =
@@ -82,6 +119,18 @@ export type ExtensionMessage =
       command: 'astRefreshed';
       filePath: string;
       nodeCount: number;
+    }
+  | {
+      command: 'creativeSyncState';
+      nodes: Array<{ id: string; varName: string; value: number; x: number; y: number; nextVar?: string | null }>;
+      stacks: Array<{ id: string; varName: string; elements: number[]; x: number; y: number }>;
+      queues: Array<{ id: string; varName: string; elements: number[]; x: number; y: number }>;
+    }
+  | {
+      command: 'creativeFeedback';
+      ok: boolean;
+      message: string;
+      highlightLine?: number;
     };
 
 /**

@@ -4,7 +4,7 @@ const { spawnSync } = require('child_process');
 
 console.log('Building test bundle...');
 esbuild.buildSync({
-  entryPoints: ['test/runTests.ts', 'test/gdbExecution.test.ts', 'test/startup.test.ts', 'test/stateExtraction.test.ts', 'test/arrayIndices.test.ts', 'test/oopExtraction.test.ts', 'test/gfgExtraction.test.ts', 'test/codePatcher.test.ts', 'test/edgeLinkHandler.test.ts'],
+  entryPoints: ['test/runTests.ts', 'test/gdbExecution.test.ts', 'test/startup.test.ts', 'test/stateExtraction.test.ts', 'test/arrayIndices.test.ts', 'test/oopExtraction.test.ts', 'test/gfgExtraction.test.ts', 'test/codePatcher.test.ts', 'test/edgeLinkHandler.test.ts', 'test/creativeCodeManager.test.ts'],
   bundle: true,
   platform: 'node',
   outdir: 'dist',
@@ -28,6 +28,9 @@ if (patcher.status !== 0) process.exit(patcher.status || 1);
 console.log('Running test/edgeLinkHandler.test.ts...');
 const edge = spawnSync('node', ['dist/edgeLinkHandler.test.js'], { stdio: 'inherit' });
 if (edge.status !== 0) process.exit(edge.status || 1);
+console.log('Running test/creativeCodeManager.test.ts...');
+const creative = spawnSync('node', ['dist/creativeCodeManager.test.js'], { stdio: 'inherit' });
+if (creative.status !== 0) process.exit(creative.status || 1);
 console.log('Running test/runTests.ts...');
 const res1 = spawnSync('node', ['dist/runTests.js'], { stdio: 'inherit' });
 if (res1.status !== 0) {

@@ -56,7 +56,14 @@ const terminalText = document.getElementById('terminalText') as HTMLPreElement;
 const btnClearTerminal = document.getElementById('btnClearTerminal') as HTMLButtonElement;
 const btnLinkMode = document.getElementById('btnLinkMode') as HTMLButtonElement | null;
 
-// Visual Link Mode state: click two graph nodes to wire them in source code.
+// Creative Mode Palette & Action Buttons
+const btnInitialCreative = document.getElementById('btnInitialCreative') as HTMLButtonElement | null;
+const creativePalette = document.getElementById('creativePalette') as HTMLElement | null;
+const dockAddNode = document.getElementById('dockAddNode') as HTMLElement | null;
+const dockAddStack = document.getElementById('dockAddStack') as HTMLElement | null;
+const dockAddQueue = document.getElementById('dockAddQueue') as HTMLElement | null;
+
+// Visual Link Mode state: click NEXT cell or click two graph nodes to wire them in source code.
 let linkMode = false;
 let linkSourceId: string | null = null;
 
@@ -69,7 +76,7 @@ function setLinkMode(on: boolean) {
   document.body.classList.toggle('link-mode', on);
   if (canvasHint) {
     canvasHint.textContent = on
-      ? 'Link Mode: click a source node, then a target node to wire them in code (Esc to cancel)'
+      ? '🔗 Link Mode: tap NEXT block on source node, then tap target node to wire in C++ (Esc to cancel)'
       : 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
   }
   if (!on) clearLinkSelection();
@@ -80,52 +87,133 @@ function clearLinkSelection() {
   document.querySelectorAll('.graph-node.link-source, .graph-node.link-target').forEach((el) => {
     el.classList.remove('link-source', 'link-target');
   });
+  document.querySelectorAll('.graph-node-next-cell.next-selected').forEach((el) => {
+    el.classList.remove('next-selected');
+  });
+  if (canvasHint && !linkMode) {
+    canvasHint.textContent = 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
+  }
 }
 
 /**
- * Node tap (click without drag) handler for Link Mode. Select a source node,
- * then a target node to post a createEdge request to the extension host.
+ * Node tap handler: Handles clicking the NEXT cell to initiate linking,
+ * and selecting a target node to wire source->next = target in C++.
  */
-function onNodeTap(id: string) {
-  if (!linkMode || !id.startsWith('node-')) return;
-  if (linkSourceId === id) {
+function onNodeTap(id: string, clickedEl?: HTMLElement) {
+  const rawId = id.replace(/^node-/, '');
+  const nodeEl = document.getElementById(`node-${rawId}`) || document.getElementById(id);
+  const isNextCell = Boolean(
+    clickedEl?.closest('.graph-node-next-cell') ||
+    (nodeEl && clickedEl && (clickedEl === nodeEl || nodeEl.contains(clickedEl)) &&
+     (clickedEl.getBoundingClientRect().left - nodeEl.getBoundingClientRect().left > nodeEl.offsetWidth * 0.45))
+  );
+
+  // 1. If user tapped on the NEXT block:
+  if (isNextCell) {
+    if (linkSourceId === rawId || linkSourceId === id) {
+      clearLinkSelection();
+      setLinkMode(false);
+      return;
+    }
     clearLinkSelection();
-    return;
-  }
-  if (!linkSourceId) {
-    linkSourceId = id;
-    const el = document.getElementById(`node-${id}`);
-    if (el) el.classList.add('link-source');
+    linkSourceId = rawId;
+    if (nodeEl) {
+      nodeEl.classList.add('link-source');
+      const nextCell = nodeEl.querySelector('.graph-node-next-cell');
+      if (nextCell) nextCell.classList.add('next-selected');
+    }
+    setLinkMode(true);
+    const srcNode = currentSnapshot?.nodes.find((n) => n.id === rawId || n.id === id || n.variableName === rawId);
+    const srcName = srcNode?.variableName || srcNode?.data || rawId;
+    if (canvasHint) {
+      canvasHint.textContent = `🔗 Linking from ${srcName}: now tap target node to connect next pointer (Esc to cancel)`;
+    }
     return;
   }
 
-  const sourceNode = currentSnapshot?.nodes.find((n) => n.id === linkSourceId);
-  const targetNode = currentSnapshot?.nodes.find((n) => n.id === id);
+  // 2. User tapped on a node body / data cell:
+  if (!linkSourceId) {
+    if (linkMode) {
+      linkSourceId = rawId;
+      if (nodeEl) nodeEl.classList.add('link-source');
+      const srcNode = currentSnapshot?.nodes.find((n) => n.id === rawId || n.id === id || n.variableName === rawId);
+      const srcName = srcNode?.variableName || srcNode?.data || rawId;
+      if (canvasHint) {
+        canvasHint.textContent = `🔗 Linking from ${srcName}: now tap target node to wire (Esc to cancel)`;
+      }
+    }
+    return;
+  }
+
+  // If tapped the same node as source: cancel
+  if (linkSourceId === rawId || linkSourceId === id) {
+    clearLinkSelection();
+    setLinkMode(false);
+    return;
+  }
+
+  // We have both source and target nodes!
+  const sourceNode = currentSnapshot?.nodes.find((n) => n.id === linkSourceId || n.variableName === linkSourceId);
+  const targetNode = currentSnapshot?.nodes.find((n) => n.id === rawId || n.id === id || n.variableName === rawId);
+
   if (!sourceNode || !targetNode || !currentSnapshot) {
     clearLinkSelection();
+    setLinkMode(false);
     return;
   }
 
   const filePath = currentSnapshot.source?.file || '';
+  const sName = sourceNode.variableName || String(sourceNode.data);
+  const tName = targetNode.variableName || String(targetNode.data);
+
+  // Connect them in local snapshot model immediately
+  sourceNode.nextId = targetNode.id;
+  targetNode.isDetached = false;
+
   const edge: GraphEdge = {
     source: {
       id: sourceNode.id,
-      name: sourceNode.variableName || String(sourceNode.data),
+      name: sName,
       label: String(sourceNode.data),
       data: sourceNode.data,
       file: filePath,
     },
     target: {
       id: targetNode.id,
-      name: targetNode.variableName || String(targetNode.data),
+      name: tName,
       label: String(targetNode.data),
       data: targetNode.data,
       file: filePath,
     },
     kind: 'member-bind',
+    wiringCode: `${sName}->next = ${tName};`,
   };
+
   vscode.postMessage({ command: 'createEdge', edge });
+  vscode.postMessage({ command: 'creativeConnect', sourceVar: sName, targetVar: tName });
+
+  // Update canvas instantly with the newly connected spring link!
+  renderDiagram(currentSnapshot, false);
   clearLinkSelection();
+  setLinkMode(false);
+
+  // Flash connected nodes
+  const flash = (nid: string, cls: string) => {
+    const el = document.getElementById(`node-${nid}`) || document.getElementById(nid);
+    if (el) {
+      el.classList.add(cls);
+      setTimeout(() => el.classList.remove(cls), 2000);
+    }
+  };
+  flash(sourceNode.id, 'link-source');
+  flash(targetNode.id, 'link-target');
+
+  const prev = terminalText.textContent || '';
+  terminalText.style.display = 'block';
+  if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+  terminalText.textContent = prev + `\n⚡ Linked: ${sName}->next = ${tName}; in C++`;
+  const vp = document.getElementById('terminalViewport');
+  if (vp) vp.scrollTop = vp.scrollHeight;
 }
 
 function updateTerminal(output?: string) {
@@ -400,7 +488,9 @@ function showView(view: 'initial' | 'loading' | 'active' | 'error') {
   loadingView.style.display = view === 'loading' ? 'flex' : 'none';
   activeView.style.display = view === 'active' ? 'block' : 'none';
   errorView.style.display = view === 'error' ? 'flex' : 'none';
+
   btnRestart.style.display = view === 'active' || view === 'error' ? 'inline-flex' : 'none';
+  if (btnLinkMode) btnLinkMode.style.display = view === 'active' ? 'inline-flex' : 'none';
 }
 
 // Satisfying physical spring overshoot bounce-back draggable for Stack and Queue elements
@@ -473,7 +563,7 @@ function updateBadge(status: 'idle' | 'running' | 'paused' | 'error' | 'terminat
 }
 
 // Make DOM elements draggable with live arrow updates & zoom support
-function makeDraggable(el: HTMLElement, id: string, onTap?: (id: string) => void) {
+function makeDraggable(el: HTMLElement, id: string, onTap?: (id: string, clickedEl?: HTMLElement) => void) {
   el.onpointerdown = (e: PointerEvent) => {
     // Left click only (Right click and middle click are for panning)
     if (e.button !== 0 || isSpacePressed) return;
@@ -534,7 +624,9 @@ function makeDraggable(el: HTMLElement, id: string, onTap?: (id: string) => void
       }
 
       if (wasTap) {
-        onTap?.(id);
+        const clickedEl =
+          (document.elementFromPoint(upEv.clientX, upEv.clientY) as HTMLElement) || (upEv.target as HTMLElement);
+        onTap?.(id, clickedEl);
       }
 
       el.removeEventListener('pointermove', onPointerMove);
@@ -1769,6 +1861,14 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
     }
 
     const nextValDisplay = getNextAddressDisplay(node);
+    const isSelectedSource =
+      linkSourceId === node.id ||
+      (node.variableName && linkSourceId === node.variableName) ||
+      linkSourceId === `node-${node.id}`;
+
+    if (isSelectedSource) {
+      nodeEl.classList.add('link-source');
+    }
 
     nodeEl.innerHTML = `
       <div class="graph-node-body">
@@ -1776,7 +1876,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
           <span class="cell-label">DATA</span>
           <span class="cell-val">${node.data}</span>
         </div>
-        <div class="graph-node-next-cell">
+        <div class="graph-node-next-cell ${isSelectedSource ? 'next-selected' : ''}" title="Press NEXT to link to another node">
           <span class="cell-label">NEXT</span>
           <span class="cell-next-val ${node.nextId ? 'has-target' : 'is-null'}">${nextValDisplay}</span>
         </div>
@@ -1833,6 +1933,14 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
     nodeEl.className = 'graph-node new-created';
 
     const nextValDisplay = getNextAddressDisplay(node);
+    const isDetachedSource =
+      linkSourceId === node.id ||
+      (node.variableName && linkSourceId === node.variableName) ||
+      linkSourceId === `node-${node.id}`;
+
+    if (isDetachedSource) {
+      nodeEl.classList.add('link-source');
+    }
 
     nodeEl.innerHTML = `
       <div class="graph-node-body">
@@ -1840,7 +1948,7 @@ function renderDiagram(snapshot: LinkedListSnapshot, resetPositions: boolean = f
           <span class="cell-label">DATA</span>
           <span class="cell-val">${node.data}</span>
         </div>
-        <div class="graph-node-next-cell">
+        <div class="graph-node-next-cell ${isDetachedSource ? 'next-selected' : ''}" title="Press NEXT to link to another node">
           <span class="cell-label">NEXT</span>
           <span class="cell-next-val ${node.nextId ? 'has-target' : 'is-null'}">${nextValDisplay}</span>
         </div>
@@ -2148,6 +2256,40 @@ window.addEventListener('message', (event) => {
       break;
     }
 
+    case 'creativeFeedback': {
+      const prev = terminalText.textContent || '';
+      terminalText.style.display = 'block';
+      if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+      terminalText.textContent = prev + `\n${msg.ok ? '✓' : '✗'} ${msg.message}`;
+      const vp = document.getElementById('terminalViewport');
+      if (vp) vp.scrollTop = vp.scrollHeight;
+      break;
+    }
+
+    case 'creativeSyncState': {
+      if (msg.nodes && msg.nodes.length > 0) {
+        if (!currentSnapshot) {
+          currentSnapshot = createEmptySnapshot();
+        }
+        const snap = currentSnapshot!;
+        snap.nodes = msg.nodes.map((pn) => ({
+          id: pn.varName,
+          data: pn.value,
+          variableName: pn.varName,
+          nextId: pn.nextVar || undefined,
+          isHead: pn.varName === 'head' || !msg.nodes.some((o) => o.nextVar === pn.varName),
+          isDetached: !pn.nextVar && !msg.nodes.some((o) => o.nextVar === pn.varName),
+        }));
+        const headNode = snap.nodes.find((n) => n.isHead);
+        if (headNode) {
+          snap.hasHead = true;
+          snap.headId = headNode.id;
+        }
+        renderDiagram(snap, false);
+      }
+      break;
+    }
+
     case 'sessionEnded': {
       updateBadge('terminated');
       btnNext.disabled = true;
@@ -2158,7 +2300,133 @@ window.addEventListener('message', (event) => {
   }
 });
 
-// Initial View
+// ==========================================
+// Creative Mode / Real-Time C++ Studio
+// ==========================================
+
+let isCreativeMode = false;
+
+function createEmptySnapshot(): LinkedListSnapshot {
+  return {
+    stepNumber: 1,
+    explanation: 'Creative Canvas',
+    hasHead: false,
+    headId: null,
+    nodes: [],
+    changeType: 'init',
+    source: { file: targetFileName?.textContent || '', line: 1 },
+  };
+}
+
+function openCreativeStudio() {
+  isCreativeMode = true;
+  showView('active');
+  updateBadge('idle');
+
+  if (creativePalette) creativePalette.style.display = 'flex';
+  if (cardTitle) cardTitle.textContent = '🎨 Creative Studio';
+  if (explanationText) {
+    explanationText.textContent =
+      'Creative Mode: Drag nodes to position them. Tap NEXT block on any node, then tap another node to link them! Real-time C++ code updates in your file.';
+  }
+
+  if (!currentSnapshot) {
+    currentSnapshot = createEmptySnapshot();
+  }
+
+  const snap = currentSnapshot!;
+  if (snap.nodes.length === 0) {
+    addCreativeNode();
+  } else {
+    renderDiagram(snap, false);
+  }
+
+  vscode.postMessage({ command: 'creativeRequestSync' });
+}
+
+function addCreativeNode() {
+  if (!currentSnapshot) {
+    currentSnapshot = createEmptySnapshot();
+  }
+
+  const snap = currentSnapshot!;
+  const existing = snap.nodes;
+  let varName = 'head';
+  if (existing.length > 0) {
+    let idx = existing.length + 1;
+    varName = idx === 2 ? 'second' : `node${idx}`;
+    while (existing.some((n) => n.variableName === varName || n.id === varName)) {
+      idx++;
+      varName = `node${idx}`;
+    }
+  }
+
+  const value = (existing.length + 1) * 10;
+  const newNode: ListNode = {
+    id: varName,
+    data: value,
+    variableName: varName,
+    isHead: existing.length === 0,
+    isNewlyCreated: true,
+    isDetached: existing.length > 0,
+  };
+
+  snap.nodes.push(newNode);
+  if (newNode.isHead) {
+    snap.hasHead = true;
+    snap.headId = newNode.id;
+  }
+  renderDiagram(snap, false);
+
+  vscode.postMessage({
+    command: 'creativeAddNode',
+    nodeType: 'linkedlist',
+    varName,
+    value,
+  });
+
+  const prev = terminalText.textContent || '';
+  terminalText.style.display = 'block';
+  if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+  terminalText.textContent =
+    prev +
+    `\n⚡ Added Node* ${varName} = new Node(${value}); in C++\n💡 Tap NEXT cell on any node, then tap another node to link them!`;
+  const vp = document.getElementById('terminalViewport');
+  if (vp) vp.scrollTop = vp.scrollHeight;
+}
+
+function setupCreativeEvents() {
+  if (btnInitialCreative) btnInitialCreative.onclick = openCreativeStudio;
+
+  if (dockAddNode) {
+    dockAddNode.onclick = () => addCreativeNode();
+  }
+  if (dockAddStack) {
+    dockAddStack.onclick = () => {
+      vscode.postMessage({ command: 'creativeStackPush', varName: 's', value: 10 });
+      const prev = terminalText.textContent || '';
+      terminalText.style.display = 'block';
+      if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+      terminalText.textContent = prev + `\n⚡ Created std::stack<int> s; in C++`;
+      const vp = document.getElementById('terminalViewport');
+      if (vp) vp.scrollTop = vp.scrollHeight;
+    };
+  }
+  if (dockAddQueue) {
+    dockAddQueue.onclick = () => {
+      vscode.postMessage({ command: 'creativeQueuePush', varName: 'q', value: 10 });
+      const prev = terminalText.textContent || '';
+      terminalText.style.display = 'block';
+      if (terminalPlaceholder) terminalPlaceholder.style.display = 'none';
+      terminalText.textContent = prev + `\n⚡ Created std::queue<int> q; in C++`;
+      const vp = document.getElementById('terminalViewport');
+      if (vp) vp.scrollTop = vp.scrollHeight;
+    };
+  }
+}
+
+// Initial View Setup
+setupCreativeEvents();
 showView('initial');
 updateBadge('idle');
 vscode.postMessage({ command: 'requestState' });

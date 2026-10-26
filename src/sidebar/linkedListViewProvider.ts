@@ -12,6 +12,7 @@ import { AstCodePatcher } from '../visualization/codePatcher';
 import { ClangAstParser } from '../parser/clangAstParser';
 import { GraphEdgeLinker, GraphEdge } from './edgeLinkHandler';
 import { ExtensionMessage, WebviewMessage } from './messages';
+import { CreativeCodeManager } from '../creative/creativeCodeManager';
 
 export class LinkedListViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'debug-mentor.sidebar';
@@ -275,7 +276,174 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       case 'createEdge':
         await this.handleCreateEdge(message.edge);
         break;
+
+      case 'creativeAddNode': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) {
+          this.postMessage({
+            command: 'creativeFeedback',
+            ok: false,
+            message: 'No open C++ file found. Please open or create a .cpp file.',
+          });
+          return;
+        }
+        if (message.nodeType === 'linkedlist') {
+          const res = await CreativeCodeManager.addLinkedListNode(editor, message.varName, message.value);
+          this.postMessage({
+            command: 'creativeFeedback',
+            ok: res.ok,
+            message: res.message || res.error || '',
+            highlightLine: res.highlightLine,
+          });
+          if (res.highlightLine) {
+            this.highlightLinkEdit(editor.document.fileName, { startLine: res.highlightLine, endLine: res.highlightLine });
+          }
+        }
+        break;
+      }
+
+      case 'creativeConnect': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) return;
+        const res = await CreativeCodeManager.connectNodes(editor, message.sourceVar, message.targetVar);
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: res.ok,
+          message: res.message || res.error || '',
+          highlightLine: res.highlightLine,
+        });
+        if (res.highlightLine) {
+          this.highlightLinkEdit(editor.document.fileName, { startLine: res.highlightLine, endLine: res.highlightLine });
+        }
+        break;
+      }
+
+      case 'creativeDisconnect': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) return;
+        const res = await CreativeCodeManager.disconnectNode(editor, message.sourceVar);
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: res.ok,
+          message: res.message || res.error || '',
+        });
+        break;
+      }
+
+      case 'creativeUpdateValue': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) return;
+        const res = await CreativeCodeManager.updateNodeValue(editor, message.varName, message.newValue);
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: res.ok,
+          message: res.message || res.error || '',
+          highlightLine: res.highlightLine,
+        });
+        if (res.highlightLine) {
+          this.highlightLinkEdit(editor.document.fileName, { startLine: res.highlightLine, endLine: res.highlightLine });
+        }
+        break;
+      }
+
+      case 'creativeDeleteNode': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) return;
+        const res = await CreativeCodeManager.deleteNode(editor, message.varName);
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: res.ok,
+          message: res.message || res.error || '',
+        });
+        break;
+      }
+
+      case 'creativeStackPush': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) return;
+        const res = await CreativeCodeManager.handleStackPush(editor, message.varName, message.value);
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: res.ok,
+          message: res.message || res.error || '',
+          highlightLine: res.highlightLine,
+        });
+        if (res.highlightLine) {
+          this.highlightLinkEdit(editor.document.fileName, { startLine: res.highlightLine, endLine: res.highlightLine });
+        }
+        break;
+      }
+
+      case 'creativeQueuePush': {
+        const editor = await this.getOrCreateCppEditor();
+        if (!editor) return;
+        const res = await CreativeCodeManager.handleQueuePush(editor, message.varName, message.value);
+        this.postMessage({
+          command: 'creativeFeedback',
+          ok: res.ok,
+          message: res.message || res.error || '',
+          highlightLine: res.highlightLine,
+        });
+        if (res.highlightLine) {
+          this.highlightLinkEdit(editor.document.fileName, { startLine: res.highlightLine, endLine: res.highlightLine });
+        }
+        break;
+      }
+
+      case 'creativeRequestSync': {
+        const editor = await this.getOrCreateCppEditor();
+        if (editor) {
+          const state = CreativeCodeManager.parseExistingCode(editor.document.getText());
+          this.postMessage({
+            command: 'creativeSyncState',
+            nodes: state.nodes,
+            stacks: state.stacks,
+            queues: state.queues,
+          });
+        }
+        break;
+      }
     }
+  }
+
+  private async getOrCreateCppEditor(): Promise<vscode.TextEditor | null> {
+    let editor = vscode.window.activeTextEditor;
+    if (editor && /\.(cpp|cc|cxx|c\+\+|h|hpp)$/i.test(editor.document.fileName)) {
+      return editor;
+    }
+
+    for (const vis of vscode.window.visibleTextEditors) {
+      if (/\.(cpp|cc|cxx|c\+\+|h|hpp)$/i.test(vis.document.fileName)) {
+        return vis;
+      }
+    }
+
+    const resolvedPath = CppCompiler.resolveSourceFile();
+    if (resolvedPath && fs.existsSync(resolvedPath)) {
+      try {
+        const doc = await vscode.workspace.openTextDocument(resolvedPath);
+        return await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: true });
+      } catch {
+        // Fallback
+      }
+    }
+
+    const wsFolders = vscode.workspace.workspaceFolders;
+    if (wsFolders && wsFolders.length > 0) {
+      const defaultPath = path.join(wsFolders[0].uri.fsPath, 'creative-list.cpp');
+      if (!fs.existsSync(defaultPath)) {
+        fs.writeFileSync(defaultPath, '', 'utf8');
+      }
+      try {
+        const doc = await vscode.workspace.openTextDocument(defaultPath);
+        CppCompiler.setLastActiveSourceFile(defaultPath);
+        return await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: true });
+      } catch {
+        // Fallback
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -284,7 +452,7 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
    * and re-parse the file so the AST visualization reflects the new wiring.
    */
   private async handleCreateEdge(edge: GraphEdge): Promise<void> {
-    const editor = vscode.window.activeTextEditor;
+    const editor = vscode.window.activeTextEditor || (await this.getOrCreateCppEditor());
     if (!editor) {
       this.postMessage({
         command: 'edgeError',
@@ -306,6 +474,26 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
     const result = await this.edgeLinker.handleEdgeCreated(edge);
 
     if (!result.ok) {
+      // Fallback: connect via CreativeCodeManager directly in the source file!
+      const srcName = edge.source?.name || edge.source?.label || edge.source?.id;
+      const tgtName = edge.target?.name || edge.target?.label || edge.target?.id;
+      if (srcName && tgtName) {
+        const fallbackRes = await CreativeCodeManager.connectNodes(editor, srcName, tgtName);
+        if (fallbackRes.ok && fallbackRes.highlightLine) {
+          this.highlightLinkEdit(filePath, { startLine: fallbackRes.highlightLine, endLine: fallbackRes.highlightLine });
+          this.postMessage({
+            command: 'edgeApplied',
+            filePath,
+            edit: { start: 0, end: 0, newText: `${srcName}->next = ${tgtName};\n` },
+            sourceNodeId: edge.source.id,
+            targetNodeId: edge.target.id,
+            highlighted: { startLine: fallbackRes.highlightLine, endLine: fallbackRes.highlightLine },
+            message: `Wired ${srcName} → ${tgtName}: ${srcName}->next = ${tgtName};`,
+          });
+          return;
+        }
+      }
+
       this.postMessage({
         command: 'edgeError',
         message: result.error ?? 'Link could not be applied to source code.',
