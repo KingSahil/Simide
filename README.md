@@ -1,379 +1,257 @@
-# SimIDE (Simulation + IDE)
-
 <p align="center">
-  <img src="resources/icon.png" width="128" height="128" alt="SimIDE Logo" />
+  <img src="resources/icon.png" width="112" height="112" alt="SimIDE logo" />
 </p>
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](file:///c:/Projects/vscode-extension/test/runAll.js)
-[![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.85.0-007ACC.svg?logo=visualstudiocode)](https://marketplace.visualstudio.com/)
-[![C++](https://img.shields.io/badge/language-C%2B%2B17-00599C.svg?logo=c%2B%2B)](https://isocpp.org/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](file:///c:/Projects/vscode-extension/LICENSE)
-[![Architecture Docs](https://img.shields.io/badge/docs-architecture-blueviolet.svg)](file:///c:/Projects/vscode-extension/docs/README.md)
+<h1 align="center">SimIDE</h1>
 
-> **SimIDE — Real-time C++ debugging and interactive Data Structures & Algorithms (DSA) simulation directly in your Visual Studio Code sidebar.**
+<p align="center"><strong>See your code. Explore its memory. Build structures visually.</strong></p>
 
-**SimIDE** (*Simulation + IDE*) helps students, educators, and developers master C++ memory management and pointer-based data structures. As you step through your code, SimIDE dynamically watches the running program, extracts heap state across function calls, and renders an interactive, physics-driven canvas with plain English explanations for every pointer assignment, traversal, deletion, and terminal output.
+<p align="center">
+  <a href="package.json"><img src="https://img.shields.io/badge/VS_Code-1.85%2B-007ACC?logo=visualstudiocode" alt="VS Code 1.85 or newer" /></a>
+  <a href="#supported-data-structures"><img src="https://img.shields.io/badge/C%2B%2B-17-00599C?logo=cplusplus" alt="C++17" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license" /></a>
+  <a href="docs/README.md"><img src="https://img.shields.io/badge/docs-architecture-6E56CF" alt="Architecture documentation" /></a>
+</p>
 
-This is a **real developer tool** connected directly to native GDB/LLDB via VS Code's Debug Adapter Protocol (DAP)—not a pre-recorded animation, disconnected simulation, or static mockup.
+**SimIDE (Simulation + IDE)** is a Visual Studio Code extension for learning data structures and algorithms through native C++ execution, interactive diagrams, and visual code creation. Step through a program, inspect how pointers and values change, or build supported structures on a canvas and see the corresponding C++ source update.
 
----
+## Demo
 
-## Launch Demo
+[![Watch the SimIDE launch demo](resources/demo/simide-launch-preview.jpg)](https://github.com/KingSahil/Simide/blob/main/resources/demo/simide-launch.mp4)
 
+**[Watch the launch demo](https://github.com/KingSahil/Simide/blob/main/resources/demo/simide-launch.mp4)** · 1 minute 36 seconds · 1080p · [Download MP4](https://raw.githubusercontent.com/KingSahil/Simide/main/resources/demo/simide-launch.mp4)
 
+## Contents
 
-https://github.com/user-attachments/assets/b5c6fe15-2761-47d3-b326-b5f49e691d8e
-
-
-
-## Table of Contents
-
-- [Launch Demo](#launch-demo)
-- [Why SimIDE?](#why-simide)
-- [Key Features](#key-features)
-- [Supported C++ Paradigms & Algorithms](#supported-c-paradigms--algorithms)
-- [Architecture Overview](#architecture-overview)
-- [Quick Start](#quick-start)
-- [Prerequisites](#prerequisites)
-- [Installation & Setup](#installation--setup)
-- [Usage Walkthrough](#usage-walkthrough)
-- [Sample Programs Library](#sample-programs-library)
-- [Visual Design System & Physics Canvas](#visual-design-system--physics-canvas)
-- [Testing & Verification](#testing--verification)
-- [FAQ & Troubleshooting](#faq--troubleshooting)
+- [Learning workflows](#learning-workflows)
+- [Supported data structures](#supported-data-structures)
+- [Getting started](#getting-started)
+- [Architecture](#architecture)
+- [Tutorial authoring](#tutorial-authoring)
+- [Development and verification](#development-and-verification)
+- [Current scope](#current-scope)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
-- [License](#license)
-- [Contact](#contact)
 
----
+## Learning workflows
 
-## Why SimIDE?
+### Explore a C++ program
 
-Learning pointer-based data structures in C++ is notoriously challenging:
-- Raw memory addresses like `0x74a3b0` and `0x74a3f0` in the debugger's variable pane are difficult to mentally map into a linked chain.
-- Learners often confuse **heap allocation** (`new Node{10, nullptr}`) with **linking** (`head = first;` or `first->next = second;`).
-- Algorithm reversals (e.g., LeetCode 206) and memory deallocations (`delete temp;`) happen silently under the hood without visual feedback.
-- Disconnected browser simulators force students to copy and paste code away from their real IDE, losing access to language servers and compiler diagnostics.
+Open a supported, compilable C++ file, open **SimIDE** from the Activity Bar, and click **Visualize**. SimIDE compiles the source, launches a native debugger, and renders extracted state as execution advances.
 
-**SimIDE solves this right inside VS Code**:
-1. You write standard C++ code in your normal editor.
-2. Click **[ Visualize ]** in the SimIDE sidebar.
-3. The extension compiles your code with debug flags (`-g -O0 -std=c++17`), launches GDB/LLDB, captures state upon every step across function calls, emulates live terminal output, and renders interactive diagrams with pedagogical teaching explanations.
+- **Next** advances through execution or saved history.
+- **Previous** reviews recorded snapshots; it does not reverse the running C++ process.
+- **Restart** begins a new execution session.
+- Step explanations connect supported allocations, mutations, traversals, and deletions with plain-English descriptions.
+- A program-output panel displays supported output alongside the diagram.
+- Draggable nodes, background panning, zoom, and layout reset help navigate larger structures.
 
----
+Function stepping and caller-frame inspection help preserve the surrounding structure while execution moves through helper functions.
 
-## Key Features
+### Build in Creative Mode
 
-- **Genuine Debugger Execution**: Runs real native C++ binaries using VS Code's Debug Adapter Protocol (DAP). Stepping in SimIDE advances the actual C++ program and highlights the live source line in the VS Code editor.
-- **Dynamic Pointer Discovery**: Discovers any pointer variables in your code dynamically via source regex and line thresholds—supporting arbitrary variable names without hardcoding!
-- **Pointer Traversal & Function Stepping**: Follows execution seamlessly into helper functions (like `printList(Node* head)` or `reverseList(ListNode* head)`), highlighting pointer movements (`curr = curr->next`) node-by-node.
-- **Node Deletion & Bypassing**: Detects heap deallocations (`delete temp;`) and unlinking, visually fading out and removing deleted nodes while explaining pointer bypasses.
-- **Live Program Output Terminal**: Emulates `std::cout` and `printf` in real time within a dedicated terminal card in the sidebar.
-- **Pointer Aliasing Tracking**: Visually flags when multiple pointers refer to the same heap node (e.g., `head` aliasing `first` at `0x74a3b0`).
-- **Spring-Damper Physics Canvas**: Powered by a hybrid physics engine (integrated with `d3-force`). Nodes behave as physical bodies connected by elastic springs with natural recoil and repulsion.
-- **Excalidraw-Style Infinite Pan & Zoom**: Navigate complex structures with Right-Click Pan, Mouse Wheel Zoom (0.35x to 2.5x), Spacebar drag, double-click reset, and a quick `↺ Reset` layout button—with zero clunky scrollbars!
-- **Detached Allocation Tracking**: Uniquely tracks local unlinked node allocations before they are linked into `head`, helping students visualize the moment memory is allocated versus when it is connected.
-- **C Runtime (CRT) Boundary Protection**: Detects when execution reaches `return 0;` or C runtime exit routines, cleanly finishing execution and preserving the completed linked list diagram without flickering.
-- **Binary Search Tree (BST) Simulation**: Automatic tree mode detection, calculating in-order horizontal layout columns and depth levels, and animating active visiting nodes during traversals.
-- **Seamless Multi-File Switching**: Effortlessly switch between different C++ files (e.g., from linked lists to BSTs); SimIDE automatically tracks the active file, compiles the correct file, and eliminates tab-switch hijacking.
-- **Zero-Distraction Debugging**: Automatically suppresses internal debug console popups, build task terminals, and third-party AI sidebars, keeping your workspace clean.
-- **Non-Destructive Time Travel**: Review past states by clicking **Previous** without terminating or corrupting the running C++ process. Step forward again to seamlessly resume live debugging.
+Start with a blank canvas and starter C++ file. Add linked-list nodes, edit values, connect or disconnect pointers, and delete nodes. Supported stack and queue creation actions also generate C++ source.
 
----
+For example, a visual connection between two nodes can produce:
 
-## Supported C++ Paradigms & Algorithms
-
-SimIDE is tested and verified on real-world C++ patterns:
-
-1. **Standard Procedural Code**: Creation, pointer reassignment, and iterative traversals ([`examples/linked-list.cpp`](file:///c:/Projects/vscode-extension/examples/linked-list.cpp)).
-2. **LeetCode Problems**: Three-pointer in-place reversals (`prev`, `curr`, `forward`) using standard `ListNode` structures ([`examples/leetcode-206-reverse.cpp`](file:///c:/Projects/vscode-extension/examples/leetcode-206-reverse.cpp)).
-3. **GeeksforGeeks Patterns**: Double pointer references (`Node** head_ref`) and key deletion with heap memory management (`delete temp`) ([`examples/gfg-push-delete.cpp`](file:///c:/Projects/vscode-extension/examples/gfg-push-delete.cpp)).
-4. **Object-Oriented Programming (OOP)**: Encapsulated linked lists with C++ classes, member methods (`insertAtHead`, `display`), and `this` pointer resolution ([`examples/oop-linked-list.cpp`](file:///c:/Projects/vscode-extension/examples/oop-linked-list.cpp)).
-5. **Binary Search Trees (BST)**: Dynamic tree root tracking, insertion, in-order/pre-order/post-order traversals, visiting node highlighting, and Case A deletion (leaf & single-child nodes) ([`examples/bst-traversals.cpp`](file:///c:/Projects/vscode-extension/examples/bst-traversals.cpp)).
-
----
-
-## Architecture Overview
-
-SimIDE coordinates four decoupled subsystems across process boundaries:
-
-```
-+-------------------------------------------------------------------------+
-|                        VS CODE EXTENSION HOST                           |
-|                                                                         |
-|  [src/extension.ts] ──▶ [LinkedListViewProvider] (Sidebar Webview Hub)  |
-|                                │                                        |
-|         ┌──────────────────────┼──────────────────────┐                 |
-|         ▼                      ▼                      ▼                 |
-|  [src/debug/]           [src/visualization/]     [webview/app.ts]       |
-|  • CppCompiler          • LinkedListModel        • Spring Physics Engine|
-|  • DebugSessionManager  • ExplanationGenerator   • Pan & Zoom Camera    |
-|  • DebugAdapterTracker  • SnapshotManager        • SVG Dynamic Arrows   |
-|  • ExecutionController  • Pointer Models         • Dot-Grid Canvas      |
-|  • StateExtractor       • Terminal Output        • Live Terminal Output |
-+---------│─────────────────────────────────────────────▲-----------------+
-          │ (DAP Protocol)                              │ (Typed IPC)
-          ▼                                             │
-+───────────────────────+                     +──────────────────+
-| Native GDB / LLDB     |                     | Sidebar Webview  |
-| (Real C++ Process)    |                     | (Chromium View)  |
-+───────────────────────+                     +──────────────────+
+```cpp
+first->next = second;
 ```
 
-### Complete Documentation
+Edits to recognized source patterns refresh the Creative Mode canvas, letting students explore code and diagrams in both directions.
 
-For comprehensive technical deep-dives, please explore the [`docs/`](file:///c:/Projects/vscode-extension/docs/README.md) directory:
-- **[System Architecture](file:///c:/Projects/vscode-extension/docs/architecture.md)**: Process boundaries, DAP wire protocol, dynamic pointer discovery, and CRT protection.
-- **[Component Deep-Dive](file:///c:/Projects/vscode-extension/docs/components.md)**: Module-by-module breakdown of all source files.
-- **[Data Flow & Lifecycles](file:///c:/Projects/vscode-extension/docs/data-flow.md)**: Sequence diagrams for launch, stepping, physics loop, terminal output, and time-travel.
-- **[AI Agent Guide](file:///c:/Projects/vscode-extension/docs/agent-guide.md)**: Developer guide for automated agents and contributors adding new data structures.
+### Follow a GitHub tutorial
 
----
+Use the sidebar's GitHub import action or run **SimIDE: Import Tutorial from GitHub** from the Command Palette. Enter a compatible repository URL or `owner/repository`, select a lesson, and follow its Markdown guide while stepping through the program.
 
-## Quick Start
+Tutorial repositories require a `simide.json` manifest. See the [authoring guide](docs/tutorial-authoring-guide.md) for the supported format.
+
+## Supported data structures
+
+| Structure | Visual concepts | Examples |
+| --- | --- | --- |
+| Linked lists | Allocation, aliases, linking, reversal, deletion, and supported backward links | [Linked list](examples/linked-list.cpp), [reversal](examples/leetcode-206-reverse.cpp) |
+| Binary trees / BSTs | Child pointers, hierarchical layouts, and traversal highlights | [BST traversals](examples/bst-traversals.cpp) |
+| Arrays | Indexed cells, mutations, swaps, and index markers | [Array operations](examples/array-operations.cpp), [bubble sort](examples/bubble-sort.cpp) |
+| Stacks | Push/pop behavior, top position, and capacity | [Stack operations](examples/stack-operations.cpp) |
+| Circular queues | Front/rear positions and buffer wrap-around | [Circular queue](examples/circular-queue.cpp) |
+| Graphs | Vertex-edge relationships and force-directed layouts | [Graph registry](examples/graph-registry.cpp) |
+| Strings | Character tiles, ASCII values, null terminators, two-pointer movement, and window highlights | [Palindrome](examples/string-palindrome.cpp), [sliding window](examples/sliding-window-string.cpp), [C-string reversal](examples/c-string-reverse.cpp) |
+
+Support depends on recognizable source representations and the information exposed by the debugger. The [examples](examples/) provide starting points for compatible programs.
+
+## Getting started
+
+### Prerequisites
+
+| Requirement | Purpose |
+| --- | --- |
+| VS Code **1.85 or newer** | Extension host and sidebar |
+| `g++` or `clang++` on `PATH` | Compile C++ programs with debug symbols |
+| GDB or LLDB on `PATH` | Inspect native execution |
+| Compatible debug adapter | C/C++ (`ms-vscode.cpptools`) is recommended; the launcher also supports Native Debug (`webfreak.debug`) and CodeLLDB (`vadimcn.vscode-lldb`) configurations |
+| Node.js and npm | Build and package the extension from source |
+| Clang for AST-guided wiring | Resolve source symbols and insertion ranges for the visual node-to-code linker |
+
+On Windows, MinGW-w64 provides a common GCC/GDB toolchain. Ensure the compiler, debugger, and installed adapter are compatible.
+
+### Run from source
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/KingSahil/Simide.git
 cd Simide
-
-# 2. Install dependencies
-npm install
-
-# 3. Build the extension and webview bundles
+npm ci
 npm run compile
-
-# 4. Run the automated test suite (verifies GCC, LeetCode reversal & GDB stepping)
-npm test
+code .
 ```
 
-To launch and test the extension interactively in VS Code:
-1. Open the project folder in VS Code (`code .`).
-2. Press `F5` to open the **Extension Development Host**.
-3. Open `examples/linked-list.cpp`.
-4. Click the **SimIDE** icon in the Activity Bar.
-5. Click **[ Visualize ]** and step through your code!
+1. In VS Code's **Run and Debug** menu, select **Run Extension (String Demo)** or **Run Extension (Active File)**.
+2. Press **F5** to open the Extension Development Host.
+3. Open an example such as `examples/string-palindrome.cpp` or `examples/linked-list.cpp` in that window.
+4. Open **SimIDE** from the Activity Bar and click **Visualize**.
 
----
+F5 launches the development host; **Visualize** starts the C++ visualization. SimIDE generates the program's debug launch configuration.
 
-## Prerequisites
-
-Before running the extension, verify your system has the following tools installed:
-
-1. **Visual Studio Code**: `v1.85.0` or higher.
-2. **C++ Compiler**: `g++` (MinGW-w64 on Windows, GCC on Linux) or `clang++` accessible in system `PATH`.
-3. **Debugger**: `gdb` or `lldb` accessible in system `PATH`.
-4. **C/C++ Extension**: [`ms-vscode.cpptools`](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) installed in VS Code.
-5. **Node.js**: `v18+` (tested on Node `v20` and `v26`).
-
----
-
-## Installation & Setup
-
-### Building from Source
+### Install a locally built extension
 
 ```bash
-# Install Node dependencies (includes d3-force physics)
-npm install
-
-# Build bundles via esbuild
-npm run compile
-```
-
-### Packaging into a VSIX Extension (Optional)
-
-```bash
-npx @vscode/vsce package
-```
-This generates `simide-ide-0.1.1.vsix`, matching the version in `package.json`, which can be installed into Visual Studio Code using:
-```bash
+npx @vscode/vsce package --no-dependencies
 code --install-extension simide-ide-0.1.1.vsix
 ```
 
----
+The filename follows the version in [package.json](package.json); replace it with the generated filename when the version changes. Reload VS Code after installation.
 
-## Usage Walkthrough
+## Architecture
 
-SimIDE includes a complete singly linked list sample with traversal in [`examples/linked-list.cpp`](file:///c:/Projects/vscode-extension/examples/linked-list.cpp):
+The extension host coordinates compilation, debugger inspection, source edits, and tutorials. A webview renders snapshots and sends user actions back to the host.
 
-```cpp
-#include <iostream>
-
-struct Node {
-    int data;
-    Node* next;
-};
-
-// Traversal Function
-void printList(Node* head) {
-    Node* current = head;
-    while (current != nullptr) {
-        std::cout << current->data << " -> ";
-        current = current->next;
-    }
-    std::cout << "NULL\n";
-}
-
-int main() {
-    // 1. Create 3 isolated nodes
-    Node* head = new Node{10, nullptr};
-    Node* second = new Node{20, nullptr};
-    Node* third = new Node{30, nullptr};
-
-    // 2. Link them together
-    head->next = second;
-    second->next = third;
-
-    // 3. Traverse and display
-    printList(head);
-
-    return 0;
-}
+```mermaid
+flowchart TB
+    subgraph Editor["VS Code editor"]
+        Source["C++ source file"]
+    end
+    subgraph Host["Extension host · TypeScript"]
+        Sidebar["Sidebar coordinator"]
+        Compiler["C++ compiler orchestration"]
+        Debug["Debug session and execution controller"]
+        Extractor["Runtime state extractor"]
+        History["Snapshot history and explanations"]
+        Creative["Creative code manager"]
+        Linker["Clang AST linker and source patcher"]
+        Tutorials["Tutorial manager and manifest validation"]
+    end
+    subgraph Native["Native toolchain"]
+        Binary["Compiled C++ program"]
+        Adapter["Debug adapter with GDB or LLDB"]
+    end
+    subgraph View["Sidebar webview"]
+        Canvas["Structure renderers and D3 force layouts"]
+        Controls["Step controls and Creative Mode actions"]
+        Lessons["Lesson navigation and Markdown guides"]
+    end
+    Source --> Compiler
+    Sidebar --> Compiler
+    Compiler --> Binary
+    Sidebar --> Debug
+    Debug <-->|"DAP"| Adapter
+    Adapter <-->|"Execution and inspection"| Binary
+    Debug -->|"Pause events"| Extractor
+    Extractor <-->|"Variables, frames, expressions"| Adapter
+    Source -.->|"Source-pattern hints"| Extractor
+    Extractor --> History
+    History -->|"Snapshots and explanations"| Canvas
+    Controls -->|"Webview messages"| Sidebar
+    Sidebar --> Creative
+    Sidebar --> Linker
+    Creative -->|"Supported source edits"| Source
+    Linker -->|"AST-guided wiring edits"| Source
+    Source -->|"Recognized edits"| Creative
+    Creative -->|"Creative state"| Canvas
+    GitHub["GitHub tutorial repository"] --> Tutorials
+    Tutorials -->|"Lesson source"| Source
+    Tutorials -->|"Manifest and guide"| Lessons
 ```
 
-### Step-by-Step Experience
+**Runtime visualization** uses debugger values plus source-pattern discovery. **Creative Mode** maintains a separate visual editing state and writes supported source changes. Clang AST parsing supports the visual wiring path; runtime discovery is not a complete AST-based C++ analyzer.
 
-1. **Open File**: Open `examples/linked-list.cpp` in the editor.
-2. **Open Sidebar**: Click the **SimIDE** icon in the VS Code Activity Bar.
-3. **Click Visualize**: Click the large blue **[ Visualize ]** button.
-   - The status spinner updates: *"Compiling source..."* → *"Starting debugger..."*.
-4. **Allocation**:
-   - As `new Node{10, nullptr}` executes, node 10 is created on the canvas.
-   - Nodes `20` and `30` appear in the detached area as they allocate.
-5. **Linking**:
-   - `head->next = second;` dynamically links node 10 to node 20 with spring physics.
-   - `second->next = third;` forms the full chain: `head ──▶ [ 10 | • ] ──▶ [ 20 | • ] ──▶ [ 30 | • ] ──▶ nullptr`.
-6. **Function Stepping & Traversal**:
-   - Step into `printList(head)`.
-   - Watch the `current` pointer badge traverse from node 10 to node 20 to node 30!
-   - The **Program Output** terminal card live-streams the output: `10 -> 20 -> 30 -> NULL`.
-7. **Time Travel**: Click **[ Previous ]** to rewind back through past states and inspect earlier pointer assignments.
+| Area | Main modules |
+| --- | --- |
+| Activation and commands | [`src/extension.ts`](src/extension.ts) |
+| Sidebar coordination | [`src/sidebar/linkedListViewProvider.ts`](src/sidebar/linkedListViewProvider.ts) |
+| Compilation, stepping, and inspection | [`src/debug/`](src/debug/) |
+| Snapshot models and explanations | [`src/visualization/`](src/visualization/) |
+| Visual editing and source wiring | [`src/creative/`](src/creative/), [`src/parser/`](src/parser/), [`edgeLinkHandler.ts`](src/sidebar/edgeLinkHandler.ts) |
+| Tutorial import and validation | [`src/tutorial/`](src/tutorial/), [`src/cli/validator.ts`](src/cli/validator.ts) |
+| Canvas, controls, and styling | [`webview/`](webview/) |
 
----
+See the [documentation index](docs/README.md), [architecture notes](docs/architecture.md), and [data-flow guide](docs/data-flow.md) for implementation details. Some older guides describe earlier milestones; the modules above are the reference for current behavior.
 
-## Sample Programs Library
+## Tutorial authoring
 
-Explore our ready-to-run C++ programs in [`examples/`](file:///c:/Projects/vscode-extension/examples/):
+A tutorial repository contains a root manifest and lesson files:
 
-| File | Category | Key Concept Highlighted |
-| :--- | :--- | :--- |
-| **[`linked-list.cpp`](file:///c:/Projects/vscode-extension/examples/linked-list.cpp)** | Basic / Traversal | Allocation, linking, and `printList` traversal with terminal output. |
-| **[`leetcode-206-reverse.cpp`](file:///c:/Projects/vscode-extension/examples/leetcode-206-reverse.cpp)** | LeetCode 206 | In-place iterative pointer reversal (`prev`, `curr`, `forward`). |
-| **[`gfg-push-delete.cpp`](file:///c:/Projects/vscode-extension/examples/gfg-push-delete.cpp)** | GeeksforGeeks | Double pointers (`Node** head_ref`) and heap memory freeing (`delete`). |
-| **[`oop-linked-list.cpp`](file:///c:/Projects/vscode-extension/examples/oop-linked-list.cpp)** | OOP C++ | `class LinkedList`, member methods, and `this` pointer resolution. |
-| **[`bst-traversals.cpp`](file:///c:/Projects/vscode-extension/examples/bst-traversals.cpp)** | Binary Search Tree | BST insertion, traversals, visiting indicators, and Case A deletion (leaf/single-child). |
+```text
+my-tutorial/
+├── simide.json
+└── lessons/
+    └── 01-introduction/
+        ├── main.cpp
+        └── guide.md
+```
 
----
-
-## Visual Design System & Physics Canvas
-
-The user interface uses a curated, high-contrast dark theme designed to blend seamlessly with VS Code:
-
-| Design Token | Color Value | Purpose |
-| :--- | :--- | :--- |
-| `--bg-primary` | `#0D1117` | Main sidebar and editor-adjacent surface |
-| `--bg-sidebar` | `#11161D` | Sidebar view container base |
-| `--bg-card` | `#151B23` | Diagram, terminal, and explanation cards |
-| `--bg-elevated` | `#1C232D` | Secondary pill buttons, step chips, and badges |
-| `--border-color` | `#2A3441` | Card outlines and node boundaries |
-| `--text-primary` | `#F5F7FA` | Primary labels, headers, and node values |
-| `--text-secondary`| `#A7B0BC` | Pedagogical explanations and step numbers |
-| `--text-muted` | `#737D8C` | Null indicators (`nullptr`) and drag hints |
-| `--accent` | `#0066FF` | Primary button, active SVG arrows, and node focus |
-| `--accent-tint` | `#142B4D` | Highlighted node backgrounds |
-| `--success` | `#36C779` | Paused status indicator, detached nodes, and completion badge |
-| `--danger` | `#F85149` | Error state indicators and diagnostic alerts |
-
----
-
-## Testing & Verification
-
-SimIDE includes a comprehensive automated test suite with headless GDB integration:
+Follow the [tutorial authoring guide](docs/tutorial-authoring-guide.md) and [manifest schema](schemas/v1/tutorial.schema.json). After building SimIDE, validate a local tutorial directory with:
 
 ```bash
+node bin/simide.js test /path/to/my-tutorial
+```
+
+The validator checks the manifest, audits source for flagged constructs, and attempts lesson compilation. Source auditing provides warnings; imported tutorials execute native code and should come from sources you trust.
+
+## Development and verification
+
+```bash
+npm ci
+npm run compile
 npm test
 ```
 
-### Verified Test Matrix
+`npm run compile` performs TypeScript checking and bundles the extension, webview, and CLI validator. `npm test` builds and runs regression suites for models, renderers, startup, state extraction, strings, source patching, Creative Mode, tutorials, and native GDB execution.
 
-| Test Suite | Description | Result |
-| :--- | :--- | :--- |
-| **Test 1: Compiler Detection** | Detects MinGW `g++` / Clang in system PATH | **PASSED** |
-| **Test 2: Debugger Discovery** | Locates `gdb.exe` binary | **PASSED** |
-| **Test 3: Pedagogical Engine** | Verifies explanations for creation, linking, deletion, traversal & output | **PASSED** |
-| **Test 4: Snapshot History** | Verifies non-destructive `prev()` and `nextHistory()` time travel | **PASSED** |
-| **Test 5: Robust Pointer Parsing** | Verifies runtime pointer parsing and source discovery across LeetCode, GFG, and OOP examples | **PASSED** |
-| **Test 6: Compilation Matrix** | Compiles `leetcode-206-reverse.cpp`, `gfg-push-delete.cpp`, `oop-linked-list.cpp`, and `bst-traversals.cpp` | **PASSED** |
-| **Test 7: Real GDB Stepping** | Steps through C++ binary line-by-line and validates runtime values | **PASSED** |
-| **Test 8: Real GDB LeetCode Reversal** | Verifies real runtime execution of in-place reversal (3 → 2 → 1) | **PASSED** |
-| **Test 9: Real GDB BST Traversals** | Verifies BST runtime stops, tree pointer chasing, and Case A deletions | **PASSED** |
+Native integration tests require the local compiler and debugger toolchain. For a visual change, also launch the Extension Development Host and check the affected example interactively.
 
-`npm run compile` runs TypeScript checking before bundling. The test suite also
-checks simulation startup, visible initialization errors, retry, and real GDB
-execution of `examples/array-operations.cpp` (update, swap, and traversal).
+## Current scope
 
-Source discovery currently uses the restored regex implementation. The Clang AST
-parser is present as an unintegrated module; the full AST migration is unfinished.
-Runtime values and pointer addresses come from the debugger.
+- The primary execution workflow targets standalone C++17 programs. Judge-only snippets need a compilable entry point and any required definitions.
+- Source discovery and Creative Mode synchronization recognize supported patterns; arbitrary C++ syntax and every container implementation are not covered.
+- **Previous** replays saved snapshots. It does not undo memory changes in the executing process.
+- Debugger behavior and available values depend on the installed toolchain and adapter. Compilation with `-O0` reduces optimization-related inspection problems.
 
-For the array demo, open `examples/array-operations.cpp` in the Extension Development
-Host, open SimIDE, and click **Visualize**. Step through the initialization, set
-`arr[2]` to `99`, swap the first two elements, and traverse the array. The output
-should be `20 10 99 40 50`. **Previous** reviews saved snapshots; it does not reverse
-the executing C++ program. F5 in this repository launches the development host;
-it does not itself start the visualization.
+### Troubleshooting
 
----
-
-## FAQ & Troubleshooting
-
-### Why does the compiler need the `-O0` flag?
-Compiler optimization levels (`-O1`, `-O2`, `-O3`) optimize away temporary pointer variables (like `curr` or `prev`) into registers or inline them entirely. Compiling with `-O0` ensures every variable exists in stack memory so the debugger can inspect it.
-
-### Can I step through my own custom functions?
-Yes! SimIDE dynamically discovers user-defined functions (such as `printList`, `reverseList`, `push`, `deleteNode`, and class methods) and tracks pointer movements and variable scopes as execution steps into them.
-
-### Can I pan and zoom the diagram?
-Yes! Use **Right-Click Drag**, **Middle-Click Drag**, or **Space + Left-Click Drag** to pan. Use the **Mouse Wheel** to zoom in or out. Double-click the background or click `↺ Reset` to re-center.
-
-### What should I do if compilation fails with `EBUSY` on Windows?
-On Windows, a running debugger locks the output `.exe`. SimIDE automatically detects locked files and compiles to an alternate timestamped executable (e.g. `linked-list_1792051440937.exe`). If an issue persists, click **Restart** or close hanging GDB processes.
-
----
+| Symptom | What to check |
+| --- | --- |
+| Compiler or debugger not found | Confirm the tools are on `PATH`, then restart VS Code so it inherits the updated environment. |
+| Debug session will not launch | Check that a compatible debug adapter is installed and matches the selected GDB/LLDB toolchain. |
+| Program does not compile | Start with a bundled example, then check the program's entry point, includes, and dependencies. |
+| Windows executable is locked | Stop the previous debug session and retry. The compiler can also use an alternate output filename for locked executables. |
+| Visual wiring cannot resolve symbols | Check that Clang is available and that the source follows a supported node pattern. |
 
 ## Roadmap
 
-- [x] **Milestone 1**: Singly Linked List visualization with GDB integration, spring-damper physics canvas, pan/zoom camera, dynamic pointer discovery, and time-travel history.
-- [x] **Milestone 2**: In-place pointer reversals (LeetCode 206), heap deletions (`delete`), OOP classes, and live program output terminal.
-- [ ] **Milestone 3**: Doubly Linked Lists with bidirectional SVG arrows (`prev` and `next`).
-- [x] **Milestone 4**: Binary Search Trees (BST) with in-order column depth layout, preorder/inorder/postorder traversals, visiting badges, and Case A deletions.
-- [ ] **Milestone 5**: Stacks and Queues with push/pop animations.
-- [ ] **Milestone 6**: Memory leak detection highlighting unreferenced heap allocations that fall out of scope without `delete`.
-
----
+- Broaden C++ discovery across naming conventions, containers, and multi-file programs.
+- Extend Creative Mode to more structures and operations.
+- Grow the tutorial library and improve authoring feedback.
+- Add operation counters and input-size experiments for complexity analysis.
+- Explore additional languages through language-specific inspection and debug adapters.
 
 ## Contributing
 
-Contributions from students, educators, and developers are warmly welcomed!
+Bug reports, examples, tutorials, and focused improvements are welcome. Open an [issue](https://github.com/KingSahil/Simide/issues) with a minimal C++ example, your platform and toolchain, expected behavior, and what happened.
 
-1. Fork the repository: [https://github.com/KingSahil/Simide](https://github.com/KingSahil/Simide).
-2. Create a feature branch: `git checkout -b feature/doubly-linked-list`.
-3. Check the **[AI Agent & Developer Guide](file:///c:/Projects/vscode-extension/docs/agent-guide.md)** for architecture guidelines and conventions.
-4. Make changes and verify that `npm run compile` and `npm test` pass cleanly.
-5. Commit your changes: `git commit -m 'feat: Add doubly linked list support'`.
-6. Push to your branch and open a Pull Request.
-
----
+For code contributions, read the [developer guide](docs/agent-guide.md), create a branch, keep the change focused, and run the relevant build and tests before opening a pull request.
 
 ## License
 
-This project is licensed under the **MIT License**. See the [LICENSE](file:///c:/Projects/vscode-extension/LICENSE) file for details.
+SimIDE is available under the [MIT License](LICENSE).
 
----
-
-## Contact
-
-- **Repository**: [https://github.com/KingSahil/Simide](https://github.com/KingSahil/Simide)
-- **Issues & Bug Reports**: [GitHub Issues](https://github.com/KingSahil/Simide/issues)
-- **Author & Maintainer**: Sahil ([@KingSahil](https://github.com/KingSahil))
+Created by [Sahil](https://github.com/KingSahil) and contributors.
