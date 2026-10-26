@@ -1,7 +1,7 @@
 #include <iostream>
 #include <string>
 
-bool isPalindrome(std::string s) {
+bool isPalindrome(const std::string& s) {
     int left = 0;
     int right = s.length() - 1;
     while (left < right) {

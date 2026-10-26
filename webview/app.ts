@@ -1994,7 +1994,21 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
     resetCameraView(false);
   }
   currentSnapshot = snapshot;
-  canvasTitle.textContent = 'Linked List';
+  if (canvasTitle) {
+    if (snapshot.structureType === 'string') {
+      canvasTitle.textContent = 'String';
+    } else if (snapshot.structureType === 'array') {
+      canvasTitle.textContent = 'Array';
+    } else if (snapshot.structureType === 'tree') {
+      canvasTitle.textContent = 'Binary Tree';
+    } else if (snapshot.structureType === 'stack') {
+      canvasTitle.textContent = 'Stack (LIFO)';
+    } else if (snapshot.structureType === 'queue') {
+      canvasTitle.textContent = 'Circular Queue (FIFO)';
+    } else {
+      canvasTitle.textContent = 'Linked List';
+    }
+  }
   nodesLayer.innerHTML = '';
   d3Links = [];
   const activeIds = new Set<string>();
@@ -2008,13 +2022,17 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
       cardTitle.textContent = 'STACK (LIFO)';
     } else if (snapshot.structureType === 'queue') {
       cardTitle.textContent = 'CIRCULAR QUEUE (FIFO)';
+    } else if (snapshot.structureType === 'string') {
+      cardTitle.textContent = 'STRING';
     } else {
       cardTitle.textContent = 'LINKED LIST';
     }
   }
 
   if (canvasHint) {
-    if (snapshot.structureType === 'array' || snapshot.structureType === 'stack' || snapshot.structureType === 'queue') {
+    if (snapshot.structureType === 'string') {
+      canvasHint.textContent = 'Inspect string characters, ASCII codes, pointers and sliding windows';
+    } else if (snapshot.structureType === 'array' || snapshot.structureType === 'stack' || snapshot.structureType === 'queue') {
       canvasHint.textContent = 'Drag elements freely to explore • Release to bounce back • Right-click drag to pan';
     } else {
       canvasHint.textContent = 'Drag nodes to move • Right-click drag to pan • Scroll to zoom';
@@ -2038,6 +2056,18 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
     return;
   }
 
+  // Handle Array Rendering
+  if (snapshot.structureType === 'array') {
+    renderArrayDiagram(snapshot, previousSnapshot);
+    return;
+  }
+
+  // Handle String Rendering
+  if (snapshot.structureType === 'string') {
+    renderStringDiagram(snapshot, previousSnapshot);
+    return;
+  }
+
   const { headId, nodes } = snapshot;
 
   // 0. If head has not been declared/initialized yet (before line executes)
@@ -2052,14 +2082,7 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
       paths.forEach((p) => p.remove());
     }
 
-    const dsName =
-      snapshot.structureType === 'tree'
-        ? 'tree'
-        : snapshot.structureType === 'array'
-        ? 'array'
-        : snapshot.structureType === 'string'
-        ? 'string'
-        : 'linked list';
+    const dsName = (snapshot.structureType as string) === 'tree' ? 'tree' : 'linked list';
     const emptyMsg = document.createElement('div');
     emptyMsg.className = 'empty-canvas-message';
     emptyMsg.innerHTML = `
@@ -2078,17 +2101,6 @@ function renderLinkedListDiagram(snapshot: LinkedListSnapshot, resetPositions: b
   }
 
 
-  // Handle Array Rendering
-  if (snapshot.structureType === 'array') {
-    renderArrayDiagram(snapshot, previousSnapshot);
-    return;
-  }
-
-  // Handle String Rendering
-  if (snapshot.structureType === 'string') {
-    renderStringDiagram(snapshot, previousSnapshot);
-    return;
-  }
 
   // 1. Render all Pointer Badges (head, root, first, second, etc.)
   const pointers = snapshot.pointers || [];

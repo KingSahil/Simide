@@ -2787,12 +2787,19 @@ export class StateExtractor {
           } else if (structureType === 'string') {
             const stringDecls = StateExtractor.discoverStringDeclarations(resolvedFile);
             if (stringDecls.length > 0) {
-              const firstStr = stringDecls[0];
-              if (funcRange && firstStr.line < funcRange.startLine) {
-                // Member or global string declared before main function
-                hasHead = rawLine > funcRange.startLine;
+              // Find string declaration declared inside main, or global declaration before main
+              const mainStr = funcRange
+                ? stringDecls.find((d) => d.line >= funcRange.startLine && d.line <= funcRange.endLine)
+                : stringDecls[0];
+              const globalStr = funcRange
+                ? stringDecls.find((d) => d.line < funcRange.startLine)
+                : null;
+              if (mainStr) {
+                hasHead = rawLine > mainStr.line;
+              } else if (globalStr) {
+                hasHead = funcRange ? rawLine > funcRange.startLine : true;
               } else {
-                hasHead = rawLine > firstStr.line;
+                hasHead = true;
               }
             } else {
               hasHead = true;
@@ -3372,8 +3379,8 @@ export class StateExtractor {
       // 5. Track Active Pointer Variables & Traverse any Disconnected Chains
       activePointers = [];
 
-      // Collect root / head pointer
-      if (hasHead) {
+      // Collect root / head pointer (only relevant for tree and linked_list structures)
+      if (hasHead && (structureType === 'tree' || structureType === 'linked_list')) {
         activePointers.push({
           name: structureType === 'tree' ? 'root' : 'head',
           targetNodeId: headId,
