@@ -26,7 +26,7 @@ export class DebugSessionManager {
   }
 
   public static getActiveSession(): vscode.DebugSession | null {
-    return this.activeSession;
+    return this.activeSession || vscode.debug.activeDebugSession || null;
   }
 
   public static setActiveSession(session: vscode.DebugSession | null): void {

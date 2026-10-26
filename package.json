@@ -2,7 +2,7 @@
   "name": "simide-ide",
   "displayName": "SimIDE - DSA Visualizer",
   "description": "SimIDE (Simulation + IDE) — Interactive DSA Simulation & Real-time C++ Debugging in VS Code",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "kingsahil",
   "icon": "resources/icon.png",
   "repository": {
