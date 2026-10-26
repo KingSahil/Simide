@@ -85,7 +85,9 @@ export class DebugTrackerFactory implements vscode.DebugAdapterTrackerFactory {
             DebugTrackerFactory.lastThreadId = threadId;
             for (const listener of DebugTrackerFactory.stopListeners) {
               try {
-                listener({ session, threadId, reason });
+                Promise.resolve(listener({ session, threadId, reason })).catch((e) => {
+                  console.error('[DebugTracker] Error in async stop listener', e);
+                });
               } catch (e) {
                 console.error('[DebugTracker] Error in stop listener', e);
               }

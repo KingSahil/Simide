@@ -99,7 +99,8 @@ export class DebugSessionManager {
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
     const folder = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0] : undefined;
-    const rawCwd = folder ? folder.uri.fsPath : path.dirname(sourcePath);
+    const isInsideWorkspace = folder && sourcePath.toLowerCase().startsWith(folder.uri.fsPath.toLowerCase());
+    const rawCwd = isInsideWorkspace ? folder.uri.fsPath : path.dirname(sourcePath);
     const cwd = this.getWindowsShortPath(rawCwd);
     const prog = this.getWindowsShortPath(executablePath);
     const dbgPath = this.getWindowsShortPath(debuggerInfo.path);

@@ -161,8 +161,8 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
             });
 
             // If we are inside an internal library function (e.g. non-user file or CRT),
-            // automatically step out back into user source code
-            if (!isTopUser && hasUserCaller) {
+            // automatically step out back into user source code (never at entry)
+            if (event.reason !== 'entry' && !isTopUser && hasUserCaller) {
               await ExecutionController.stepOut();
               return;
             }
@@ -270,6 +270,29 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
         if (snapshot) {
           this.snapshotManager.addSnapshot(snapshot);
           this.broadcastState(snapshot);
+        } else if (this.snapshotManager.totalSnapshots === 0) {
+          // Fallback entry snapshot to guarantee the webview never hangs in loading state
+          const fallbackSnapshot: VisualizationSnapshot = {
+            stepNumber: 1,
+            structureType: (mode === 'graph' ? 'graph' : 'linked_list') as any,
+            source: {
+              file: sourceFile || '',
+              line: 1,
+              functionName: 'main',
+            },
+            hasHead: false,
+            headId: null,
+            nodes: [],
+            pointers: [],
+            arrays: [],
+            indexPointers: [],
+            explanation: 'Program paused at start. Click Next to begin execution.',
+            changeType: 'init',
+            terminalOutput: StateExtractor.getAccumulatedTerminalOutput(),
+            isHistorical: false,
+          };
+          this.snapshotManager.addSnapshot(fallbackSnapshot);
+          this.broadcastState(fallbackSnapshot);
         }
       })
     );
@@ -1157,11 +1180,37 @@ export class LinkedListViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    this.postMessage({
-      command: 'status',
-      text: 'Waiting for debugger to pause at entry...',
-      step: 'waiting',
-    });
+    // If the debugger has already stopped and created a snapshot during launch,
+    // re-broadcast it now so the webview is never left in loading state.
+    const latestSnapshot = this.snapshotManager.getCurrentSnapshot();
+    if (latestSnapshot) {
+      this.broadcastState(latestSnapshot);
+    } else {
+      this.postMessage({
+        command: 'status',
+        text: 'Waiting for debugger to pause at entry...',
+        step: 'waiting',
+      });
+
+      // Safety watchdog: If debugger is paused at entry but DAP event was missed,
+      // extract state after a short delay so webview never hangs.
+      setTimeout(async () => {
+        const activeSession = DebugSessionManager.getActiveSession();
+        if (activeSession && this.snapshotManager.totalSnapshots === 0) {
+          try {
+            const threadId = DebugTrackerFactory.getLastThreadId();
+            const stepNumber = this.stepCounter++;
+            const snap = await StateExtractor.extractState(activeSession, threadId, stepNumber);
+            if (snap) {
+              this.snapshotManager.addSnapshot(snap);
+              this.broadcastState(snap);
+            }
+          } catch (e) {
+            console.warn('[LinkedListViewProvider] Entry fallback error:', e);
+          }
+        }
+      }, 2500);
+    }
   }
 
   public async restartSession(): Promise<void> {

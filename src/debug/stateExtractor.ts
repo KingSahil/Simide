@@ -105,6 +105,15 @@ export class StateExtractor {
     if (this.activeSourceFile && fs.existsSync(this.activeSourceFile)) {
       return this.activeSourceFile;
     }
+    if (sourceFilePath && this.activeSourceFile) {
+      const candidateInActiveDir = path.join(
+        path.dirname(this.activeSourceFile),
+        path.basename(sourceFilePath)
+      );
+      if (fs.existsSync(candidateInActiveDir)) {
+        return candidateInActiveDir;
+      }
+    }
 
     const folders = vscode.workspace.workspaceFolders;
     if (folders && folders.length > 0) {
@@ -144,9 +153,17 @@ export class StateExtractor {
     }
     if (this.activeSourceFile) {
       const activeNorm = this.activeSourceFile.replace(/\\/g, '/').toLowerCase();
-      if (norm === activeNorm || norm.endsWith('/' + path.basename(activeNorm))) {
+      const baseName = path.basename(activeNorm);
+      if (
+        norm === activeNorm ||
+        norm === baseName ||
+        norm.endsWith('/' + baseName)
+      ) {
         return true;
       }
+    }
+    if (norm.includes('tutorials/') || norm.includes('simide-ide/')) {
+      return true;
     }
     const folders = vscode.workspace.workspaceFolders;
     if (folders) {
