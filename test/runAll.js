@@ -18,6 +18,7 @@ esbuild.buildSync({
     'test/arrayIndices.test.ts',
     'test/oopExtraction.test.ts',
     'test/gfgExtraction.test.ts',
+    'test/stringExtraction.test.ts',
     'test/tutorialIngestion.test.ts',
     'test/masterclassLessons.test.ts',
     'test/codePatcher.test.ts',
@@ -47,6 +48,9 @@ const oop = spawnSync('node', ['dist/oopExtraction.test.js'], { stdio: 'inherit'
 if (oop.status !== 0) process.exit(oop.status || 1);
 const gfg = spawnSync('node', ['dist/gfgExtraction.test.js'], { stdio: 'inherit' });
 if (gfg.status !== 0) process.exit(gfg.status || 1);
+console.log('Running test/stringExtraction.test.ts...');
+const strRes = spawnSync('node', ['dist/stringExtraction.test.js'], { stdio: 'inherit' });
+if (strRes.status !== 0) process.exit(strRes.status || 1);
 console.log('Running test/codePatcher.test.ts...');
 const patcher = spawnSync('node', ['dist/codePatcher.test.js'], { stdio: 'inherit' });
 if (patcher.status !== 0) process.exit(patcher.status || 1);

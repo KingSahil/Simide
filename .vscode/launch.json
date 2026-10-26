@@ -2,6 +2,37 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Run Extension (String Demo)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extension=google.antigravity",
+        "--disable-extension=google.antigravity-code-executor",
+        "${workspaceFolder}/examples/string-palindrome.cpp"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile",
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Run Extension (Active File)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extension=google.antigravity",
+        "--disable-extension=google.antigravity-code-executor"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/**/*.js"
+      ],
+      "preLaunchTask": "npm: compile",
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
       "name": "Run Extension (Stack Demo)",
       "type": "extensionHost",
       "request": "launch",
